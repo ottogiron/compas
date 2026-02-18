@@ -4,6 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Queue name shared between MCP dispatch (producer) and worker (consumer).
+pub const TRIGGER_QUEUE: &str = "trigger-queue";
+
 /// A trigger job represents work the worker needs to do:
 /// spawn a CLI backend process for a specific agent to handle a message.
 #[derive(Debug, Clone, Serialize, Deserialize)]

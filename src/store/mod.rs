@@ -427,6 +427,51 @@ impl Store {
         .await?;
         Ok(rows.into_iter().map(row_to_thread).collect())
     }
+
+    // ── Job queue operations ─────────────────────────────────────────────
+
+    /// Push a trigger job directly into the apalis Jobs table.
+    ///
+    /// This bypasses the apalis `SqliteStorage` type machinery (which has
+    /// complex generics that don't abstract well) and instead INSERTs
+    /// directly using the same schema and codec format (JSON → Vec<u8>).
+    ///
+    /// The `queue_name` must match the worker's queue (default: "trigger-queue").
+    pub async fn push_trigger_job(
+        &self,
+        job: &crate::worker::TriggerJob,
+        queue_name: &str,
+    ) -> Result<String, sqlx::Error> {
+        let id = uuid::Uuid::new_v4().to_string();
+        // apalis JsonCodec serializes to JSON bytes (Vec<u8>)
+        let job_bytes = serde_json::to_vec(job).map_err(|e| {
+            sqlx::Error::Encode(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                e,
+            )))
+        })?;
+        let run_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let max_attempts: i32 = 25;
+        let priority: i32 = 0;
+
+        sqlx::query(
+            "INSERT INTO Jobs (job, id, job_type, status, attempts, max_attempts, run_at, priority)
+             VALUES (?, ?, ?, 'Pending', 0, ?, ?, ?)",
+        )
+        .bind(&job_bytes)
+        .bind(&id)
+        .bind(queue_name)
+        .bind(max_attempts)
+        .bind(run_at)
+        .bind(priority)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(id)
+    }
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

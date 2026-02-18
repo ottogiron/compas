@@ -10,6 +10,7 @@ use apalis_sqlite::{Config as SqliteConfig, SqlitePool, SqliteStorage};
 use aster_orch::mcp::server::OrchestratorMcpServer;
 use aster_orch::worker::context::{build_backend_registry, TriggerContext};
 use aster_orch::worker::pipeline;
+use aster_orch::worker::trigger::TRIGGER_QUEUE;
 use aster_orch::worker::TriggerJob;
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
@@ -130,7 +131,7 @@ async fn run_worker(
     let pool = connect_db(&db_path).await?;
     let store = aster_orch::store::Store::new(pool.clone());
 
-    let apalis_config = SqliteConfig::new("trigger-queue").set_buffer_size(10);
+    let apalis_config = SqliteConfig::new(TRIGGER_QUEUE).set_buffer_size(10);
     let storage: SqliteStorage<TriggerJob, _, _> =
         SqliteStorage::new_with_config(&pool, &apalis_config);
 
@@ -194,7 +195,7 @@ async fn run_unified(
     let store = aster_orch::store::Store::new(pool.clone());
 
     // Worker setup
-    let apalis_config = SqliteConfig::new("trigger-queue").set_buffer_size(10);
+    let apalis_config = SqliteConfig::new(TRIGGER_QUEUE).set_buffer_size(10);
     let storage: SqliteStorage<TriggerJob, _, _> =
         SqliteStorage::new_with_config(&pool, &apalis_config);
     let worker_ctx = TriggerContext::new(
