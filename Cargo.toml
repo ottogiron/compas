@@ -1,0 +1,50 @@
+[workspace]
+
+[package]
+name = "aster-orch"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "aster_orch"
+path = "src/bin/aster_orch.rs"
+
+[dependencies]
+# Worker / job queue
+apalis = "1.0.0-rc.3"
+apalis-sqlite = "1.0.0-rc.3"
+apalis-workflow = "0.1.0-rc.3"
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# MCP server
+rmcp = { version = "0.1", features = ["server", "transport-io"] }
+schemars = "0.8"
+
+# Notifications
+reqwest = { version = "0.12", features = ["json"] }
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Utils
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
