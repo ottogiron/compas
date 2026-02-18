@@ -2,13 +2,17 @@
 //!
 //! Usage:
 //!   aster_orch worker --config .aster-orch/config.yaml
-//!   aster_orch worker --config .aster-orch/config.yaml --concurrency 3
+//!   aster_orch mcp-server --config .aster-orch/config.yaml
+//!   aster_orch run --config .aster-orch/config.yaml   # unified: worker + MCP
 
 use apalis::prelude::*;
 use apalis_sqlite::{Config as SqliteConfig, SqlitePool, SqliteStorage};
+use aster_orch::mcp::server::OrchestratorMcpServer;
+use aster_orch::worker::context::{build_backend_registry, TriggerContext};
 use aster_orch::worker::pipeline;
 use aster_orch::worker::TriggerJob;
 use clap::{Parser, Subcommand};
+use rmcp::ServiceExt;
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
 
@@ -21,8 +25,29 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Run the trigger worker
+    /// Run the trigger worker only
     Worker {
+        /// Path to config YAML
+        #[arg(long, default_value = ".aster-orch/config.yaml")]
+        config: PathBuf,
+        /// Max concurrent triggers
+        #[arg(long, default_value = "2")]
+        concurrency: usize,
+        /// SQLite database path
+        #[arg(long, default_value = ".aster-orch/jobs.sqlite")]
+        db: PathBuf,
+    },
+    /// Run the MCP server only (stdio transport)
+    McpServer {
+        /// Path to config YAML
+        #[arg(long, default_value = ".aster-orch/config.yaml")]
+        config: PathBuf,
+        /// SQLite database path
+        #[arg(long, default_value = ".aster-orch/jobs.sqlite")]
+        db: PathBuf,
+    },
+    /// Run worker + MCP server in the same process
+    Run {
         /// Path to config YAML
         #[arg(long, default_value = ".aster-orch/config.yaml")]
         config: PathBuf,
@@ -37,72 +62,176 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
-
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Worker {
-            config: _config_path,
-            concurrency,
-            db,
+            config, concurrency, db,
         } => {
-            run_worker(db, concurrency).await?;
+            init_tracing();
+            run_worker(config, db, concurrency).await?;
+        }
+        Commands::McpServer { config, db } => {
+            // MCP server uses stdio — don't pollute stdout with tracing
+            init_tracing_stderr();
+            run_mcp_server(config, db).await?;
+        }
+        Commands::Run {
+            config, concurrency, db,
+        } => {
+            // Unified mode: tracing to stderr since MCP uses stdio
+            init_tracing_stderr();
+            run_unified(config, db, concurrency).await?;
         }
     }
 
     Ok(())
 }
 
-async fn run_worker(
-    db_path: PathBuf,
-    concurrency: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Connect to SQLite
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+}
+
+fn init_tracing_stderr() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+}
+
+async fn connect_db(db_path: &PathBuf) -> Result<SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let pool = SqlitePool::connect(&db_url).await?;
     SqliteStorage::setup(&pool).await?;
-
-    // Set up our companion threads table
     let store = aster_orch::store::Store::new(pool.clone());
     store.setup().await?;
+    Ok(pool)
+}
 
-    // Configure apalis storage
-    let config = SqliteConfig::new("trigger-queue").set_buffer_size(10);
-    let storage: SqliteStorage<TriggerJob, _, _> = SqliteStorage::new_with_config(&pool, &config);
+// ---------------------------------------------------------------------------
+// Worker mode
+// ---------------------------------------------------------------------------
+
+async fn run_worker(
+    config_path: PathBuf,
+    db_path: PathBuf,
+    concurrency: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = aster_orch::config::load_config(&config_path)?;
+    tracing::info!(agents = config.agents.len(), "config loaded");
+
+    let backend_registry = build_backend_registry(&config);
+    let pool = connect_db(&db_path).await?;
+    let store = aster_orch::store::Store::new(pool.clone());
+
+    let apalis_config = SqliteConfig::new("trigger-queue").set_buffer_size(10);
+    let storage: SqliteStorage<TriggerJob, _, _> =
+        SqliteStorage::new_with_config(&pool, &apalis_config);
+
+    let ctx = TriggerContext::new(config, backend_registry, store);
 
     tracing::info!(concurrency, db = %db_path.display(), "starting trigger worker");
 
-    // Flat handler that runs the full pipeline inline.
-    // Each job: execute → parse → dispatch, all in one handler call.
-    // apalis manages concurrency, claiming, heartbeat, and orphan recovery.
-    async fn handle_trigger(job: TriggerJob) -> Result<(), BoxDynError> {
-        // Step 1: Execute trigger
-        let output = pipeline::execute_trigger(job).await?;
-        // Step 2: Parse reply
-        let reply = pipeline::parse_reply(output).await?;
-        // Step 3: Dispatch result
-        pipeline::dispatch_result(reply).await?;
-        Ok(())
-    }
-
-    let worker = WorkerBuilder::new("aster-trigger-worker")
+    let worker = WorkerBuilder::new("trigger-worker")
         .backend(storage)
+        .data(ctx)
         .concurrency(concurrency)
-        .on_event(|_ctx, ev| match ev {
-            Event::Error(err) => tracing::error!(?err, "worker error"),
-            Event::Start => tracing::info!("worker started"),
-            Event::Stop => tracing::info!("worker stopped"),
-            _ => {}
-        })
-        .build(handle_trigger);
+        .build(|job: TriggerJob, ctx: Data<TriggerContext>| async move {
+            let output = pipeline::execute_trigger(job, ctx.clone()).await?;
+            let reply = pipeline::parse_reply(output).await?;
+            pipeline::dispatch_result(reply, ctx).await?;
+            Ok::<(), BoxDynError>(())
+        });
 
     worker.run().await?;
+    Ok(())
+}
 
+// ---------------------------------------------------------------------------
+// MCP server mode
+// ---------------------------------------------------------------------------
+
+async fn run_mcp_server(
+    config_path: PathBuf,
+    db_path: PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = aster_orch::config::load_config(&config_path)?;
+    tracing::info!(agents = config.agents.len(), "config loaded");
+
+    let backend_registry = build_backend_registry(&config);
+    let pool = connect_db(&db_path).await?;
+    let store = aster_orch::store::Store::new(pool.clone());
+
+    let server = OrchestratorMcpServer::new(config, store, backend_registry);
+
+    tracing::info!("starting MCP server on stdio");
+    let transport = rmcp::transport::io::stdio();
+    let running = server.serve(transport).await?;
+    running.waiting().await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unified mode (worker + MCP)
+// ---------------------------------------------------------------------------
+
+async fn run_unified(
+    config_path: PathBuf,
+    db_path: PathBuf,
+    concurrency: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = aster_orch::config::load_config(&config_path)?;
+    tracing::info!(agents = config.agents.len(), "config loaded");
+
+    let backend_registry = build_backend_registry(&config);
+    let pool = connect_db(&db_path).await?;
+    let store = aster_orch::store::Store::new(pool.clone());
+
+    // Worker setup
+    let apalis_config = SqliteConfig::new("trigger-queue").set_buffer_size(10);
+    let storage: SqliteStorage<TriggerJob, _, _> =
+        SqliteStorage::new_with_config(&pool, &apalis_config);
+    let worker_ctx = TriggerContext::new(
+        config.clone(),
+        build_backend_registry(&config),
+        store.clone(),
+    );
+
+    // MCP server setup
+    let server = OrchestratorMcpServer::new(config, store, backend_registry);
+
+    tracing::info!(concurrency, db = %db_path.display(), "starting unified mode (worker + MCP)");
+
+    // Run worker in background
+    let worker = WorkerBuilder::new("trigger-worker")
+        .backend(storage)
+        .data(worker_ctx)
+        .concurrency(concurrency)
+        .build(|job: TriggerJob, ctx: Data<TriggerContext>| async move {
+            let output = pipeline::execute_trigger(job, ctx.clone()).await?;
+            let reply = pipeline::parse_reply(output).await?;
+            pipeline::dispatch_result(reply, ctx).await?;
+            Ok::<(), BoxDynError>(())
+        });
+
+    let worker_handle = tokio::spawn(async move {
+        if let Err(e) = worker.run().await {
+            tracing::error!(error = %e, "worker exited with error");
+        }
+    });
+
+    // MCP server on stdio in foreground
+    let transport = rmcp::transport::io::stdio();
+    let running = server.serve(transport).await?;
+    running.waiting().await?;
+
+    // MCP disconnected — shut down worker
+    worker_handle.abort();
     Ok(())
 }

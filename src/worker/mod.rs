@@ -3,7 +3,9 @@
 //! The worker polls the Jobs table for trigger-worthy work, spawns CLI backend
 //! processes, and processes results through a stepped workflow pipeline.
 
+pub mod context;
 pub mod pipeline;
 pub mod trigger;
 
+pub use context::TriggerContext;
 pub use trigger::{ParsedReply, TriggerJob, TriggerOutput};

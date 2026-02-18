@@ -5,17 +5,28 @@
 //!
 //! Step 1 (execute_trigger): Spawn CLI process, wait for output  [slow: 10s-300s]
 //! Step 2 (parse_reply):     Parse output for JSON auto-reply    [fast: <1ms]
-//! Step 3 (dispatch_result): Route reply / update thread state    [fast: <10ms]
+//! Step 3 (dispatch_result): Update thread state, return reply   [fast: <10ms]
+//!
+//! Job routing (pushing follow-up trigger jobs for review-requests, handoffs, etc.)
+//! is handled by the caller/handler, not the pipeline. The pipeline returns a
+//! `ParsedReply` so the handler can make routing decisions with access to the
+//! apalis storage handle.
 
-use super::trigger::{parse_trigger_output, ParsedReply, TriggerJob, TriggerOutput};
+use super::context::TriggerContext;
+use super::trigger::{
+    build_instruction, parse_trigger_output, ParsedReply, TriggerJob, TriggerOutput,
+};
 use apalis::prelude::*;
 use tracing;
 
 /// Step 1: Execute the CLI trigger.
 ///
-/// In the real implementation this calls `backend.trigger(&agent, &session, instruction)`.
-/// For now, this is the seam where we'll wire in the backend registry.
-pub async fn execute_trigger(job: TriggerJob) -> Result<TriggerOutput, BoxDynError> {
+/// Resolves agent config → backend, starts/reuses session, builds instruction,
+/// calls `backend.trigger()`, and captures the output.
+pub async fn execute_trigger(
+    job: TriggerJob,
+    ctx: Data<TriggerContext>,
+) -> Result<TriggerOutput, BoxDynError> {
     tracing::info!(
         agent = %job.agent_alias,
         thread = %job.thread_id,
@@ -23,32 +34,77 @@ pub async fn execute_trigger(job: TriggerJob) -> Result<TriggerOutput, BoxDynErr
         "trigger:execute starting"
     );
 
-    // TODO: Wire in real backend execution:
-    //   1. Resolve agent config + backend from registry
-    //   2. Start or reuse session
-    //   3. Build instruction via build_instruction(&job)
-    //   4. Call backend.trigger(&agent, &session, Some(&instruction))
-    //   5. Capture output + timing
+    // 1. Resolve agent, backend, cached session
+    let (agent, backend, existing_session) = ctx.resolve(&job.agent_alias, None)?;
 
-    // Placeholder: simulate execution
+    // 2. Start or reuse session
+    let session = match existing_session {
+        Some(s) => {
+            tracing::debug!(agent = %job.agent_alias, session = %s.id, "reusing cached session");
+            s
+        }
+        None => {
+            tracing::info!(agent = %job.agent_alias, "starting new session");
+            let new_session = backend.start_session(&agent).await.map_err(|e| {
+                tracing::error!(agent = %job.agent_alias, error = %e, "session start failed");
+                e
+            })?;
+            ctx.cache_session(&job.agent_alias, new_session.clone());
+            new_session
+        }
+    };
+
+    // 3. Build instruction
+    let instruction = build_instruction(&job);
+
+    // 4. Call backend
     let start = std::time::Instant::now();
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    let result = backend
+        .trigger(&agent, &session, Some(&instruction))
+        .await;
     let duration = start.elapsed();
 
-    let simulated_output = format!(
-        r#"{{"intent":"review-request","to":"operator","body":"Completed: {}"}}"#,
-        job.message_body
-    );
-
-    Ok(TriggerOutput {
-        thread_id: job.thread_id,
-        agent_alias: job.agent_alias,
-        raw_output: Some(simulated_output),
-        success: true,
-        error: None,
-        session_id: "sim-session".to_string(),
-        duration_secs: duration.as_secs(),
-    })
+    match result {
+        Ok(trigger_result) => {
+            tracing::info!(
+                agent = %job.agent_alias,
+                thread = %job.thread_id,
+                success = trigger_result.success,
+                duration_secs = duration.as_secs(),
+                "trigger:execute complete"
+            );
+            Ok(TriggerOutput {
+                thread_id: job.thread_id,
+                agent_alias: job.agent_alias,
+                raw_output: trigger_result.output,
+                success: trigger_result.success,
+                error: if trigger_result.success {
+                    None
+                } else {
+                    Some("backend reported failure".into())
+                },
+                session_id: trigger_result.session_id,
+                duration_secs: duration.as_secs(),
+            })
+        }
+        Err(e) => {
+            tracing::error!(
+                agent = %job.agent_alias,
+                thread = %job.thread_id,
+                error = %e,
+                "trigger:execute backend error"
+            );
+            Ok(TriggerOutput {
+                thread_id: job.thread_id,
+                agent_alias: job.agent_alias,
+                raw_output: None,
+                success: false,
+                error: Some(e.to_string()),
+                session_id: session.id,
+                duration_secs: duration.as_secs(),
+            })
+        }
+    }
 }
 
 /// Step 2: Parse the trigger output for a JSON auto-reply.
@@ -63,14 +119,20 @@ pub async fn parse_reply(output: TriggerOutput) -> Result<ParsedReply, BoxDynErr
     Ok(parse_trigger_output(&output))
 }
 
-/// Step 3: Dispatch the parsed reply (route to reviewer, mark complete, etc.).
-pub async fn dispatch_result(reply: ParsedReply) -> Result<(), BoxDynError> {
+/// Step 3: Update thread state based on the parsed reply.
+///
+/// Returns the `ParsedReply` so the caller can handle routing (pushing follow-up
+/// jobs for review-requests, handoffs, etc.).
+pub async fn dispatch_result(
+    reply: ParsedReply,
+    ctx: Data<TriggerContext>,
+) -> Result<ParsedReply, BoxDynError> {
     match &reply {
         ParsedReply::ReviewRequest {
             thread_id,
             from_agent,
             to_alias,
-            reply_body,
+            ..
         } => {
             tracing::info!(
                 thread = %thread_id,
@@ -78,9 +140,9 @@ pub async fn dispatch_result(reply: ParsedReply) -> Result<(), BoxDynError> {
                 to = ?to_alias,
                 "trigger:dispatch review-request"
             );
-            // TODO: Push a new TriggerJob for the reviewer agent,
-            //       or dispatch via the store
-            let _ = reply_body;
+            ctx.store
+                .update_thread_status(thread_id, "ReviewPending")
+                .await?;
         }
         ParsedReply::Completion {
             thread_id,
@@ -92,7 +154,9 @@ pub async fn dispatch_result(reply: ParsedReply) -> Result<(), BoxDynError> {
                 from = %from_agent,
                 "trigger:dispatch completion → mark thread complete"
             );
-            // TODO: UPDATE threads SET status = 'Completed' WHERE thread_id = ?
+            ctx.store
+                .update_thread_status(thread_id, "Completed")
+                .await?;
         }
         ParsedReply::NoParseable {
             thread_id,
@@ -102,8 +166,9 @@ pub async fn dispatch_result(reply: ParsedReply) -> Result<(), BoxDynError> {
             tracing::warn!(
                 thread = %thread_id,
                 agent = %agent_alias,
-                "trigger:dispatch no parseable reply"
+                "trigger:dispatch no parseable reply — keeping thread active"
             );
+            // Thread stays Active — operator can inspect and decide
         }
         ParsedReply::Failed {
             thread_id,
@@ -116,8 +181,10 @@ pub async fn dispatch_result(reply: ParsedReply) -> Result<(), BoxDynError> {
                 error = %error,
                 "trigger:dispatch failed"
             );
-            // TODO: UPDATE threads SET status = 'Failed' WHERE thread_id = ?
+            ctx.store
+                .update_thread_status(thread_id, "Failed")
+                .await?;
         }
     }
-    Ok(())
+    Ok(reply)
 }
