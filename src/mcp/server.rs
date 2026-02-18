@@ -237,6 +237,28 @@ impl OrchestratorMcpServer {
     fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::Error> {
         self.list_agents_impl()
     }
+
+    #[tool(
+        name = "orch_health",
+        description = "Check agent health: backend readiness, CLI availability, environment, runtime state."
+    )]
+    async fn orch_health(
+        &self,
+        #[tool(aggr)] params: HealthParams,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        self.health_impl(params).await
+    }
+
+    #[tool(
+        name = "orch_tasks",
+        description = "List active and recent trigger executions. Shows which agents are running, start time, duration, result status, and batch/ticket linkage."
+    )]
+    async fn orch_tasks(
+        &self,
+        #[tool(aggr)] params: TasksParams,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        self.tasks_impl(params).await
+    }
 }
 
 // ---------------------------------------------------------------------------
