@@ -132,6 +132,19 @@ When `orch_dispatch` is called:
    - Output parsed for JSON auto-reply
    - Reply inserted as a message, thread status updated
 
+### Worker Log Phases
+
+Worker logs now use explicit phase labels so dispatch-to-worker flow is easier
+to read in real time:
+
+- `phase=enqueue` — MCP server enqueued a trigger job (`job_id`, `thread_id`,
+  `agent_alias`, `intent`).
+- `phase=picked` — worker picked the queued job for execution.
+- `phase=backend_session` — worker reused/opened backend session for the agent.
+- `phase=backend_execute` — backend trigger execution started/finished.
+- `phase=parse` — worker parsed backend output and classified reply intent.
+- `phase=persist` — worker persisted reply/status updates to `messages`/`threads`.
+
 ## Configuration
 
 Config file: `.aster-orch/config.yaml`

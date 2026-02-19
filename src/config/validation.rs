@@ -131,6 +131,28 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         tracing::warn!("daemon is required but auto_start=false; commands will fail-fast until daemon is started");
     }
 
+    // apalis tuning bounds
+    if config.apalis.poll_interval_ms < 10 {
+        return Err(OrchestratorError::Config(
+            "apalis.poll_interval_ms must be >= 10".into(),
+        ));
+    }
+    if config.apalis.poll_max_backoff_ms < config.apalis.poll_interval_ms {
+        return Err(OrchestratorError::Config(
+            "apalis.poll_max_backoff_ms must be >= apalis.poll_interval_ms".into(),
+        ));
+    }
+    if config.apalis.poll_jitter_pct > 100 {
+        return Err(OrchestratorError::Config(
+            "apalis.poll_jitter_pct must be 0..=100".into(),
+        ));
+    }
+    if config.apalis.buffer_size < 1 {
+        return Err(OrchestratorError::Config(
+            "apalis.buffer_size must be >= 1".into(),
+        ));
+    }
+
     // Validate max_concurrent_triggers
     if let Some(max) = config.orchestration.max_concurrent_triggers {
         if max < 1 {
@@ -203,6 +225,7 @@ mod tests {
                 env: None,
             }],
             orchestration: Default::default(),
+            apalis: Default::default(),
             telegram: None,
             audit_log_path: None,
         }
@@ -301,6 +324,31 @@ agents:
         config.agents[0].timeout_secs = Some(0);
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("timeout_secs must be > 0"));
+    }
+
+    #[test]
+    fn test_config_validation_apalis_poll_interval_too_low() {
+        let mut config = minimal_config();
+        config.apalis.poll_interval_ms = 9;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("apalis.poll_interval_ms"));
+    }
+
+    #[test]
+    fn test_config_validation_apalis_backoff_lt_interval() {
+        let mut config = minimal_config();
+        config.apalis.poll_interval_ms = 200;
+        config.apalis.poll_max_backoff_ms = 100;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("poll_max_backoff_ms"));
+    }
+
+    #[test]
+    fn test_config_validation_apalis_buffer_size_zero() {
+        let mut config = minimal_config();
+        config.apalis.buffer_size = 0;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("apalis.buffer_size"));
     }
 
     #[test]

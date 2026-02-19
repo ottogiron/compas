@@ -52,6 +52,36 @@ impl std::fmt::Debug for WaitRegistry {
     }
 }
 
+fn effective_since_id(
+    parsed_since_id: Option<i64>,
+    call_start_latest_id: i64,
+    strict_new: bool,
+) -> i64 {
+    let base = parsed_since_id.unwrap_or(call_start_latest_id);
+    if strict_new {
+        std::cmp::max(base, call_start_latest_id)
+    } else {
+        base
+    }
+}
+
+fn find_poll_match<'a>(
+    messages: &'a [store::MessageRow],
+    intent_filter: Option<&str>,
+    since_id: i64,
+) -> Option<&'a store::MessageRow> {
+    messages.iter().rev().find(|m| {
+        if m.id <= since_id {
+            return false;
+        }
+        if let Some(intent) = intent_filter {
+            m.intent == intent
+        } else {
+            true
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Tool implementations
 // ---------------------------------------------------------------------------
@@ -69,20 +99,22 @@ impl OrchestratorMcpServer {
             None => None,
         };
         let timeout = params.timeout_secs.unwrap_or(15);
+        let strict_new = params.strict_new.unwrap_or(false);
 
-        let since_id = if let Some(ref raw) = params.since_reference {
+        let parsed_since_id = if let Some(ref raw) = params.since_reference {
             match store::parse_message_ref(raw) {
-                Ok(id) => id,
+                Ok(id) => Some(id),
                 Err(e) => return Ok(err_text(e)),
             }
         } else {
-            // Default: use latest message ID so we only find new messages
-            match self.store.latest_thread_message_id(&params.thread_id).await {
-                Ok(Some(id)) => id.saturating_sub(1),
-                Ok(None) => 0,
-                Err(e) => return Ok(err_text(e)),
-            }
+            None
         };
+        let call_start_latest_id = match self.store.latest_thread_message_id(&params.thread_id).await {
+            Ok(Some(id)) => id,
+            Ok(None) => 0,
+            Err(e) => return Ok(err_text(e)),
+        };
+        let since_id = effective_since_id(parsed_since_id, call_start_latest_id, strict_new);
 
         let start = std::time::Instant::now();
         let deadline = std::time::Duration::from_secs(timeout);
@@ -210,14 +242,7 @@ impl OrchestratorMcpServer {
         let thread_exists = thread_status.is_some() || total_messages > 0;
 
         // Find matching message
-        let matching = if let Some(ref target) = intent_filter {
-            messages
-                .iter()
-                .rev()
-                .find(|m| m.intent == *target && m.id > since_id)
-        } else {
-            messages.last()
-        };
+        let matching = find_poll_match(&messages, intent_filter.as_deref(), since_id);
 
         let last_msg = messages.last();
 
@@ -244,5 +269,64 @@ impl OrchestratorMcpServer {
         }
 
         Ok(json_text(&val))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::store::MessageRow;
+
+    fn msg(id: i64, intent: &str) -> MessageRow {
+        MessageRow {
+            id,
+            thread_id: "t-1".into(),
+            from_alias: "focused".into(),
+            to_alias: "operator".into(),
+            intent: intent.into(),
+            body: String::new(),
+            status: "new".into(),
+            batch_id: None,
+            review_token: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn test_effective_since_id_defaults_to_call_start_latest() {
+        assert_eq!(effective_since_id(None, 42, false), 42);
+    }
+
+    #[test]
+    fn test_effective_since_id_uses_explicit_cursor_when_not_strict() {
+        assert_eq!(effective_since_id(Some(7), 42, false), 7);
+    }
+
+    #[test]
+    fn test_effective_since_id_strict_new_uses_max_of_cursor_and_call_start() {
+        assert_eq!(effective_since_id(Some(7), 42, true), 42);
+        assert_eq!(effective_since_id(Some(77), 42, true), 77);
+    }
+
+    #[test]
+    fn test_find_poll_match_without_intent_respects_since_id() {
+        let messages = vec![msg(1, "dispatch"), msg(2, "review-request"), msg(3, "status-update")];
+        let found = find_poll_match(&messages, None, 2).expect("message newer than cursor expected");
+        assert_eq!(found.id, 3);
+    }
+
+    #[test]
+    fn test_find_poll_match_with_intent_respects_since_id() {
+        let messages = vec![
+            msg(1, "review-request"),
+            msg(2, "status-update"),
+            msg(3, "review-request"),
+        ];
+        let found = find_poll_match(&messages, Some("review-request"), 1)
+            .expect("matching review-request expected");
+        assert_eq!(found.id, 3);
+
+        let not_found = find_poll_match(&messages, Some("review-request"), 3);
+        assert!(not_found.is_none());
     }
 }

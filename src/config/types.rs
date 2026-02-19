@@ -15,6 +15,9 @@ pub struct OrchestratorConfig {
     pub agents: Vec<AgentConfig>,
     #[serde(default)]
     pub orchestration: OrchestrationConfig,
+    /// Apalis worker queue behavior tuning.
+    #[serde(default)]
+    pub apalis: ApalisConfig,
     /// Telegram notification settings (flattened from NotificationConfig).
     #[serde(default)]
     pub telegram: Option<TelegramConfig>,
@@ -39,6 +42,57 @@ impl OrchestratorConfig {
 
 fn default_poll_interval_secs() -> u64 {
     1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApalisConfig {
+    /// Enable callback/listener-driven queue wakeups for near-immediate pickup.
+    #[serde(default = "default_apalis_listener_enabled")]
+    pub listener_enabled: bool,
+    /// Poll interval fallback in milliseconds.
+    #[serde(default = "default_apalis_poll_interval_ms")]
+    pub poll_interval_ms: u64,
+    /// Maximum poll backoff in milliseconds.
+    #[serde(default = "default_apalis_poll_max_backoff_ms")]
+    pub poll_max_backoff_ms: u64,
+    /// Poll jitter percent (0..=100).
+    #[serde(default = "default_apalis_poll_jitter_pct")]
+    pub poll_jitter_pct: u8,
+    /// apalis fetch buffer size.
+    #[serde(default = "default_apalis_buffer_size")]
+    pub buffer_size: usize,
+}
+
+impl Default for ApalisConfig {
+    fn default() -> Self {
+        Self {
+            listener_enabled: default_apalis_listener_enabled(),
+            poll_interval_ms: default_apalis_poll_interval_ms(),
+            poll_max_backoff_ms: default_apalis_poll_max_backoff_ms(),
+            poll_jitter_pct: default_apalis_poll_jitter_pct(),
+            buffer_size: default_apalis_buffer_size(),
+        }
+    }
+}
+
+fn default_apalis_listener_enabled() -> bool {
+    true
+}
+
+fn default_apalis_poll_interval_ms() -> u64 {
+    150
+}
+
+fn default_apalis_poll_max_backoff_ms() -> u64 {
+    800
+}
+
+fn default_apalis_poll_jitter_pct() -> u8 {
+    10
+}
+
+fn default_apalis_buffer_size() -> usize {
+    10
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

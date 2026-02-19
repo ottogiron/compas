@@ -106,20 +106,27 @@ impl OrchestratorMcpServer {
         match self.store.push_trigger_job(&job, TRIGGER_QUEUE).await {
             Ok(job_id) => {
                 tracing::info!(
-                    thread = %thread_id,
-                    agent = %to_alias,
+                    phase = "enqueue",
+                    thread_id = %thread_id,
+                    from = %from_alias,
+                    to = %to_alias,
+                    agent_alias = %to_alias,
                     intent = %intent,
                     job_id = %job_id,
-                    "trigger job pushed to queue"
+                    "trigger job enqueued"
                 );
                 Some(job_id)
             }
             Err(e) => {
                 tracing::error!(
-                    thread = %thread_id,
-                    agent = %to_alias,
+                    phase = "enqueue",
+                    thread_id = %thread_id,
+                    from = %from_alias,
+                    to = %to_alias,
+                    agent_alias = %to_alias,
+                    intent = %intent,
                     error = %e,
-                    "failed to push trigger job"
+                    "failed to enqueue trigger job"
                 );
                 None
             }

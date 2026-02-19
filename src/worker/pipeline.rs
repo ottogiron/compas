@@ -28,10 +28,11 @@ pub async fn execute_trigger(
     ctx: Data<TriggerContext>,
 ) -> Result<TriggerOutput, BoxDynError> {
     tracing::info!(
-        agent = %job.agent_alias,
-        thread = %job.thread_id,
+        phase = "picked",
+        agent_alias = %job.agent_alias,
+        thread_id = %job.thread_id,
         intent = %job.intent,
-        "trigger:execute starting"
+        "trigger job picked by worker"
     );
 
     // 1. Resolve agent, backend, cached session
@@ -40,16 +41,40 @@ pub async fn execute_trigger(
     // 2. Start or reuse session
     let session = match existing_session {
         Some(s) => {
-            tracing::debug!(agent = %job.agent_alias, session = %s.id, "reusing cached session");
+            tracing::debug!(
+                phase = "backend_session",
+                agent_alias = %job.agent_alias,
+                thread_id = %job.thread_id,
+                session_id = %s.id,
+                "reusing cached backend session"
+            );
             s
         }
         None => {
-            tracing::info!(agent = %job.agent_alias, "starting new session");
+            tracing::info!(
+                phase = "backend_session",
+                agent_alias = %job.agent_alias,
+                thread_id = %job.thread_id,
+                "opening new backend session"
+            );
             let new_session = backend.start_session(&agent).await.map_err(|e| {
-                tracing::error!(agent = %job.agent_alias, error = %e, "session start failed");
+                tracing::error!(
+                    phase = "backend_session",
+                    agent_alias = %job.agent_alias,
+                    thread_id = %job.thread_id,
+                    error = %e,
+                    "failed to open backend session"
+                );
                 e
             })?;
             ctx.cache_session(&job.agent_alias, new_session.clone());
+            tracing::info!(
+                phase = "backend_session",
+                agent_alias = %job.agent_alias,
+                thread_id = %job.thread_id,
+                session_id = %new_session.id,
+                "opened new backend session"
+            );
             new_session
         }
     };
@@ -58,6 +83,13 @@ pub async fn execute_trigger(
     let instruction = build_instruction(&job);
 
     // 4. Call backend
+    tracing::info!(
+        phase = "backend_execute",
+        agent_alias = %job.agent_alias,
+        thread_id = %job.thread_id,
+        session_id = %session.id,
+        "starting backend trigger execution"
+    );
     let start = std::time::Instant::now();
     let result = backend
         .trigger(&agent, &session, Some(&instruction))
@@ -67,11 +99,13 @@ pub async fn execute_trigger(
     match result {
         Ok(trigger_result) => {
             tracing::info!(
-                agent = %job.agent_alias,
-                thread = %job.thread_id,
+                phase = "backend_execute",
+                agent_alias = %job.agent_alias,
+                thread_id = %job.thread_id,
+                session_id = %trigger_result.session_id,
                 success = trigger_result.success,
                 duration_secs = duration.as_secs(),
-                "trigger:execute complete"
+                "backend trigger execution finished"
             );
             Ok(TriggerOutput {
                 thread_id: job.thread_id,
@@ -89,10 +123,12 @@ pub async fn execute_trigger(
         }
         Err(e) => {
             tracing::error!(
-                agent = %job.agent_alias,
-                thread = %job.thread_id,
+                phase = "backend_execute",
+                agent_alias = %job.agent_alias,
+                thread_id = %job.thread_id,
+                session_id = %session.id,
                 error = %e,
-                "trigger:execute backend error"
+                "backend trigger execution failed"
             );
             Ok(TriggerOutput {
                 thread_id: job.thread_id,
@@ -109,14 +145,29 @@ pub async fn execute_trigger(
 
 /// Step 2: Parse the trigger output for a JSON auto-reply.
 pub async fn parse_reply(output: TriggerOutput) -> Result<ParsedReply, BoxDynError> {
-    tracing::info!(
-        agent = %output.agent_alias,
-        thread = %output.thread_id,
-        success = output.success,
-        "trigger:parse"
+    let reply = parse_trigger_output(&output);
+    let parsed_intent = match &reply {
+        ParsedReply::ReviewRequest { .. } => "review-request",
+        ParsedReply::Completion { .. } => "completion",
+        ParsedReply::NoParseable { .. } => "no-parseable",
+        ParsedReply::Failed { .. } => "failed",
+    };
+    let parseable = !matches!(
+        &reply,
+        ParsedReply::NoParseable { .. } | ParsedReply::Failed { .. }
     );
 
-    Ok(parse_trigger_output(&output))
+    tracing::info!(
+        phase = "parse",
+        agent_alias = %output.agent_alias,
+        thread_id = %output.thread_id,
+        success = output.success,
+        parseable,
+        parsed_intent,
+        "trigger output parsed"
+    );
+
+    Ok(reply)
 }
 
 /// Step 3: Update thread state based on the parsed reply.
@@ -136,10 +187,12 @@ pub async fn dispatch_result(
         } => {
             let to = to_alias.as_deref().unwrap_or("operator");
             tracing::info!(
-                thread = %thread_id,
+                phase = "persist",
+                thread_id = %thread_id,
                 from = %from_agent,
                 to = %to,
-                "trigger:dispatch review-request"
+                intent = "review-request",
+                "persisting parsed reply"
             );
             ctx.store
                 .insert_message(thread_id, from_agent, to, "review-request", reply_body, None)
@@ -154,9 +207,11 @@ pub async fn dispatch_result(
             reply_body,
         } => {
             tracing::info!(
-                thread = %thread_id,
+                phase = "persist",
+                thread_id = %thread_id,
                 from = %from_agent,
-                "trigger:dispatch completion → mark thread complete"
+                intent = "completion",
+                "persisting parsed reply and marking thread complete"
             );
             ctx.store
                 .insert_message(thread_id, from_agent, "operator", "completion", reply_body, None)
@@ -172,9 +227,11 @@ pub async fn dispatch_result(
         } => {
             let body = raw_output.as_deref().unwrap_or("(no parseable output)");
             tracing::warn!(
-                thread = %thread_id,
-                agent = %agent_alias,
-                "trigger:dispatch no parseable reply — storing raw output"
+                phase = "persist",
+                thread_id = %thread_id,
+                agent_alias = %agent_alias,
+                intent = "status-update",
+                "no parseable reply; persisting raw output"
             );
             ctx.store
                 .insert_message(thread_id, agent_alias, "operator", "status-update", body, None)
@@ -187,10 +244,12 @@ pub async fn dispatch_result(
             error,
         } => {
             tracing::error!(
-                thread = %thread_id,
-                agent = %agent_alias,
+                phase = "persist",
+                thread_id = %thread_id,
+                agent_alias = %agent_alias,
                 error = %error,
-                "trigger:dispatch failed"
+                intent = "status-update",
+                "trigger failed; persisting failure status-update and marking thread failed"
             );
             ctx.store
                 .insert_message(thread_id, agent_alias, "operator", "status-update", error, None)

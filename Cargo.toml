@@ -10,6 +10,7 @@ path = "src/bin/aster_orch.rs"
 [dependencies]
 # Worker / job queue
 apalis = "1.0.0-rc.3"
+apalis-core = "1.0.0-rc.3"
 apalis-sqlite = "1.0.0-rc.3"
 apalis-workflow = "0.1.0-rc.3"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
