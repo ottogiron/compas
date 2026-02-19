@@ -442,7 +442,7 @@ impl Store {
         job: &crate::worker::TriggerJob,
         queue_name: &str,
     ) -> Result<String, sqlx::Error> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = ulid::Ulid::new().to_string();
         // apalis JsonCodec serializes to JSON bytes (Vec<u8>)
         let job_bytes = serde_json::to_vec(job).map_err(|e| {
             sqlx::Error::Encode(Box::new(std::io::Error::new(

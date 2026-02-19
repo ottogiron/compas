@@ -132,14 +132,18 @@ pub async fn dispatch_result(
             thread_id,
             from_agent,
             to_alias,
-            ..
+            reply_body,
         } => {
+            let to = to_alias.as_deref().unwrap_or("operator");
             tracing::info!(
                 thread = %thread_id,
                 from = %from_agent,
-                to = ?to_alias,
+                to = %to,
                 "trigger:dispatch review-request"
             );
+            ctx.store
+                .insert_message(thread_id, from_agent, to, "review-request", reply_body, None)
+                .await?;
             ctx.store
                 .update_thread_status(thread_id, "ReviewPending")
                 .await?;
@@ -147,7 +151,7 @@ pub async fn dispatch_result(
         ParsedReply::Completion {
             thread_id,
             from_agent,
-            ..
+            reply_body,
         } => {
             tracing::info!(
                 thread = %thread_id,
@@ -155,19 +159,26 @@ pub async fn dispatch_result(
                 "trigger:dispatch completion → mark thread complete"
             );
             ctx.store
+                .insert_message(thread_id, from_agent, "operator", "completion", reply_body, None)
+                .await?;
+            ctx.store
                 .update_thread_status(thread_id, "Completed")
                 .await?;
         }
         ParsedReply::NoParseable {
             thread_id,
             agent_alias,
-            ..
+            raw_output,
         } => {
+            let body = raw_output.as_deref().unwrap_or("(no parseable output)");
             tracing::warn!(
                 thread = %thread_id,
                 agent = %agent_alias,
-                "trigger:dispatch no parseable reply — keeping thread active"
+                "trigger:dispatch no parseable reply — storing raw output"
             );
+            ctx.store
+                .insert_message(thread_id, agent_alias, "operator", "status-update", body, None)
+                .await?;
             // Thread stays Active — operator can inspect and decide
         }
         ParsedReply::Failed {
@@ -181,6 +192,9 @@ pub async fn dispatch_result(
                 error = %error,
                 "trigger:dispatch failed"
             );
+            ctx.store
+                .insert_message(thread_id, agent_alias, "operator", "status-update", error, None)
+                .await?;
             ctx.store
                 .update_thread_status(thread_id, "Failed")
                 .await?;

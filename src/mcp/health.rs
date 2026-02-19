@@ -123,10 +123,10 @@ impl OrchestratorMcpServer {
         limit: i64,
     ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
         // Build query with optional filters
-        // Jobs table: job (BLOB), id, job_type, status, attempts, max_attempts, run_at, last_error, lock_at, lock_by, done_at, priority, metadata
+        // Jobs table: job (BLOB), id, job_type, status, attempts, max_attempts, run_at, last_result, lock_at, lock_by, done_at, priority, metadata
         // The `job` column contains JSON-encoded TriggerJob bytes
         let mut sql = String::from(
-            "SELECT id, job_type, status, attempts, run_at, done_at, last_error, job
+            "SELECT id, job_type, status, attempts, run_at, done_at, last_result, job
              FROM Jobs WHERE job_type = ?",
         );
         // We'll filter by alias/batch_id via JSON extraction from the job column
@@ -140,7 +140,7 @@ impl OrchestratorMcpServer {
                 .await?;
 
         let mut results = Vec::new();
-        for (id, job_type, status, attempts, run_at, done_at, last_error, job_bytes) in rows {
+        for (id, job_type, status, attempts, run_at, done_at, last_result, job_bytes) in rows {
             // Try to parse the TriggerJob from bytes
             let job: Option<crate::worker::TriggerJob> =
                 serde_json::from_slice(&job_bytes).ok();
@@ -175,8 +175,8 @@ impl OrchestratorMcpServer {
             if let Some(da) = done_at {
                 val["done_at"] = serde_json::Value::Number(da.into());
             }
-            if let Some(ref err) = last_error {
-                val["last_error"] = serde_json::Value::String(err.clone());
+            if let Some(ref err) = last_result {
+                val["last_result"] = serde_json::Value::String(err.clone());
             }
             if let Some(ref j) = job {
                 val["thread_id"] = serde_json::Value::String(j.thread_id.clone());
