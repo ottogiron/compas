@@ -73,7 +73,7 @@ impl OrchestratorMcpServer {
     /// Check if this dispatch should trigger a worker job and push it if so.
     ///
     /// Returns the job ID if a trigger was pushed, None otherwise.
-    async fn maybe_push_trigger(
+    pub(crate) async fn maybe_push_trigger(
         &self,
         thread_id: &str,
         from_alias: &str,

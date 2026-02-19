@@ -390,6 +390,19 @@ impl Store {
         Ok(row.map(|r| r.0))
     }
 
+    /// Get thread batch_id (if set).
+    pub async fn get_thread_batch_id(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT batch_id FROM threads WHERE thread_id = ?")
+                .bind(thread_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|r| r.0))
+    }
+
     /// List threads by status.
     pub async fn list_threads_by_status(
         &self,

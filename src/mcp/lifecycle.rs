@@ -53,6 +53,14 @@ impl OrchestratorMcpServer {
         &self,
         params: RejectParams,
     ) -> Result<CallToolResult, rmcp::Error> {
+        // Look up batch_id from thread for trigger job context
+        let batch_id = self
+            .store
+            .get_thread_batch_id(&params.thread_id)
+            .await
+            .ok()
+            .flatten();
+
         let message_id = match self
             .store
             .insert_message(
@@ -61,7 +69,7 @@ impl OrchestratorMcpServer {
                 &params.to,
                 "changes-requested",
                 &params.feedback,
-                None,
+                batch_id.as_deref(),
             )
             .await
         {
@@ -72,11 +80,27 @@ impl OrchestratorMcpServer {
         self.wait_registry
             .notify(params.thread_id.clone(), message_id);
 
-        Ok(json_text(&serde_json::json!({
+        // Push trigger job so the agent picks up the rejection and reworks
+        let triggered = self
+            .maybe_push_trigger(
+                &params.thread_id,
+                &params.from,
+                &params.to,
+                "changes-requested",
+                &params.feedback,
+                batch_id.as_deref(),
+            )
+            .await;
+
+        let mut val = serde_json::json!({
             "status": "changes_requested",
             "thread_id": params.thread_id,
             "message_ref": store::message_ref(message_id),
-        })))
+        });
+        if let Some(job_id) = triggered {
+            val["trigger_job_id"] = serde_json::Value::String(job_id);
+        }
+        Ok(json_text(&val))
     }
 
     pub(crate) async fn complete_impl(

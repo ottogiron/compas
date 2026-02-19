@@ -31,9 +31,9 @@ enum Commands {
         /// Path to config YAML
         #[arg(long, default_value = ".aster-orch/config.yaml")]
         config: PathBuf,
-        /// Max concurrent triggers
-        #[arg(long, default_value = "2")]
-        concurrency: usize,
+        /// Max concurrent triggers (overrides config; default: worker agent count)
+        #[arg(long)]
+        concurrency: Option<usize>,
         /// SQLite database path
         #[arg(long, default_value = ".aster-orch/jobs.sqlite")]
         db: PathBuf,
@@ -52,9 +52,9 @@ enum Commands {
         /// Path to config YAML
         #[arg(long, default_value = ".aster-orch/config.yaml")]
         config: PathBuf,
-        /// Max concurrent triggers
-        #[arg(long, default_value = "2")]
-        concurrency: usize,
+        /// Max concurrent triggers (overrides config; default: worker agent count)
+        #[arg(long)]
+        concurrency: Option<usize>,
         /// SQLite database path
         #[arg(long, default_value = ".aster-orch/jobs.sqlite")]
         db: PathBuf,
@@ -122,10 +122,12 @@ async fn connect_db(db_path: &PathBuf) -> Result<SqlitePool, Box<dyn std::error:
 async fn run_worker(
     config_path: PathBuf,
     db_path: PathBuf,
-    concurrency: usize,
+    concurrency_override: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = aster_orch::config::load_config(&config_path)?;
     tracing::info!(agents = config.agents.len(), "config loaded");
+
+    let concurrency = concurrency_override.unwrap_or_else(|| config.effective_max_concurrent_triggers());
 
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path).await?;
@@ -185,10 +187,12 @@ async fn run_mcp_server(
 async fn run_unified(
     config_path: PathBuf,
     db_path: PathBuf,
-    concurrency: usize,
+    concurrency_override: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = aster_orch::config::load_config(&config_path)?;
     tracing::info!(agents = config.agents.len(), "config loaded");
+
+    let concurrency = concurrency_override.unwrap_or_else(|| config.effective_max_concurrent_triggers());
 
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path).await?;
