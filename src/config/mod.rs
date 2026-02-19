@@ -74,6 +74,7 @@ mod tests {
     fn test_load_config_from_str() {
         let yaml = r#"
 state_dir: /tmp/test-mail
+db_path: ~/.aster/orch/jobs.sqlite
 agents:
   - alias: focused
     identity: Claude
@@ -90,6 +91,7 @@ agents:
     fn test_load_config_from_str_invalid() {
         let yaml = r#"
 state_dir: /tmp/test-mail
+db_path: ~/.aster/orch/jobs.sqlite
 agents: []
 "#;
         let err = load_config_from_str(yaml).unwrap_err();
@@ -104,6 +106,7 @@ agents: []
             &path,
             r#"
 state_dir: /tmp/test-mail
+db_path: ~/.aster/orch/jobs.sqlite
 agents:
   - alias: focused
     identity: Claude

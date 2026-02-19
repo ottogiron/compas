@@ -7,6 +7,9 @@ use std::path::PathBuf;
 pub struct OrchestratorConfig {
     #[serde(alias = "mailbox_root")]
     pub state_dir: PathBuf,
+    /// SQLite database file used by MCP + worker.
+    #[serde(default = "default_db_path")]
+    pub db_path: PathBuf,
     #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
     /// Global model registry. Each model declares its backend and description.
@@ -44,6 +47,10 @@ fn default_poll_interval_secs() -> u64 {
     1
 }
 
+fn default_db_path() -> PathBuf {
+    PathBuf::from("~/.aster/orch/jobs.sqlite")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApalisConfig {
     /// Enable callback/listener-driven queue wakeups for near-immediate pickup.
@@ -61,6 +68,15 @@ pub struct ApalisConfig {
     /// apalis fetch buffer size.
     #[serde(default = "default_apalis_buffer_size")]
     pub buffer_size: usize,
+    /// Shared SQLite pool max connections for MCP + worker.
+    #[serde(default = "default_apalis_db_max_connections")]
+    pub db_max_connections: u32,
+    /// Shared SQLite pool min idle connections.
+    #[serde(default = "default_apalis_db_min_connections")]
+    pub db_min_connections: u32,
+    /// Shared SQLite pool acquire timeout in milliseconds.
+    #[serde(default = "default_apalis_db_acquire_timeout_ms")]
+    pub db_acquire_timeout_ms: u64,
 }
 
 impl Default for ApalisConfig {
@@ -71,6 +87,9 @@ impl Default for ApalisConfig {
             poll_max_backoff_ms: default_apalis_poll_max_backoff_ms(),
             poll_jitter_pct: default_apalis_poll_jitter_pct(),
             buffer_size: default_apalis_buffer_size(),
+            db_max_connections: default_apalis_db_max_connections(),
+            db_min_connections: default_apalis_db_min_connections(),
+            db_acquire_timeout_ms: default_apalis_db_acquire_timeout_ms(),
         }
     }
 }
@@ -95,6 +114,18 @@ fn default_apalis_buffer_size() -> usize {
     10
 }
 
+fn default_apalis_db_max_connections() -> u32 {
+    32
+}
+
+fn default_apalis_db_min_connections() -> u32 {
+    4
+}
+
+fn default_apalis_db_acquire_timeout_ms() -> u64 {
+    30000
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationConfig {
     #[serde(default)]
@@ -103,8 +134,12 @@ pub struct OrchestrationConfig {
     pub trigger_intents: Vec<String>,
     #[serde(default = "default_max_output_capture_bytes")]
     pub max_output_capture_bytes: usize,
-    #[serde(default = "default_timeout_secs")]
-    pub default_timeout_secs: u64,
+    #[serde(
+        default = "default_execution_timeout_secs",
+        alias = "trigger_timeout_secs",
+        alias = "default_timeout_secs"
+    )]
+    pub execution_timeout_secs: u64,
     #[serde(default = "default_max_message_body_bytes")]
     pub max_message_body_bytes: usize,
     /// Maximum number of concurrent agent triggers. Defaults to worker agent count.
@@ -138,7 +173,7 @@ impl Default for OrchestrationConfig {
             auto_trigger_enabled: false,
             trigger_intents: default_trigger_intents(),
             max_output_capture_bytes: default_max_output_capture_bytes(),
-            default_timeout_secs: default_timeout_secs(),
+            execution_timeout_secs: default_execution_timeout_secs(),
             max_message_body_bytes: default_max_message_body_bytes(),
             max_concurrent_triggers: None,
             max_triggers_per_agent: default_max_triggers_per_agent(),
@@ -176,7 +211,7 @@ fn default_max_output_capture_bytes() -> usize {
     32768 // 32KB
 }
 
-fn default_timeout_secs() -> u64 {
+fn default_execution_timeout_secs() -> u64 {
     30
 }
 

@@ -76,7 +76,6 @@ aster_orch run --config .aster-orch/config.yaml
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` | `.aster-orch/config.yaml` | Path to config YAML |
-| `--db` | `.aster-orch/jobs.sqlite` | SQLite database path |
 | `--concurrency` | `2` | Max concurrent trigger jobs (worker/run only) |
 
 ## MCP Tools (18)
@@ -145,16 +144,25 @@ to read in real time:
 - `phase=parse` — worker parsed backend output and classified reply intent.
 - `phase=persist` — worker persisted reply/status updates to `messages`/`threads`.
 
+### Worker Stability Notes
+
+- Worker queue execution uses a shared SQLx pool (`apalis.db_max_connections`,
+  `apalis.db_min_connections`, `apalis.db_acquire_timeout_ms`) to avoid
+  connection starvation under concurrent triggers.
+- If `apalis.listener_enabled=true` is configured, runtime may still use
+  shared-pool polling backend for worker stability.
+
 ## Configuration
 
 Config file: `.aster-orch/config.yaml`
 
 ```yaml
 state_dir: ~/.aster/orch
+db_path: ~/.aster/orch/jobs.sqlite
 orchestration:
   auto_trigger_enabled: true
   trigger_intents: [dispatch, handoff, changes-requested]
-  default_timeout_secs: 300
+  execution_timeout_secs: 300
   max_concurrent_triggers: 10
   max_triggers_per_agent: 2
   ping_timeout_secs: 15
@@ -235,9 +243,9 @@ target/release/aster_orch
 
 - **apalis for job queuing** — SQLite-backed, async, handles polling/acking/retry.
   Single worker handles all agents with configurable concurrency.
-- **Direct SQL for job push** — `Store::push_trigger_job()` INSERTs directly into
-  the apalis `Jobs` table, bypassing `SqliteStorage` type gymnastics that don't
-  abstract well across struct boundaries.
+- **apalis TaskSink for job push** — `Store::push_trigger_job()` enqueues through
+  `SqliteStorage` TaskSink API (`push_task`) with explicit task ID/attempt/priority,
+  instead of writing to the `Jobs` table manually.
 - **Two tables, not one** — `messages` table is the conversation ledger (permanent,
   MCP tools read/write). `Jobs` table is the worker queue (transient trigger
   execution). `orch_dispatch` inserts a message AND pushes a TriggerJob.

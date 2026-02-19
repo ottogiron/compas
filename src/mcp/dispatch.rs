@@ -45,7 +45,7 @@ impl OrchestratorMcpServer {
         self.wait_registry.notify(thread_id.clone(), message_id);
 
         // Push a TriggerJob if the intent is trigger-worthy and target is a worker agent
-        let triggered = self
+        let triggered = match self
             .maybe_push_trigger(
                 &thread_id,
                 &params.from,
@@ -54,7 +54,11 @@ impl OrchestratorMcpServer {
                 &params.body,
                 params.batch.as_deref(),
             )
-            .await;
+            .await
+        {
+            Ok(job_id) => job_id,
+            Err(e) => return Ok(err_text(e)),
+        };
 
         let mut val = serde_json::json!({
             "status": "dispatched",
@@ -72,7 +76,10 @@ impl OrchestratorMcpServer {
 
     /// Check if this dispatch should trigger a worker job and push it if so.
     ///
-    /// Returns the job ID if a trigger was pushed, None otherwise.
+    /// Returns:
+    /// - Ok(Some(job_id)) if a trigger was pushed
+    /// - Ok(None) for non-trigger-worthy dispatches
+    /// - Err(...) if enqueue was expected but failed
     pub(crate) async fn maybe_push_trigger(
         &self,
         thread_id: &str,
@@ -81,17 +88,19 @@ impl OrchestratorMcpServer {
         intent: &str,
         body: &str,
         batch_id: Option<&str>,
-    ) -> Option<String> {
+    ) -> Result<Option<String>, String> {
         // Check if intent is in trigger_intents
         let trigger_intents = &self.config.orchestration.trigger_intents;
         if !trigger_intents.iter().any(|i| i == intent) {
-            return None;
+            return Ok(None);
         }
 
         // Check if target agent exists and is a Worker
-        let agent = self.config.agents.iter().find(|a| a.alias == to_alias)?;
+        let Some(agent) = self.config.agents.iter().find(|a| a.alias == to_alias) else {
+            return Ok(None);
+        };
         if agent.role != AgentRole::Worker {
-            return None;
+            return Ok(None);
         }
 
         let job = TriggerJob {
@@ -115,7 +124,7 @@ impl OrchestratorMcpServer {
                     job_id = %job_id,
                     "trigger job enqueued"
                 );
-                Some(job_id)
+                Ok(Some(job_id))
             }
             Err(e) => {
                 tracing::error!(
@@ -128,7 +137,10 @@ impl OrchestratorMcpServer {
                     error = %e,
                     "failed to enqueue trigger job"
                 );
-                None
+                Err(format!(
+                    "failed to enqueue trigger job for thread {} (agent {}): {}",
+                    thread_id, to_alias, e
+                ))
             }
         }
     }

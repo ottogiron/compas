@@ -82,7 +82,7 @@ impl OrchestratorMcpServer {
             .notify(params.thread_id.clone(), message_id);
 
         // Push trigger job so the agent picks up the rejection and reworks
-        let triggered = self
+        let triggered = match self
             .maybe_push_trigger(
                 &params.thread_id,
                 &params.from,
@@ -91,7 +91,11 @@ impl OrchestratorMcpServer {
                 &params.feedback,
                 batch_id.as_deref(),
             )
-            .await;
+            .await
+        {
+            Ok(job_id) => job_id,
+            Err(e) => return Ok(err_text(e)),
+        };
 
         let mut val = serde_json::json!({
             "status": "changes_requested",
@@ -252,6 +256,7 @@ mod tests {
 
         let config = OrchestratorConfig {
             state_dir: "/tmp/test-orch".into(),
+            db_path: ".aster-orch/jobs.sqlite".into(),
             poll_interval_secs: 1,
             models: None,
             agents: vec![AgentConfig {

@@ -94,7 +94,7 @@ impl TriggerContext {
             timeout_secs: Some(
                 model_timeout
                     .or(agent_config.timeout_secs)
-                    .unwrap_or(self.config.orchestration.default_timeout_secs),
+                    .unwrap_or(self.config.orchestration.execution_timeout_secs),
             ),
             backend_args: agent_config.backend_args.clone(),
             env: agent_config.env.clone(),

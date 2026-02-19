@@ -6,6 +6,9 @@
 //!
 //! The apalis `Jobs` table (managed by apalis-sqlite) handles the worker queue separately.
 
+use apalis::prelude::{Task, TaskId, TaskSink};
+use apalis_core::backend::TaskSinkError;
+use apalis_sqlite::{SqliteContext, SqliteStorage, TaskBuilderExt};
 use sqlx::SqlitePool;
 
 // ── Row types ────────────────────────────────────────────────────────────────
@@ -443,47 +446,30 @@ impl Store {
 
     // ── Job queue operations ─────────────────────────────────────────────
 
-    /// Push a trigger job directly into the apalis Jobs table.
-    ///
-    /// This bypasses the apalis `SqliteStorage` type machinery (which has
-    /// complex generics that don't abstract well) and instead INSERTs
-    /// directly using the same schema and codec format (JSON → Vec<u8>).
-    ///
-    /// The `queue_name` must match the worker's queue (default: "trigger-queue").
+    /// Push a trigger job into the apalis queue using the backend TaskSink API.
     pub async fn push_trigger_job(
         &self,
         job: &crate::worker::TriggerJob,
         queue_name: &str,
     ) -> Result<String, sqlx::Error> {
-        let id = ulid::Ulid::new().to_string();
-        // apalis JsonCodec serializes to JSON bytes (Vec<u8>)
-        let job_bytes = serde_json::to_vec(job).map_err(|e| {
-            sqlx::Error::Encode(Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e,
-            )))
-        })?;
-        let run_at = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-        let max_attempts: i32 = 25;
-        let priority: i32 = 0;
+        let job_id = ulid::Ulid::new();
+        let mut storage: SqliteStorage<crate::worker::TriggerJob, _, _> =
+            SqliteStorage::new_in_queue(&self.pool, queue_name);
 
-        sqlx::query(
-            "INSERT INTO Jobs (job, id, job_type, status, attempts, max_attempts, run_at, priority)
-             VALUES (?, ?, ?, 'Pending', 0, ?, ?, ?)",
+        let task = Task::<crate::worker::TriggerJob, SqliteContext, ulid::Ulid>::builder(
+            job.clone(),
         )
-        .bind(&job_bytes)
-        .bind(&id)
-        .bind(queue_name)
-        .bind(max_attempts)
-        .bind(run_at)
-        .bind(priority)
-        .execute(&self.pool)
-        .await?;
+        .with_task_id(TaskId::new(job_id))
+        // No automatic retries: failed trigger attempts should not be re-executed.
+        .max_attempts(1)
+        .priority(0)
+        .build();
 
-        Ok(id)
+        match storage.push_task(task).await {
+            Ok(()) => Ok(job_id.to_string()),
+            Err(TaskSinkError::PushError(e)) => Err(e),
+            Err(TaskSinkError::CodecError(e)) => Err(sqlx::Error::Encode(e)),
+        }
     }
 }
 
@@ -527,4 +513,52 @@ pub fn parse_message_ref(reference: &str) -> Result<i64, String> {
 /// Format a message ID as a reference string.
 pub fn message_ref(id: i64) -> String {
     format!("db:{}", id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Store;
+    use crate::worker::TriggerJob;
+    use apalis_sqlite::SqliteStorage;
+
+    #[tokio::test]
+    async fn test_push_trigger_job_uses_apalis_sink_api() {
+        let pool = sqlx::SqlitePool::connect("sqlite::memory:").await.unwrap();
+        SqliteStorage::setup(&pool).await.unwrap();
+        let store = Store::new(pool.clone());
+        store.setup().await.unwrap();
+
+        let job = TriggerJob {
+            thread_id: "t-test-001".into(),
+            agent_alias: "focused".into(),
+            message_body: "test body".into(),
+            from_alias: "operator".into(),
+            intent: "dispatch".into(),
+            batch_id: Some("BATCH-1".into()),
+        };
+
+        let job_id = store.push_trigger_job(&job, "trigger-queue").await.unwrap();
+
+        let row: (Vec<u8>, String, String, i64, i32, i32) = sqlx::query_as(
+            "SELECT job, id, job_type, run_at, max_attempts, priority
+             FROM Jobs
+             WHERE id = ?",
+        )
+        .bind(&job_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(row.1, job_id);
+        assert_eq!(row.2, "trigger-queue");
+        assert_eq!(row.4, 25);
+        assert_eq!(row.5, 0);
+        assert!(row.3 > 0);
+
+        let decoded: TriggerJob = serde_json::from_slice(&row.0).unwrap();
+        assert_eq!(decoded.thread_id, "t-test-001");
+        assert_eq!(decoded.agent_alias, "focused");
+        assert_eq!(decoded.intent, "dispatch");
+        assert_eq!(decoded.batch_id.as_deref(), Some("BATCH-1"));
+    }
 }

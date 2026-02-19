@@ -16,6 +16,7 @@ use std::sync::Arc;
 fn test_config() -> OrchestratorConfig {
     OrchestratorConfig {
         state_dir: "/tmp/test-orch".into(),
+        db_path: ".aster-orch/jobs.sqlite".into(),
         poll_interval_secs: 1,
         models: None,
         agents: vec![

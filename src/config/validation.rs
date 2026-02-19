@@ -108,6 +108,11 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "poll_interval_secs must be 1..3600".into(),
         ));
     }
+    if config.db_path.as_os_str().is_empty() {
+        return Err(OrchestratorError::Config(
+            "db_path must not be empty".into(),
+        ));
+    }
 
     // ORCHV3-15: validate max_output_capture_bytes
     if config.orchestration.max_output_capture_bytes < 1 {
@@ -150,6 +155,26 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
     if config.apalis.buffer_size < 1 {
         return Err(OrchestratorError::Config(
             "apalis.buffer_size must be >= 1".into(),
+        ));
+    }
+    if config.apalis.db_max_connections < 1 {
+        return Err(OrchestratorError::Config(
+            "apalis.db_max_connections must be >= 1".into(),
+        ));
+    }
+    if config.apalis.db_min_connections < 1 {
+        return Err(OrchestratorError::Config(
+            "apalis.db_min_connections must be >= 1".into(),
+        ));
+    }
+    if config.apalis.db_min_connections > config.apalis.db_max_connections {
+        return Err(OrchestratorError::Config(
+            "apalis.db_min_connections must be <= apalis.db_max_connections".into(),
+        ));
+    }
+    if config.apalis.db_acquire_timeout_ms < 100 {
+        return Err(OrchestratorError::Config(
+            "apalis.db_acquire_timeout_ms must be >= 100".into(),
         ));
     }
 
@@ -206,6 +231,7 @@ mod tests {
     fn minimal_config() -> OrchestratorConfig {
         OrchestratorConfig {
             state_dir: PathBuf::from("/tmp/test-mail"),
+            db_path: PathBuf::from(".aster-orch/jobs.sqlite"),
             poll_interval_secs: 5,
             models: None,
             agents: vec![AgentConfig {
@@ -349,6 +375,23 @@ agents:
         config.apalis.buffer_size = 0;
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("apalis.buffer_size"));
+    }
+
+    #[test]
+    fn test_config_validation_apalis_db_pool_bounds() {
+        let mut config = minimal_config();
+        config.apalis.db_min_connections = 8;
+        config.apalis.db_max_connections = 4;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("db_min_connections"));
+    }
+
+    #[test]
+    fn test_config_validation_apalis_db_acquire_timeout_too_low() {
+        let mut config = minimal_config();
+        config.apalis.db_acquire_timeout_ms = 50;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("db_acquire_timeout_ms"));
     }
 
     #[test]
