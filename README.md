@@ -46,7 +46,8 @@ Operator (MCP client)
 ```
 
 The MCP server and worker are two separate processes sharing the same SQLite
-database (`.aster-orch/jobs.sqlite`). The MCP server handles operator commands,
+database resolved from `db_path` in the provided config file (this repo's
+`.aster-orch/config.yaml` uses `~/.aster/orch/jobs.sqlite`). The MCP server handles operator commands,
 the worker handles agent execution.
 
 - **MCP server** — started by the MCP client (Claude Code, opencode, etc.) via
@@ -75,7 +76,7 @@ aster_orch run --config .aster-orch/config.yaml
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | `.aster-orch/config.yaml` | Path to config YAML |
+| `--config` | *(required)* | Path to config YAML |
 | `--concurrency` | `2` | Max concurrent trigger jobs (worker/run only) |
 
 ## MCP Tools (18)

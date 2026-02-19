@@ -31,7 +31,7 @@ enum Commands {
     /// Run the trigger worker only
     Worker {
         /// Path to config YAML
-        #[arg(long, default_value = ".aster-orch/config.yaml")]
+        #[arg(long)]
         config: PathBuf,
         /// Max concurrent triggers (overrides config; default: worker agent count)
         #[arg(long)]
@@ -40,13 +40,13 @@ enum Commands {
     /// Run the MCP server only (stdio transport)
     McpServer {
         /// Path to config YAML
-        #[arg(long, default_value = ".aster-orch/config.yaml")]
+        #[arg(long)]
         config: PathBuf,
     },
     /// Run worker + MCP server in the same process
     Run {
         /// Path to config YAML
-        #[arg(long, default_value = ".aster-orch/config.yaml")]
+        #[arg(long)]
         config: PathBuf,
         /// Max concurrent triggers (overrides config; default: worker agent count)
         #[arg(long)]
@@ -136,6 +136,10 @@ fn resolve_db_path(
     base.join(raw)
 }
 
+fn resolve_config_path(config_path: &PathBuf) -> PathBuf {
+    std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.clone())
+}
+
 fn build_apalis_config(config: &aster_orch::config::types::OrchestratorConfig) -> SqliteConfig {
     let backoff = BackoffConfig::new(std::time::Duration::from_millis(
         config.apalis.poll_max_backoff_ms,
@@ -167,9 +171,15 @@ async fn run_worker(
     config_path: PathBuf,
     concurrency_override: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved_config_path = resolve_config_path(&config_path);
     let config = aster_orch::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config_path, &config);
-    tracing::info!(agents = config.agents.len(), "config loaded");
+    tracing::info!(
+        agents = config.agents.len(),
+        config = %resolved_config_path.display(),
+        db = %db_path.display(),
+        "config loaded"
+    );
 
     let concurrency = concurrency_override.unwrap_or_else(|| config.effective_max_concurrent_triggers());
 
@@ -216,9 +226,15 @@ async fn run_worker(
 async fn run_mcp_server(
     config_path: PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved_config_path = resolve_config_path(&config_path);
     let config = aster_orch::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config_path, &config);
-    tracing::info!(agents = config.agents.len(), "config loaded");
+    tracing::info!(
+        agents = config.agents.len(),
+        config = %resolved_config_path.display(),
+        db = %db_path.display(),
+        "config loaded"
+    );
 
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
@@ -241,9 +257,15 @@ async fn run_unified(
     config_path: PathBuf,
     concurrency_override: Option<usize>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let resolved_config_path = resolve_config_path(&config_path);
     let config = aster_orch::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config_path, &config);
-    tracing::info!(agents = config.agents.len(), "config loaded");
+    tracing::info!(
+        agents = config.agents.len(),
+        config = %resolved_config_path.display(),
+        db = %db_path.display(),
+        "config loaded"
+    );
 
     let concurrency = concurrency_override.unwrap_or_else(|| config.effective_max_concurrent_triggers());
 
@@ -303,4 +325,28 @@ async fn run_unified(
     // MCP disconnected — shut down worker
     worker_handle.abort();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Cli;
+    use clap::Parser;
+
+    #[test]
+    fn test_worker_requires_config_flag() {
+        let parsed = Cli::try_parse_from(["aster-orch", "worker"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_mcp_server_requires_config_flag() {
+        let parsed = Cli::try_parse_from(["aster-orch", "mcp-server"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_run_requires_config_flag() {
+        let parsed = Cli::try_parse_from(["aster-orch", "run"]);
+        assert!(parsed.is_err());
+    }
 }
