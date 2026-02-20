@@ -1,11 +1,10 @@
-//! Worker module — apalis-based trigger execution.
+//! Worker module — custom poll-loop trigger execution.
 //!
-//! The worker polls the Jobs table for trigger-worthy work, spawns CLI backend
-//! processes, and processes results through a stepped workflow pipeline.
+//! The worker polls the `executions` table for queued work, enforces per-agent
+//! concurrency, and runs backend triggers via `tokio::task::spawn_blocking`.
 
-pub mod context;
-pub mod pipeline;
-pub mod trigger;
+mod executor;
+mod loop_runner;
 
-pub use context::TriggerContext;
-pub use trigger::{ParsedReply, TriggerJob, TriggerOutput};
+pub use executor::execute_trigger;
+pub use loop_runner::WorkerRunner;

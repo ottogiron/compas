@@ -12,11 +12,9 @@ use serde::Serialize;
 
 use crate::backend::registry::BackendRegistry;
 use crate::config::types::OrchestratorConfig;
-use crate::model::message::Intent;
 use crate::store::Store;
 
 pub use super::params::*;
-pub use super::wait::WaitRegistry;
 
 // ---------------------------------------------------------------------------
 // MCP Server struct
@@ -27,18 +25,12 @@ pub struct OrchestratorMcpServer {
     pub(crate) config: Arc<OrchestratorConfig>,
     pub(crate) store: Store,
     /// Backend registry — used by orch_health for backend pings.
-    #[allow(dead_code)]
     pub(crate) backend_registry: Arc<BackendRegistry>,
-    pub(crate) wait_registry: WaitRegistry,
 }
 
 // ---------------------------------------------------------------------------
 // Shared helpers (used across multiple modules)
 // ---------------------------------------------------------------------------
-
-pub(crate) fn parse_intent(s: &str) -> Result<Intent, String> {
-    s.parse()
-}
 
 pub(crate) fn json_text<T: Serialize>(val: &T) -> CallToolResult {
     match serde_json::to_string_pretty(val) {
@@ -57,7 +49,6 @@ impl OrchestratorMcpServer {
             config: Arc::new(config),
             store,
             backend_registry: Arc::new(backend_registry),
-            wait_registry: WaitRegistry::new(),
         }
     }
 }

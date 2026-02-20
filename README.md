@@ -1,8 +1,8 @@
 # aster-orch
 
 Agent orchestrator for the Aster project. Coordinates multiple AI coding agents
-(Claude, Codex, Gemini, OpenCode) through an MCP server interface with an
-apalis-based background worker for trigger execution.
+(Claude, Codex, Gemini, OpenCode) through an MCP server interface with a custom
+poll-loop background worker for trigger execution.
 
 Replaces the deprecated `aster-orchestrator` crate.
 
@@ -18,7 +18,7 @@ Operator (MCP client)
 │  approve, reject, complete, ...     │
 │                                     │
 │  ┌───────────┐   ┌───────────────┐  │
-│  │ messages   │   │ Jobs (apalis) │  │
+│  │ messages   │   │ executions    │  │
 │  │  table     │   │  table        │  │
 │  └─────┬─────┘   └───────┬───────┘  │
 │        │    SQLite (WAL)  │          │
@@ -27,14 +27,14 @@ Operator (MCP client)
          │    ┌─────────────┘
          ▼    ▼
 ┌─────────────────────────────────────┐
-│  Worker  (apalis background jobs)   │
+│  Worker  (custom poll-loop)         │
 │                                     │
-│  TriggerJob → resolve agent/backend │
-│            → start/reuse session    │
-│            → execute CLI process    │
-│            → parse JSON reply       │
-│            → insert reply message   │
-│            → update thread status   │
+│  claim_next_execution()             │
+│  → resolve agent/backend            │
+│  → spawn_blocking(trigger CLI)      │
+│  → update execution status          │
+│  → insert reply message             │
+│  → periodic heartbeat               │
 └─────────────────────────────────────┘
          │
          ▼
@@ -45,19 +45,31 @@ Operator (MCP client)
 └─────────────────┘
 ```
 
-The MCP server and worker are two separate processes sharing the same SQLite
-database resolved from `db_path` in the provided config file (this repo's
-`.aster-orch/config.yaml` uses `~/.aster/orch/jobs.sqlite`). The MCP server handles operator commands,
-the worker handles agent execution.
+**Two-process model.** The MCP server and worker are separate processes sharing
+the same SQLite database (resolved from `db_path` in config). WAL mode enables
+concurrent read/write without SQLITE_BUSY errors.
 
 - **MCP server** — started by the MCP client (Claude Code, opencode, etc.) via
-  stdio transport. Reads/writes the `messages` table and pushes trigger jobs to
-  the apalis `Jobs` table.
-- **Worker** — long-running background process (the "daemon" equivalent). Polls
-  the `Jobs` table via apalis, executes triggers against real backends, and
-  writes reply messages back to the `messages` table.
+  stdio transport. Reads/writes `messages` and `threads` tables. Inserts queued
+  rows into the `executions` table when dispatching to worker agents.
+- **Worker** — long-running background process. Polls the `executions` table for
+  `status='queued'` rows, claims work atomically with per-agent concurrency
+  enforcement, runs backend triggers via `tokio::task::spawn_blocking`, and
+  writes reply messages back.
 
-Both can also run in the same process via the `run` subcommand.
+## Database Schema
+
+Four tables in a single SQLite file with WAL mode:
+
+| Table | Purpose |
+|-------|---------|
+| `threads` | Thread lifecycle (Active, ReviewPending, Completed, Failed, Abandoned) |
+| `messages` | Conversation ledger between operator and agents |
+| `executions` | Job queue AND execution lifecycle tracker (queued → picked_up → executing → completed/failed/timed_out/crashed/cancelled) |
+| `worker_heartbeats` | Worker liveness tracking |
+
+The `executions` table is the single source of truth for both queuing and
+execution state — no separate job queue system.
 
 ## CLI
 
@@ -67,17 +79,11 @@ aster_orch worker --config .aster-orch/config.yaml
 
 # MCP server only (started by MCP client config)
 aster_orch mcp-server --config .aster-orch/config.yaml
-
-# Unified: worker + MCP server in one process
-aster_orch run --config .aster-orch/config.yaml
 ```
-
-### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` | *(required)* | Path to config YAML |
-| `--concurrency` | `2` | Max concurrent trigger jobs (worker/run only) |
 
 ## MCP Tools (18)
 
@@ -86,72 +92,72 @@ aster_orch run --config .aster-orch/config.yaml
 |------|-------------|
 | `orch_dispatch` | Send a message to an agent. Creates or continues a thread. |
 | `orch_approve` | Approve a review, issuing a review token. |
-| `orch_reject` | Reject a review with feedback. |
+| `orch_reject` | Reject a review with feedback, re-triggers worker agents. |
 | `orch_complete` | Complete a thread using the review token. |
 
 ### Query & Observability
 | Tool | Description |
 |------|-------------|
-| `orch_status` | Query message status by agent and/or thread. |
-| `orch_transcript` | Get full conversation transcript for a thread. |
+| `orch_status` | Query thread + latest execution status by agent and/or thread. |
+| `orch_transcript` | Get full conversation transcript (messages + executions) for a thread. |
 | `orch_read` | Read a single message by reference (`db:<id>`). |
-| `orch_metrics` | Aggregate metrics (active/blocked/completed threads). |
+| `orch_metrics` | Aggregate metrics (thread counts, queue depth, active executions). |
 | `orch_batch_status` | Batch-level status with per-thread breakdown. |
-| `orch_tasks` | List trigger execution records from the job queue. |
+| `orch_tasks` | List trigger execution records with timing and result status. |
 
 ### Blocking & Polling
 | Tool | Description |
 |------|-------------|
-| `orch_wait` | Block until a message appears on a thread (with timeout). |
-| `orch_poll` | Non-blocking check of thread state. |
+| `orch_wait` | Poll DB at 200ms intervals until a message appears (with timeout). |
+| `orch_poll` | Non-blocking check of thread state and recent messages. |
 
 ### Lifecycle
 | Tool | Description |
 |------|-------------|
-| `orch_abandon` | Abandon a stuck thread. |
-| `orch_reopen` | Reopen a terminal thread. |
-| `orch_diagnose` | Thread diagnostics: status, blockers, suggested actions. |
+| `orch_abandon` | Abandon a thread, cancel active executions. |
+| `orch_reopen` | Reopen a terminal thread (Completed/Failed/Abandoned) to Active. |
+| `orch_diagnose` | Thread diagnostics: status, blockers, suggested next actions. |
 
 ### Configuration
 | Tool | Description |
 |------|-------------|
-| `orch_session_info` | Current session metadata. |
-| `orch_list_agents` | List all configured agents. |
-| `orch_health` | Backend health pings for all or specific agents. |
+| `orch_session_info` | Current MCP session metadata. |
+| `orch_list_agents` | List all configured agents with backend/model info. |
+| `orch_health` | Worker heartbeat status + backend health pings. |
 
 ## Dispatch Flow
 
 When `orch_dispatch` is called:
 
-1. Message inserted into `messages` table
-2. Waiters notified (for any blocking `orch_wait` calls)
-3. If intent matches `trigger_intents` config AND target agent is a `Worker`:
-   - `TriggerJob` pushed to apalis `Jobs` table (ULID job ID)
-   - Worker picks it up, resolves agent config → backend → session
-   - Backend CLI process spawned with instruction prompt
-   - Output parsed for JSON auto-reply
-   - Reply inserted as a message, thread status updated
+1. Message inserted into `messages` table (thread auto-created if needed)
+2. If intent matches `trigger_intents` config AND target agent role is `Worker`:
+   - Execution row inserted into `executions` table with `status='queued'`
+   - Worker picks it up on next poll cycle via `claim_next_execution()`
+   - Worker resolves agent config → backend → starts session
+   - Backend CLI process spawned inside `tokio::task::spawn_blocking`
+   - Output parsed for structured intent (JSON auto-reply)
+   - Execution status updated (completed/failed/timed_out)
+   - Reply message inserted into `messages` table
 
-### Worker Log Phases
+### Worker Lifecycle
 
-Worker logs now use explicit phase labels so dispatch-to-worker flow is easier
-to read in real time:
+On startup:
+1. **Crash recovery** — marks orphaned executions (`picked_up`/`executing`) as `crashed`
+2. **Initial heartbeat** — writes to `worker_heartbeats` table
 
-- `phase=enqueue` — MCP server enqueued a trigger job (`job_id`, `thread_id`,
-  `agent_alias`, `intent`).
-- `phase=picked` — worker picked the queued job for execution.
-- `phase=backend_session` — worker reused/opened backend session for the agent.
-- `phase=backend_execute` — backend trigger execution started/finished.
-- `phase=parse` — worker parsed backend output and classified reply intent.
-- `phase=persist` — worker persisted reply/status updates to `messages`/`threads`.
+Main loop (concurrent via `tokio::select!`):
+- **Poll interval** — claims queued executions, enforces per-agent concurrency via SQL, spawns execution tasks with global semaphore
+- **Heartbeat interval** (10s) — writes liveness record for `orch_health` to check
 
-### Worker Stability Notes
+### Execution Status Lifecycle
 
-- Worker queue execution uses a shared SQLx pool (`apalis.db_max_connections`,
-  `apalis.db_min_connections`, `apalis.db_acquire_timeout_ms`) to avoid
-  connection starvation under concurrent triggers.
-- If `apalis.listener_enabled=true` is configured, runtime may still use
-  shared-pool polling backend for worker stability.
+```
+queued → picked_up → executing → completed
+                               → failed
+                               → timed_out
+                               → crashed (worker died mid-execution)
+                    → cancelled (thread abandoned)
+```
 
 ## Configuration
 
@@ -160,6 +166,7 @@ Config file: `.aster-orch/config.yaml`
 ```yaml
 state_dir: ~/.aster/orch
 db_path: ~/.aster/orch/jobs.sqlite
+poll_interval_secs: 1
 orchestration:
   auto_trigger_enabled: true
   trigger_intents: [dispatch, handoff, changes-requested]
@@ -169,29 +176,40 @@ orchestration:
   ping_timeout_secs: 15
 
 models:
-  - id: claude-opus-4-6
+  - id: claude-sonnet-4-6
     backend: claude
-  - id: claude-sonnet-4-5
+  - id: claude-opus-4-6
     backend: claude
 
 agents:
   - alias: focused
     identity: Claude
-    backend: opencode
-    model: anthropic/claude-opus-4-6
+    backend: claude
+    model: claude-sonnet-4-6
     prompt: "You are Focused, Compiler Core Engineer..."
   - alias: chill
     identity: Claude
     backend: claude
-    model: claude-sonnet-4-5
+    model: claude-sonnet-4-6
     prompt: "You are Chill, Tooling Engineer..."
 ```
 
 ### Agent Roles
 
-- **Worker** (default) — can be triggered by dispatch. The worker spawns CLI
-  processes to execute work.
-- **Operator** — MCP-only, never triggered. Auto-registered at runtime.
+- **Worker** (default) — triggered when dispatch intent matches `trigger_intents`.
+  The worker spawns CLI processes via `spawn_blocking` to execute work.
+- **Operator** — MCP-only, never triggered. The operator is whoever calls the MCP tools.
+
+### Key Config Fields
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `poll_interval_secs` | 1 | Worker poll interval for queued executions |
+| `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
+| `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
+| `orchestration.execution_timeout_secs` | 30 | Per-trigger timeout |
+| `orchestration.trigger_intents` | dispatch, handoff, changes-requested | Intents that trigger worker execution |
+| `orchestration.ping_timeout_secs` | 15 | Backend ping liveness timeout |
 
 ## MCP Client Configuration
 
@@ -242,83 +260,75 @@ target/release/aster_orch
 
 ## Key Design Decisions
 
-- **apalis for job queuing** — SQLite-backed, async, handles polling/acking/retry.
-  Single worker handles all agents with configurable concurrency.
-- **apalis TaskSink for job push** — `Store::push_trigger_job()` enqueues through
-  `SqliteStorage` TaskSink API (`push_task`) with explicit task ID/attempt/priority,
-  instead of writing to the `Jobs` table manually.
-- **Two tables, not one** — `messages` table is the conversation ledger (permanent,
-  MCP tools read/write). `Jobs` table is the worker queue (transient trigger
-  execution). `orch_dispatch` inserts a message AND pushes a TriggerJob.
-- **Pipeline returns result, handler routes** — the pipeline (execute -> parse ->
-  dispatch) returns `ParsedReply`. Job routing (follow-up triggers) is done by
-  the handler, not the pipeline.
-- **sqlx instead of rusqlite** — required by apalis-sqlite. Both share the same
-  SQLite file via WAL mode.
+- **Custom `executions` table as job queue** — single source of truth for both
+  queuing and execution lifecycle. No external job queue dependency.
+- **`spawn_blocking` for CLI execution** — backend trigger calls run inside
+  `tokio::task::spawn_blocking` to avoid starving the async runtime with blocking
+  subprocess I/O.
+- **Per-agent concurrency enforcement** — `claim_next_execution()` uses a SQL
+  subquery to check active execution count per agent before claiming work.
+- **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing`
+  rows as `crashed` on startup, preventing lost work from going unnoticed.
+- **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP
+  server + worker) to read/write concurrently without SQLITE_BUSY errors.
+- **200ms DB polling for `orch_wait`** — simple, reliable, works across process
+  boundaries without in-memory notification channels.
+- **Three core tables** — `threads` (lifecycle), `messages` (conversation
+  ledger), `executions` (job queue + execution tracker). Plus `worker_heartbeats`
+  for liveness.
 
 ## Differences from `aster-orchestrator` (deprecated)
 
-| Old | New |
-|-----|-----|
-| Custom daemon poll loop | apalis background worker |
-| rusqlite | sqlx |
+| Old (`aster-orchestrator`) | New (`aster-orch`) |
+|----------------------------|---------------------|
+| Custom daemon poll loop | Custom poll-loop worker with `spawn_blocking` |
+| rusqlite | sqlx (async, WAL mode) |
+| Single `messages.status` field (never updated) | Typed `ExecutionStatus` enum with full lifecycle |
+| No crash recovery | Orphan detection on startup |
+| No heartbeat | Worker heartbeats every 10s |
+| Blocking I/O on async runtime | `spawn_blocking` for all CLI execution |
 | Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
-| Retry with backoff | apalis built-in retry (max_attempts) |
-| Watchdog thread | Not needed (apalis handles orphan recovery) |
-| AgentRuntime state machine | Stateless worker (session cache only) |
-| ModelPoolState / hot-swap | Not implemented (planned) |
+| AgentRuntime state machine | Stateless worker (execution-per-trigger) |
 | Session namespace scoping | Scoping by DB file |
 | 24 MCP tools | 18 MCP tools |
-| `daemon run` subcommand | `worker` subcommand |
+| `daemon run` subcommand | `worker` + `mcp-server` subcommands only |
 
 ## Module Structure
 
 ```
 src/
-├── bin/aster_orch.rs    # CLI binary (worker, mcp-server, run)
+├── bin/aster_orch.rs    # CLI binary (worker, mcp-server)
 ├── lib.rs               # Module declarations
-├── error.rs             # Error types (sqlx-based)
-├── observability.rs     # Tracing setup
-├── testing.rs           # StubBackend, StubNotifier
+├── error.rs             # Error types
 ├── backend/             # Backend trait + implementations
 │   ├── mod.rs           #   Backend trait, PingResult
 │   ├── claude.rs        #   Claude CLI backend
 │   ├── codex.rs         #   Codex CLI backend
 │   ├── gemini.rs        #   Gemini CLI backend
 │   ├── opencode.rs      #   OpenCode CLI backend
-│   ├── process.rs       #   Shared CLI process spawning
+│   ├── process.rs       #   CLI process spawning, output extraction
 │   └── registry.rs      #   BackendRegistry lookup
 ├── config/              # Configuration
+│   ├── mod.rs           #   Config loading + normalization
 │   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
-│   ├── validation.rs    #   Config validation
-│   └── loader.rs        #   YAML loading
+│   └── validation.rs    #   Config validation
 ├── mcp/                 # MCP server (18 tools)
-│   ├── server.rs        #   OrchestratorMcpServer, tool stubs
+│   ├── mod.rs           #   Module declarations
+│   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
 │   ├── params.rs        #   All parameter structs
-│   ├── dispatch.rs      #   orch_dispatch + trigger push
-│   ├── query.rs         #   orch_status, transcript, read, metrics, diagnose, batch_status
-│   ├── lifecycle.rs     #   orch_approve, reject, complete, reopen, abandon
-│   ├── wait.rs          #   WaitRegistry, orch_wait, orch_poll
+│   ├── dispatch.rs      #   orch_dispatch (message + execution insert)
+│   ├── query.rs         #   orch_status, transcript, read, metrics, poll, batch_status, tasks
+│   ├── lifecycle.rs     #   orch_approve, reject, complete, abandon, reopen
+│   ├── wait.rs          #   orch_wait (200ms DB poll loop)
 │   ├── session.rs       #   orch_session_info, orch_list_agents
-│   └── health.rs        #   orch_health, orch_tasks
-├── store/               # SQLite store (messages + threads)
-│   └── mod.rs           #   Store with full CRUD + push_trigger_job
-├── worker/              # apalis worker
+│   └── health.rs        #   orch_health, orch_diagnose
+├── store/               # SQLite store (threads + messages + executions + heartbeats)
+│   └── mod.rs           #   Store with WAL setup, typed enums, all CRUD, claim logic
+├── worker/              # Custom poll-loop worker
 │   ├── mod.rs           #   Re-exports
-│   ├── trigger.rs       #   TriggerJob, ParsedReply, JSON extraction
-│   ├── context.rs       #   TriggerContext, build_backend_registry
-│   └── pipeline.rs      #   execute_trigger, parse_reply, dispatch_result
-├── model/               # Domain types
-│   ├── agent.rs         #   Agent model
-│   ├── message.rs       #   Intent, ThreadStatus enums
-│   ├── review.rs        #   ReviewToken
-│   └── session.rs       #   Session, TriggerResult
-├── workflow/            # Workflow logic
-│   ├── alias.rs         #   Alias resolution
-│   ├── validator.rs     #   Intent state machine
-│   ├── review_ledger.rs #   Review token ledger
-│   └── session_ledger.rs#   Session persistence
-├── audit/               # Audit logging
-├── health/              # Health report types
-└── notification/        # Notification (Telegram)
+│   ├── loop_runner.rs   #   WorkerRunner: poll loop, heartbeat, crash recovery
+│   └── executor.rs      #   execute_trigger: spawn_blocking wrapper, output parsing
+└── model/               # Domain types
+    ├── agent.rs         #   Agent struct
+    └── session.rs       #   Session, SessionStatus, TriggerResult
 ```

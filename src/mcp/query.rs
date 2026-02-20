@@ -1,12 +1,41 @@
-//! Query tool implementations: status, transcript, read, metrics, diagnose, batch_status.
+//! orch_status, orch_transcript, orch_read, orch_batch_status,
+//! orch_tasks, orch_metrics, orch_poll implementations.
 
 use rmcp::model::CallToolResult;
+use serde::Serialize;
 
-use super::params::{
-    BatchStatusParams, DiagnoseParams, MetricsParams, ReadParams, StatusParams, TranscriptParams,
-};
+use super::params::*;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
-use crate::store;
+use crate::store::{self, MessageRow, ThreadStatusView};
+
+// ── orch_status ──────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct StatusEntry {
+    thread_id: String,
+    batch_id: Option<String>,
+    thread_status: String,
+    agent: Option<String>,
+    execution_status: Option<String>,
+    started_at: Option<i64>,
+    duration_ms: Option<i64>,
+    error: Option<String>,
+}
+
+impl From<ThreadStatusView> for StatusEntry {
+    fn from(v: ThreadStatusView) -> Self {
+        Self {
+            thread_id: v.thread_id,
+            batch_id: v.batch_id,
+            thread_status: v.thread_status,
+            agent: v.agent_alias,
+            execution_status: v.execution_status,
+            started_at: v.started_at,
+            duration_ms: v.duration_ms,
+            error: v.error_detail,
+        }
+    }
+}
 
 impl OrchestratorMcpServer {
     pub(crate) async fn status_impl(
@@ -15,54 +44,109 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::Error> {
         match self
             .store
-            .list_messages(params.agent.as_deref(), params.thread_id.as_deref())
+            .status_view(
+                params.thread_id.as_deref(),
+                params.agent.as_deref(),
+                None,
+                50,
+            )
             .await
         {
-            Ok(messages) => {
-                let summaries: Vec<serde_json::Value> = messages
-                    .iter()
-                    .map(|m| {
-                        serde_json::json!({
-                            "id": m.id,
-                            "from": m.from_alias,
-                            "to": m.to_alias,
-                            "intent": m.intent,
-                            "thread_id": m.thread_id,
-                            "status": m.status,
-                            "message_ref": store::message_ref(m.id),
-                        })
-                    })
-                    .collect();
-                Ok(json_text(&summaries))
+            Ok(rows) => {
+                let entries: Vec<StatusEntry> = rows.into_iter().map(StatusEntry::from).collect();
+                Ok(json_text(&entries))
             }
-            Err(e) => Ok(err_text(e)),
+            Err(e) => Ok(err_text(format!("status query failed: {}", e))),
         }
     }
+
+    // ── orch_transcript ──────────────────────────────────────────────────
 
     pub(crate) async fn transcript_impl(
         &self,
         params: TranscriptParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        match self.store.get_thread_messages(&params.thread_id).await {
-            Ok(messages) => {
-                let summaries: Vec<serde_json::Value> = messages
-                    .iter()
-                    .map(|m| {
-                        serde_json::json!({
-                            "id": m.id,
-                            "from": m.from_alias,
-                            "to": m.to_alias,
-                            "intent": m.intent,
-                            "body": m.body,
-                            "message_ref": store::message_ref(m.id),
-                        })
-                    })
-                    .collect();
-                Ok(json_text(&summaries))
-            }
-            Err(e) => Ok(err_text(e)),
+        let messages = match self.store.get_thread_messages(&params.thread_id).await {
+            Ok(m) => m,
+            Err(e) => return Ok(err_text(format!("transcript query failed: {}", e))),
+        };
+
+        let executions = match self.store.get_thread_executions(&params.thread_id).await {
+            Ok(e) => e,
+            Err(e) => return Ok(err_text(format!("executions query failed: {}", e))),
+        };
+
+        let thread = self.store.get_thread(&params.thread_id).await.ok().flatten();
+
+        #[derive(Serialize)]
+        struct TranscriptMessage {
+            id: i64,
+            reference: String,
+            from: String,
+            to: String,
+            intent: String,
+            body: String,
+            created_at: i64,
         }
+
+        #[derive(Serialize)]
+        struct TranscriptExecution {
+            id: String,
+            agent: String,
+            status: String,
+            queued_at: i64,
+            started_at: Option<i64>,
+            finished_at: Option<i64>,
+            duration_ms: Option<i64>,
+            exit_code: Option<i32>,
+            error: Option<String>,
+        }
+
+        #[derive(Serialize)]
+        struct Transcript {
+            thread_id: String,
+            thread_status: Option<String>,
+            batch_id: Option<String>,
+            messages: Vec<TranscriptMessage>,
+            executions: Vec<TranscriptExecution>,
+        }
+
+        let transcript = Transcript {
+            thread_id: params.thread_id.clone(),
+            thread_status: thread.as_ref().map(|t| t.status.clone()),
+            batch_id: thread.and_then(|t| t.batch_id),
+            messages: messages
+                .into_iter()
+                .map(|m| TranscriptMessage {
+                    id: m.id,
+                    reference: store::message_ref(m.id),
+                    from: m.from_alias,
+                    to: m.to_alias,
+                    intent: m.intent,
+                    body: m.body,
+                    created_at: m.created_at,
+                })
+                .collect(),
+            executions: executions
+                .into_iter()
+                .map(|e| TranscriptExecution {
+                    id: e.id,
+                    agent: e.agent_alias,
+                    status: e.status,
+                    queued_at: e.queued_at,
+                    started_at: e.started_at,
+                    finished_at: e.finished_at,
+                    duration_ms: e.duration_ms,
+                    exit_code: e.exit_code,
+                    error: e.error_detail,
+                })
+                .collect(),
+        };
+
+        Ok(json_text(&transcript))
     }
+
+    // ── orch_read ────────────────────────────────────────────────────────
 
     pub(crate) async fn read_impl(
         &self,
@@ -72,102 +156,231 @@ impl OrchestratorMcpServer {
             Ok(id) => id,
             Err(e) => return Ok(err_text(e)),
         };
+
         match self.store.get_message(id).await {
             Ok(Some(msg)) => {
-                let val = serde_json::json!({
-                    "id": msg.id,
-                    "from": msg.from_alias,
-                    "to": msg.to_alias,
-                    "intent": msg.intent,
-                    "thread_id": msg.thread_id,
-                    "batch": msg.batch_id,
-                    "status": msg.status,
-                    "body": msg.body,
-                    "message_ref": store::message_ref(msg.id),
-                });
-                Ok(json_text(&val))
+                #[derive(Serialize)]
+                struct MessageDetail {
+                    id: i64,
+                    reference: String,
+                    thread_id: String,
+                    from: String,
+                    to: String,
+                    intent: String,
+                    body: String,
+                    created_at: i64,
+                }
+                Ok(json_text(&MessageDetail {
+                    id: msg.id,
+                    reference: store::message_ref(msg.id),
+                    thread_id: msg.thread_id,
+                    from: msg.from_alias,
+                    to: msg.to_alias,
+                    intent: msg.intent,
+                    body: msg.body,
+                    created_at: msg.created_at,
+                }))
             }
-            Ok(None) => Ok(err_text(format!("message {} not found", params.reference))),
-            Err(e) => Ok(err_text(e)),
+            Ok(None) => Ok(err_text(format!(
+                "message not found: {}",
+                params.reference
+            ))),
+            Err(e) => Ok(err_text(format!("read failed: {}", e))),
         }
     }
+
+    // ── orch_metrics ─────────────────────────────────────────────────────
 
     pub(crate) async fn metrics_impl(
         &self,
         _params: MetricsParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        match self.store.metrics().await {
-            Ok(m) => Ok(json_text(&serde_json::json!({
-                "total_messages": m.total_messages,
-                "pending_messages": m.pending_messages,
-                "active_threads": m.active_threads,
-                "completed_threads": m.completed_threads,
-                "failed_threads": m.failed_threads,
-                "abandoned_threads": m.abandoned_threads,
-            }))),
-            Err(e) => Ok(err_text(e)),
+        #[derive(Serialize)]
+        struct Metrics {
+            thread_counts: Vec<(String, i64)>,
+            total_messages: i64,
+            queue_depth: i64,
+            active_by_agent: Vec<(String, i64)>,
         }
-    }
 
-    pub(crate) async fn diagnose_impl(
-        &self,
-        params: DiagnoseParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let thread_id = &params.thread_id;
-        let status = self.store.get_thread_status(thread_id).await.ok().flatten();
-        let messages = self
+        let thread_counts = self.store.thread_counts().await.unwrap_or_default();
+        let total_messages = self.store.message_count().await.unwrap_or(0);
+        let queue_depth = self.store.queue_depth().await.unwrap_or(0);
+        let active_by_agent = self
             .store
-            .get_thread_messages(thread_id)
+            .active_executions_by_agent()
             .await
             .unwrap_or_default();
-        let last_msg = messages.last();
-        let last_intent = self
+
+        Ok(json_text(&Metrics {
+            thread_counts,
+            total_messages,
+            queue_depth,
+            active_by_agent,
+        }))
+    }
+
+    // ── orch_poll ────────────────────────────────────────────────────────
+
+    pub(crate) async fn poll_impl(
+        &self,
+        params: PollParams,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let thread = match self.store.get_thread(&params.thread_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return Ok(err_text(format!(
+                    "thread not found: {}",
+                    params.thread_id
+                )));
+            }
+            Err(e) => return Ok(err_text(format!("poll failed: {}", e))),
+        };
+
+        // Resolve since cursor
+        let since_id = match params.since_reference.as_deref() {
+            Some(r) => match store::parse_message_ref(r) {
+                Ok(id) => id,
+                Err(e) => return Ok(err_text(e)),
+            },
+            None => 0,
+        };
+
+        let messages = match self.store.get_messages_since(&params.thread_id, since_id).await {
+            Ok(m) => m,
+            Err(e) => return Ok(err_text(format!("poll messages failed: {}", e))),
+        };
+
+        // Filter by intent if specified
+        let filtered: Vec<&MessageRow> = if let Some(ref intent) = params.intent {
+            messages.iter().filter(|m| m.intent == *intent).collect()
+        } else {
+            messages.iter().collect()
+        };
+
+        let latest_exec = self
             .store
-            .latest_thread_intent(thread_id)
+            .latest_execution(&params.thread_id)
             .await
             .ok()
             .flatten();
 
-        let val = serde_json::json!({
-            "thread_id": thread_id,
-            "thread_status": status.unwrap_or_else(|| "Active".into()),
-            "message_count": messages.len(),
-            "last_intent": last_intent,
-            "last_message_from": last_msg.map(|m| &m.from_alias),
-            "last_message_to": last_msg.map(|m| &m.to_alias),
-        });
-        Ok(json_text(&val))
+        #[derive(Serialize)]
+        struct PollResult {
+            thread_id: String,
+            thread_status: String,
+            matched_messages: usize,
+            latest_message_id: Option<i64>,
+            latest_message_ref: Option<String>,
+            latest_intent: Option<String>,
+            latest_body_preview: Option<String>,
+            execution_status: Option<String>,
+        }
+
+        let latest = filtered.last();
+        Ok(json_text(&PollResult {
+            thread_id: params.thread_id,
+            thread_status: thread.status,
+            matched_messages: filtered.len(),
+            latest_message_id: latest.map(|m| m.id),
+            latest_message_ref: latest.map(|m| store::message_ref(m.id)),
+            latest_intent: latest.map(|m| m.intent.clone()),
+            latest_body_preview: latest.map(|m| {
+                if m.body.len() > 200 {
+                    format!("{}...", &m.body[..200])
+                } else {
+                    m.body.clone()
+                }
+            }),
+            execution_status: latest_exec.map(|e| e.status),
+        }))
     }
+
+    // ── orch_batch_status ────────────────────────────────────────────────
 
     pub(crate) async fn batch_status_impl(
         &self,
         params: BatchStatusParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        let threads = match self.store.get_batch_threads(&params.batch_id).await {
+        let threads = match self
+            .store
+            .list_threads(Some(&params.batch_id), None, 100)
+            .await
+        {
             Ok(t) => t,
-            Err(e) => return Ok(err_text(e)),
-        };
-        let messages = match self.store.get_batch_messages(&params.batch_id).await {
-            Ok(m) => m,
-            Err(e) => return Ok(err_text(e)),
+            Err(e) => return Ok(err_text(format!("batch query failed: {}", e))),
         };
 
-        let thread_summaries: Vec<serde_json::Value> = threads
-            .iter()
-            .map(|t| {
-                serde_json::json!({
-                    "thread_id": t.thread_id,
-                    "status": t.status,
+        #[derive(Serialize)]
+        struct BatchThread {
+            thread_id: String,
+            status: String,
+        }
+
+        #[derive(Serialize)]
+        struct BatchStatus {
+            batch_id: String,
+            thread_count: usize,
+            threads: Vec<BatchThread>,
+        }
+
+        Ok(json_text(&BatchStatus {
+            batch_id: params.batch_id,
+            thread_count: threads.len(),
+            threads: threads
+                .into_iter()
+                .map(|t| BatchThread {
+                    thread_id: t.thread_id,
+                    status: t.status,
                 })
+                .collect(),
+        }))
+    }
+
+    // ── orch_tasks ───────────────────────────────────────────────────────
+
+    pub(crate) async fn tasks_impl(
+        &self,
+        params: TasksParams,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        // Query executions — we use status_view as a convenient join
+        let limit = params.limit.unwrap_or(20) as i64;
+        let views = match self
+            .store
+            .status_view(None, params.alias.as_deref(), params.batch_id.as_deref(), limit)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
+        };
+
+        #[derive(Serialize)]
+        struct TaskEntry {
+            thread_id: String,
+            batch_id: Option<String>,
+            agent: Option<String>,
+            execution_status: Option<String>,
+            started_at: Option<i64>,
+            finished_at: Option<i64>,
+            duration_ms: Option<i64>,
+            error: Option<String>,
+        }
+
+        let entries: Vec<TaskEntry> = views
+            .into_iter()
+            .filter(|v| v.execution_id.is_some())
+            .map(|v| TaskEntry {
+                thread_id: v.thread_id,
+                batch_id: v.batch_id,
+                agent: v.agent_alias,
+                execution_status: v.execution_status,
+                started_at: v.started_at,
+                finished_at: v.finished_at,
+                duration_ms: v.duration_ms,
+                error: v.error_detail,
             })
             .collect();
 
-        let val = serde_json::json!({
-            "batch_id": params.batch_id,
-            "thread_count": threads.len(),
-            "message_count": messages.len(),
-            "threads": thread_summaries,
-        });
-        Ok(json_text(&val))
+        Ok(json_text(&entries))
     }
 }

@@ -1,195 +1,216 @@
-//! orch_health and orch_tasks implementations.
+//! orch_health and orch_diagnose implementations.
 
-use chrono::Utc;
 use rmcp::model::CallToolResult;
+use serde::Serialize;
 
-use super::params::{HealthParams, TasksParams};
+use super::params::*;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
-use crate::health::{AgentHealth, HealthReport, HealthStatus};
 use crate::model::agent::Agent;
+use crate::store::ThreadStatus;
 
 impl OrchestratorMcpServer {
+    // ── orch_health ──────────────────────────────────────────────────────
+
     pub(crate) async fn health_impl(
         &self,
         params: HealthParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        let ping_timeout = self.config.orchestration.ping_timeout_secs;
+        #[derive(Serialize)]
+        struct AgentHealth {
+            alias: String,
+            backend: String,
+            ping_alive: bool,
+            ping_latency_ms: u64,
+            ping_detail: Option<String>,
+        }
 
-        if let Some(alias) = &params.alias {
-            // Single agent health check
-            let health = self.check_agent_health(alias, ping_timeout).await;
-            Ok(json_text(&health))
+        #[derive(Serialize)]
+        struct HealthReport {
+            worker_heartbeat: Option<HeartbeatInfo>,
+            queue_depth: i64,
+            agents: Vec<AgentHealth>,
+        }
+
+        #[derive(Serialize)]
+        struct HeartbeatInfo {
+            worker_id: String,
+            last_beat_at: i64,
+            started_at: i64,
+            version: Option<String>,
+        }
+
+        // Worker heartbeat
+        let heartbeat = match self.store.latest_heartbeat().await {
+            Ok(Some((id, beat, start, ver))) => Some(HeartbeatInfo {
+                worker_id: id,
+                last_beat_at: beat,
+                started_at: start,
+                version: ver,
+            }),
+            _ => None,
+        };
+
+        let queue_depth = self.store.queue_depth().await.unwrap_or(0);
+
+        // Filter agents if alias specified
+        let agents_to_check: Vec<_> = if let Some(ref alias) = params.alias {
+            self.config
+                .agents
+                .iter()
+                .filter(|a| a.alias == *alias)
+                .collect()
         } else {
-            // All agents health check
-            let mut agents = Vec::new();
-            for agent_config in &self.config.agents {
-                let health = self
-                    .check_agent_health(&agent_config.alias, ping_timeout)
-                    .await;
-                agents.push(health);
-            }
-            let report = HealthReport {
-                agents,
-                checked_at: Utc::now(),
+            self.config.agents.iter().collect()
+        };
+
+        let ping_timeout = self.config.orchestration.ping_timeout_secs;
+        let mut agent_health = Vec::new();
+
+        for agent_cfg in agents_to_check {
+            let agent = Agent {
+                alias: agent_cfg.alias.clone(),
+                identity: agent_cfg.identity.clone(),
+                backend: agent_cfg.backend.clone(),
+                model: agent_cfg.model.clone(),
+                prompt: agent_cfg.prompt.clone(),
+                prompt_file: agent_cfg.prompt_file.clone(),
+                timeout_secs: agent_cfg.timeout_secs,
+                backend_args: agent_cfg.backend_args.clone(),
+                env: agent_cfg.env.clone(),
             };
-            Ok(json_text(&report))
-        }
-    }
 
-    async fn check_agent_health(&self, alias: &str, ping_timeout: u64) -> AgentHealth {
-        let agent_config = match self.config.agents.iter().find(|a| a.alias == alias) {
-            Some(a) => a,
-            None => {
-                return AgentHealth {
-                    alias: alias.to_string(),
-                    backend: "unknown".to_string(),
-                    status: HealthStatus::Unhealthy,
-                    latency_ms: None,
-                    state: "not-found".to_string(),
-                    detail: Some(format!("agent '{}' not in config", alias)),
-                };
-            }
-        };
+            let ping = match self.backend_registry.get(agent_cfg) {
+                Ok(backend) => backend.ping(&agent, ping_timeout).await,
+                Err(e) => crate::backend::PingResult {
+                    alive: false,
+                    latency_ms: 0,
+                    detail: Some(format!("backend not found: {}", e)),
+                },
+            };
 
-        let backend = match self.backend_registry.get_by_name(&agent_config.backend) {
-            Ok(b) => b,
-            Err(_) => {
-                return AgentHealth {
-                    alias: alias.to_string(),
-                    backend: agent_config.backend.clone(),
-                    status: HealthStatus::Unhealthy,
-                    latency_ms: None,
-                    state: "idle".to_string(),
-                    detail: Some(format!(
-                        "backend '{}' not registered",
-                        agent_config.backend
-                    )),
-                };
-            }
-        };
-
-        // Build an Agent model for the ping call
-        let agent = Agent {
-            alias: agent_config.alias.clone(),
-            identity: agent_config.identity.clone(),
-            backend: agent_config.backend.clone(),
-            model: agent_config.model.clone(),
-            prompt: agent_config.prompt.clone(),
-            prompt_file: agent_config.prompt_file.clone(),
-            timeout_secs: agent_config.timeout_secs,
-            backend_args: agent_config.backend_args.clone(),
-            env: agent_config.env.clone(),
-        };
-
-        let ping_result = backend.ping(&agent, ping_timeout).await;
-
-        AgentHealth {
-            alias: alias.to_string(),
-            backend: agent_config.backend.clone(),
-            status: if ping_result.alive {
-                HealthStatus::Healthy
-            } else {
-                HealthStatus::Unhealthy
-            },
-            latency_ms: Some(ping_result.latency_ms),
-            state: "idle".to_string(),
-            detail: ping_result.detail,
-        }
-    }
-
-    pub(crate) async fn tasks_impl(
-        &self,
-        params: TasksParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        let limit = params.limit.unwrap_or(20) as i64;
-
-        // Query the apalis Jobs table directly for trigger execution records
-        let rows = match self.query_trigger_tasks(
-            params.alias.as_deref(),
-            params.batch_id.as_deref(),
-            limit,
-        ).await {
-            Ok(r) => r,
-            Err(e) => return Ok(err_text(e)),
-        };
-
-        Ok(json_text(&rows))
-    }
-
-    async fn query_trigger_tasks(
-        &self,
-        alias: Option<&str>,
-        batch_id: Option<&str>,
-        limit: i64,
-    ) -> Result<Vec<serde_json::Value>, sqlx::Error> {
-        // Build query with optional filters
-        // Jobs table: job (BLOB), id, job_type, status, attempts, max_attempts, run_at, last_result, lock_at, lock_by, done_at, priority, metadata
-        // The `job` column contains JSON-encoded TriggerJob bytes
-        let mut sql = String::from(
-            "SELECT id, job_type, status, attempts, run_at, done_at, last_result, job
-             FROM Jobs WHERE job_type = ?",
-        );
-        // We'll filter by alias/batch_id via JSON extraction from the job column
-        sql.push_str(" ORDER BY run_at DESC LIMIT ?");
-
-        let rows: Vec<(String, String, String, i32, i64, Option<i64>, Option<String>, Vec<u8>)> =
-            sqlx::query_as(&sql)
-                .bind(crate::worker::trigger::TRIGGER_QUEUE)
-                .bind(limit)
-                .fetch_all(self.store.pool())
-                .await?;
-
-        let mut results = Vec::new();
-        for (id, job_type, status, attempts, run_at, done_at, last_result, job_bytes) in rows {
-            // Try to parse the TriggerJob from bytes
-            let job: Option<crate::worker::TriggerJob> =
-                serde_json::from_slice(&job_bytes).ok();
-
-            // Apply alias/batch_id filters on the parsed job
-            if let Some(filter_alias) = alias {
-                if let Some(ref j) = job {
-                    if j.agent_alias != filter_alias {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-            if let Some(filter_batch) = batch_id {
-                if let Some(ref j) = job {
-                    if j.batch_id.as_deref() != Some(filter_batch) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-            }
-
-            let mut val = serde_json::json!({
-                "job_id": id,
-                "queue": job_type,
-                "status": status,
-                "attempts": attempts,
-                "run_at": run_at,
+            agent_health.push(AgentHealth {
+                alias: agent_cfg.alias.clone(),
+                backend: agent_cfg.backend.clone(),
+                ping_alive: ping.alive,
+                ping_latency_ms: ping.latency_ms,
+                ping_detail: ping.detail,
             });
-            if let Some(da) = done_at {
-                val["done_at"] = serde_json::Value::Number(da.into());
-            }
-            if let Some(ref err) = last_result {
-                val["last_result"] = serde_json::Value::String(err.clone());
-            }
-            if let Some(ref j) = job {
-                val["thread_id"] = serde_json::Value::String(j.thread_id.clone());
-                val["agent_alias"] = serde_json::Value::String(j.agent_alias.clone());
-                val["from_alias"] = serde_json::Value::String(j.from_alias.clone());
-                val["intent"] = serde_json::Value::String(j.intent.clone());
-                if let Some(ref b) = j.batch_id {
-                    val["batch_id"] = serde_json::Value::String(b.clone());
-                }
-            }
-            results.push(val);
         }
 
-        Ok(results)
+        Ok(json_text(&HealthReport {
+            worker_heartbeat: heartbeat,
+            queue_depth,
+            agents: agent_health,
+        }))
+    }
+
+    // ── orch_diagnose ────────────────────────────────────────────────────
+
+    pub(crate) async fn diagnose_impl(
+        &self,
+        params: DiagnoseParams,
+    ) -> Result<CallToolResult, rmcp::Error> {
+        let thread = match self.store.get_thread(&params.thread_id).await {
+            Ok(Some(t)) => t,
+            Ok(None) => {
+                return Ok(err_text(format!(
+                    "thread not found: {}",
+                    params.thread_id
+                )));
+            }
+            Err(e) => return Ok(err_text(format!("lookup failed: {}", e))),
+        };
+
+        let messages = self
+            .store
+            .get_thread_messages(&params.thread_id)
+            .await
+            .unwrap_or_default();
+
+        let executions = self
+            .store
+            .get_thread_executions(&params.thread_id)
+            .await
+            .unwrap_or_default();
+
+        let latest_exec = executions.last();
+
+        // Determine blockers and suggestions
+        let mut blockers = Vec::new();
+        let mut suggestions = Vec::new();
+
+        let status: Result<ThreadStatus, _> = thread.status.parse();
+
+        if let Ok(ref s) = status {
+            match s {
+                ThreadStatus::Active => {
+                    if let Some(exec) = latest_exec {
+                        match exec.status.as_str() {
+                            "queued" => {
+                                // Check worker heartbeat
+                                let heartbeat = self.store.latest_heartbeat().await.ok().flatten();
+                                if heartbeat.is_none() {
+                                    blockers.push(
+                                        "execution is queued but no worker heartbeat found"
+                                            .to_string(),
+                                    );
+                                    suggestions
+                                        .push("start the worker process".to_string());
+                                }
+                            }
+                            "executing" | "picked_up" => {
+                                suggestions.push("execution in progress — wait for completion".to_string());
+                            }
+                            "failed" | "crashed" | "timed_out" => {
+                                blockers.push(format!(
+                                    "last execution {}: {}",
+                                    exec.status,
+                                    exec.error_detail.as_deref().unwrap_or("(no detail)")
+                                ));
+                                suggestions.push("review error and re-dispatch or abandon".to_string());
+                            }
+                            _ => {}
+                        }
+                    } else if messages.is_empty() {
+                        blockers.push("thread is Active but has no messages or executions".to_string());
+                        suggestions.push("dispatch a message to start work".to_string());
+                    }
+                }
+                ThreadStatus::Completed => {
+                    suggestions.push("thread is completed — no action needed".to_string());
+                }
+                ThreadStatus::Abandoned => {
+                    suggestions.push("thread was abandoned — reopen if needed".to_string());
+                }
+                ThreadStatus::Failed => {
+                    blockers.push("thread is in failed state".to_string());
+                    suggestions.push("review last execution error, then reopen and re-dispatch".to_string());
+                }
+                ThreadStatus::ReviewPending => {
+                    suggestions.push("waiting for review — approve or reject".to_string());
+                }
+            }
+        }
+
+        #[derive(Serialize)]
+        struct Diagnosis {
+            thread_id: String,
+            thread_status: String,
+            message_count: usize,
+            execution_count: usize,
+            latest_execution_status: Option<String>,
+            blockers: Vec<String>,
+            suggestions: Vec<String>,
+        }
+
+        Ok(json_text(&Diagnosis {
+            thread_id: params.thread_id,
+            thread_status: thread.status,
+            message_count: messages.len(),
+            execution_count: executions.len(),
+            latest_execution_status: latest_exec.map(|e| e.status.clone()),
+            blockers,
+            suggestions,
+        }))
     }
 }
