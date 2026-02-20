@@ -39,6 +39,15 @@ enum Commands {
         #[arg(long)]
         config: PathBuf,
     },
+    /// Launch the TUI dashboard (reads SQLite directly, no MCP required)
+    Dashboard {
+        /// Path to config YAML
+        #[arg(long)]
+        config: PathBuf,
+        /// How often (in seconds) to re-query SQLite for fresh metrics
+        #[arg(long, default_value = "2")]
+        poll_interval: u64,
+    },
 }
 
 #[tokio::main]
@@ -54,6 +63,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // MCP server uses stdio — don't pollute stdout with tracing
             init_tracing_stderr();
             run_mcp_server(config).await?;
+        }
+        Commands::Dashboard {
+            config,
+            poll_interval,
+        } => {
+            // TUI dashboard — no tracing to stdout (would corrupt the TUI)
+            run_dashboard(config, poll_interval).await?;
         }
     }
 
@@ -198,9 +214,45 @@ async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard mode
+// ---------------------------------------------------------------------------
+
+async fn run_dashboard(
+    config_path: PathBuf,
+    poll_interval: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let config = aster_orch::config::load_config(&config_path)?;
+    let db_path = resolve_db_path(&config_path, &config);
+    let pool = connect_db(&db_path, &config).await?;
+    let store = aster_orch::store::Store::new(pool);
+
+    // Capture the runtime handle before entering the blocking thread.
+    // The TUI uses it to drive async store queries via Handle::block_on.
+    let handle = tokio::runtime::Handle::current();
+
+    // Resolve config path for display in the Settings tab.
+    let resolved_config_path = resolve_config_path(&config_path);
+
+    // The TUI event loop is synchronous (crossterm blocking I/O).
+    // Run it in a dedicated blocking thread so the tokio runtime stays healthy.
+    tokio::task::spawn_blocking(move || {
+        aster_orch::dashboard::app::run_tui(
+            store,
+            config,
+            resolved_config_path,
+            handle,
+            poll_interval,
+        )
+    })
+    .await??;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Cli;
+    use super::{Cli, Commands};
     use clap::Parser;
 
     #[test]
@@ -213,5 +265,48 @@ mod tests {
     fn test_mcp_server_requires_config_flag() {
         let parsed = Cli::try_parse_from(["aster-orch", "mcp-server"]);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_dashboard_requires_config_flag() {
+        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_dashboard_parses_with_config_flag() {
+        let parsed = Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]);
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_dashboard_parses_with_poll_interval() {
+        let parsed = Cli::try_parse_from([
+            "aster-orch",
+            "dashboard",
+            "--config",
+            "foo.yaml",
+            "--poll-interval",
+            "5",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Dashboard { poll_interval, .. } = cli.command {
+                assert_eq!(poll_interval, 5);
+            } else {
+                panic!("expected Dashboard command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_dashboard_poll_interval_default() {
+        let parsed =
+            Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]).unwrap();
+        if let Commands::Dashboard { poll_interval, .. } = parsed.command {
+            assert_eq!(poll_interval, 2);
+        } else {
+            panic!("expected Dashboard command");
+        }
     }
 }

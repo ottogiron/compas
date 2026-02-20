@@ -38,10 +38,7 @@ impl From<ThreadStatusView> for StatusEntry {
 }
 
 impl OrchestratorMcpServer {
-    pub async fn status_impl(
-        &self,
-        params: StatusParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn status_impl(&self, params: StatusParams) -> Result<CallToolResult, rmcp::Error> {
         match self
             .store
             .status_view(
@@ -76,7 +73,12 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("executions query failed: {}", e))),
         };
 
-        let thread = self.store.get_thread(&params.thread_id).await.ok().flatten();
+        let thread = self
+            .store
+            .get_thread(&params.thread_id)
+            .await
+            .ok()
+            .flatten();
 
         #[derive(Serialize)]
         struct TranscriptMessage {
@@ -148,10 +150,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_read ────────────────────────────────────────────────────────
 
-    pub async fn read_impl(
-        &self,
-        params: ReadParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn read_impl(&self, params: ReadParams) -> Result<CallToolResult, rmcp::Error> {
         let id = match store::parse_message_ref(&params.reference) {
             Ok(id) => id,
             Err(e) => return Ok(err_text(e)),
@@ -181,10 +180,7 @@ impl OrchestratorMcpServer {
                     created_at: msg.created_at,
                 }))
             }
-            Ok(None) => Ok(err_text(format!(
-                "message not found: {}",
-                params.reference
-            ))),
+            Ok(None) => Ok(err_text(format!("message not found: {}", params.reference))),
             Err(e) => Ok(err_text(format!("read failed: {}", e))),
         }
     }
@@ -222,17 +218,11 @@ impl OrchestratorMcpServer {
 
     // ── orch_poll ────────────────────────────────────────────────────────
 
-    pub async fn poll_impl(
-        &self,
-        params: PollParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn poll_impl(&self, params: PollParams) -> Result<CallToolResult, rmcp::Error> {
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
-                return Ok(err_text(format!(
-                    "thread not found: {}",
-                    params.thread_id
-                )));
+                return Ok(err_text(format!("thread not found: {}", params.thread_id)));
             }
             Err(e) => return Ok(err_text(format!("poll failed: {}", e))),
         };
@@ -246,7 +236,11 @@ impl OrchestratorMcpServer {
             None => 0,
         };
 
-        let messages = match self.store.get_messages_since(&params.thread_id, since_id).await {
+        let messages = match self
+            .store
+            .get_messages_since(&params.thread_id, since_id)
+            .await
+        {
             Ok(m) => m,
             Err(e) => return Ok(err_text(format!("poll messages failed: {}", e))),
         };
@@ -349,15 +343,17 @@ impl OrchestratorMcpServer {
 
     // ── orch_tasks ───────────────────────────────────────────────────────
 
-    pub async fn tasks_impl(
-        &self,
-        params: TasksParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::Error> {
         // Query executions — we use status_view as a convenient join
         let limit = params.limit.unwrap_or(20) as i64;
         let views = match self
             .store
-            .status_view(None, params.alias.as_deref(), params.batch_id.as_deref(), limit)
+            .status_view(
+                None,
+                params.alias.as_deref(),
+                params.batch_id.as_deref(),
+                limit,
+            )
             .await
         {
             Ok(v) => v,

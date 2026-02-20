@@ -191,7 +191,9 @@ mod store_tests {
             .await
             .unwrap();
         assert_eq!(batch_a.len(), 2);
-        assert!(batch_a.iter().all(|t| t.batch_id.as_deref() == Some("batch-A")));
+        assert!(batch_a
+            .iter()
+            .all(|t| t.batch_id.as_deref() == Some("batch-A")));
     }
 
     #[tokio::test]
@@ -204,10 +206,7 @@ mod store_tests {
             .await
             .unwrap();
 
-        let active = store
-            .list_threads(None, Some("Active"), 100)
-            .await
-            .unwrap();
+        let active = store.list_threads(None, Some("Active"), 100).await.unwrap();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].thread_id, "t-1");
 
@@ -244,7 +243,14 @@ mod store_tests {
             .await
             .unwrap();
         let _id3 = store
-            .insert_message("t-1", "focused", "operator", "review-request", "msg 3", None)
+            .insert_message(
+                "t-1",
+                "focused",
+                "operator",
+                "review-request",
+                "msg 3",
+                None,
+            )
             .await
             .unwrap();
 
@@ -307,7 +313,13 @@ mod store_tests {
         store.mark_execution_executing(&exec_id).await.unwrap();
 
         store
-            .fail_execution(&exec_id, "timeout reached", Some(124), 60000, ExecutionStatus::TimedOut)
+            .fail_execution(
+                &exec_id,
+                "timeout reached",
+                Some(124),
+                60000,
+                ExecutionStatus::TimedOut,
+            )
             .await
             .unwrap();
 
@@ -328,7 +340,13 @@ mod store_tests {
         store.mark_execution_executing(&exec_id).await.unwrap();
 
         store
-            .fail_execution(&exec_id, "non-zero exit", Some(1), 5000, ExecutionStatus::Failed)
+            .fail_execution(
+                &exec_id,
+                "non-zero exit",
+                Some(1),
+                5000,
+                ExecutionStatus::Failed,
+            )
             .await
             .unwrap();
 
@@ -394,7 +412,14 @@ mod store_tests {
         let store = test_store().await;
         store.ensure_thread("t-1", Some("batch-1")).await.unwrap();
         store
-            .insert_message("t-1", "operator", "focused", "dispatch", "work", Some("batch-1"))
+            .insert_message(
+                "t-1",
+                "operator",
+                "focused",
+                "dispatch",
+                "work",
+                Some("batch-1"),
+            )
             .await
             .unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
@@ -754,12 +779,7 @@ mod dispatch_tests {
         assert_eq!(json["thread_id"], "t-batch");
 
         // Verify batch was set on the thread
-        let thread = server
-            .store
-            .get_thread("t-batch")
-            .await
-            .unwrap()
-            .unwrap();
+        let thread = server.store.get_thread("t-batch").await.unwrap().unwrap();
         assert_eq!(thread.batch_id.as_deref(), Some("TICKET-123"));
     }
 
@@ -922,11 +942,7 @@ mod lifecycle_tests {
         assert_eq!(status, "Active");
 
         // Should have a changes-requested message
-        let msgs = server
-            .store
-            .get_thread_messages("t-reject")
-            .await
-            .unwrap();
+        let msgs = server.store.get_thread_messages("t-reject").await.unwrap();
         assert!(msgs.iter().any(|m| m.intent == "changes-requested"));
     }
 
@@ -1349,7 +1365,14 @@ mod query_tests {
         // Add a reply
         server
             .store
-            .insert_message("t-q-1", "focused", "operator", "review-request", "Done", None)
+            .insert_message(
+                "t-q-1",
+                "focused",
+                "operator",
+                "review-request",
+                "Done",
+                None,
+            )
             .await
             .unwrap();
 
@@ -1372,7 +1395,14 @@ mod query_tests {
         let server = test_server().await;
         let id = server
             .store
-            .insert_message("t-read", "operator", "focused", "dispatch", "Read this", None)
+            .insert_message(
+                "t-read",
+                "operator",
+                "focused",
+                "dispatch",
+                "Read this",
+                None,
+            )
             .await
             .unwrap();
 
@@ -1620,7 +1650,14 @@ mod poll_tests {
             .unwrap();
         server
             .store
-            .insert_message("t-poll-f", "focused", "op", "status-update", "progress", None)
+            .insert_message(
+                "t-poll-f",
+                "focused",
+                "op",
+                "status-update",
+                "progress",
+                None,
+            )
             .await
             .unwrap();
         server
@@ -1705,7 +1742,14 @@ mod wait_tests {
         // Pre-insert a non-trigger message
         server
             .store
-            .insert_message("t-wait-1", "focused", "operator", "review-request", "Done", None)
+            .insert_message(
+                "t-wait-1",
+                "focused",
+                "operator",
+                "review-request",
+                "Done",
+                None,
+            )
             .await
             .unwrap();
 
@@ -1765,7 +1809,14 @@ mod wait_tests {
             .unwrap();
         server
             .store
-            .insert_message("t-wait-i", "focused", "op", "status-update", "progress", None)
+            .insert_message(
+                "t-wait-i",
+                "focused",
+                "op",
+                "status-update",
+                "progress",
+                None,
+            )
             .await
             .unwrap();
         server
@@ -1931,7 +1982,10 @@ mod session_health_tests {
         let agents = json.as_array().unwrap();
         assert_eq!(agents.len(), 2);
 
-        let aliases: Vec<&str> = agents.iter().map(|a| a["alias"].as_str().unwrap()).collect();
+        let aliases: Vec<&str> = agents
+            .iter()
+            .map(|a| a["alias"].as_str().unwrap())
+            .collect();
         assert!(aliases.contains(&"focused"));
         assert!(aliases.contains(&"spark"));
     }
@@ -2080,11 +2134,7 @@ mod diagnose_tests {
             .unwrap();
 
         // Write heartbeat
-        server
-            .store
-            .write_heartbeat("w-1", "0.2.0")
-            .await
-            .unwrap();
+        server.store.write_heartbeat("w-1", "0.2.0").await.unwrap();
 
         let result = server
             .diagnose_impl(DiagnoseParams {
@@ -2168,7 +2218,13 @@ mod diagnose_tests {
             .unwrap();
         server
             .store
-            .fail_execution(&exec_id, "process crashed", Some(1), 5000, ExecutionStatus::Failed)
+            .fail_execution(
+                &exec_id,
+                "process crashed",
+                Some(1),
+                5000,
+                ExecutionStatus::Failed,
+            )
             .await
             .unwrap();
 

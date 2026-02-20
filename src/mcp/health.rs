@@ -11,10 +11,7 @@ use crate::store::ThreadStatus;
 impl OrchestratorMcpServer {
     // ── orch_health ──────────────────────────────────────────────────────
 
-    pub async fn health_impl(
-        &self,
-        params: HealthParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn health_impl(&self, params: HealthParams) -> Result<CallToolResult, rmcp::Error> {
         #[derive(Serialize)]
         struct AgentHealth {
             alias: String,
@@ -113,10 +110,7 @@ impl OrchestratorMcpServer {
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
-                return Ok(err_text(format!(
-                    "thread not found: {}",
-                    params.thread_id
-                )));
+                return Ok(err_text(format!("thread not found: {}", params.thread_id)));
             }
             Err(e) => return Ok(err_text(format!("lookup failed: {}", e))),
         };
@@ -154,12 +148,13 @@ impl OrchestratorMcpServer {
                                         "execution is queued but no worker heartbeat found"
                                             .to_string(),
                                     );
-                                    suggestions
-                                        .push("start the worker process".to_string());
+                                    suggestions.push("start the worker process".to_string());
                                 }
                             }
                             "executing" | "picked_up" => {
-                                suggestions.push("execution in progress — wait for completion".to_string());
+                                suggestions.push(
+                                    "execution in progress — wait for completion".to_string(),
+                                );
                             }
                             "failed" | "crashed" | "timed_out" => {
                                 blockers.push(format!(
@@ -167,12 +162,14 @@ impl OrchestratorMcpServer {
                                     exec.status,
                                     exec.error_detail.as_deref().unwrap_or("(no detail)")
                                 ));
-                                suggestions.push("review error and re-dispatch or abandon".to_string());
+                                suggestions
+                                    .push("review error and re-dispatch or abandon".to_string());
                             }
                             _ => {}
                         }
                     } else if messages.is_empty() {
-                        blockers.push("thread is Active but has no messages or executions".to_string());
+                        blockers
+                            .push("thread is Active but has no messages or executions".to_string());
                         suggestions.push("dispatch a message to start work".to_string());
                     }
                 }
@@ -184,7 +181,9 @@ impl OrchestratorMcpServer {
                 }
                 ThreadStatus::Failed => {
                     blockers.push("thread is in failed state".to_string());
-                    suggestions.push("review last execution error, then reopen and re-dispatch".to_string());
+                    suggestions.push(
+                        "review last execution error, then reopen and re-dispatch".to_string(),
+                    );
                 }
                 ThreadStatus::ReviewPending => {
                     suggestions.push("waiting for review — approve or reject".to_string());

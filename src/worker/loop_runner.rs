@@ -171,22 +171,16 @@ impl WorkerRunner {
 /// Insert a reply message from the agent after trigger completion.
 async fn handle_trigger_output(store: &Store, output: &TriggerOutput) {
     let reply_intent = if output.success {
-        output
-            .parsed_intent
-            .as_deref()
-            .unwrap_or("status-update")
+        output.parsed_intent.as_deref().unwrap_or("status-update")
     } else {
         "error"
     };
 
-    let reply_body = output
-        .output
-        .as_deref()
-        .unwrap_or(if output.success {
-            "(completed with no output)"
-        } else {
-            "(failed with no output)"
-        });
+    let reply_body = output.output.as_deref().unwrap_or(if output.success {
+        "(completed with no output)"
+    } else {
+        "(failed with no output)"
+    });
 
     if let Err(e) = store
         .insert_message(

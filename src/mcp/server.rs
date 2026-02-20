@@ -44,7 +44,11 @@ pub fn err_text(msg: impl std::fmt::Display) -> CallToolResult {
 }
 
 impl OrchestratorMcpServer {
-    pub fn new(config: OrchestratorConfig, store: Store, backend_registry: BackendRegistry) -> Self {
+    pub fn new(
+        config: OrchestratorConfig,
+        store: Store,
+        backend_registry: BackendRegistry,
+    ) -> Self {
         Self {
             config: Arc::new(config),
             store,

@@ -310,10 +310,7 @@ impl Store {
         Ok(())
     }
 
-    pub async fn get_thread_status(
-        &self,
-        thread_id: &str,
-    ) -> Result<Option<String>, sqlx::Error> {
+    pub async fn get_thread_status(&self, thread_id: &str) -> Result<Option<String>, sqlx::Error> {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT status FROM threads WHERE thread_id = ?")
                 .bind(thread_id)
@@ -357,8 +354,7 @@ impl Store {
         }
         sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
-        let mut query =
-            sqlx::query_as::<_, (String, Option<String>, String, i64, i64)>(&sql);
+        let mut query = sqlx::query_as::<_, (String, Option<String>, String, i64, i64)>(&sql);
         if let Some(b) = batch_id {
             query = query.bind(b);
         }
@@ -413,14 +409,22 @@ impl Store {
         &self,
         thread_id: &str,
     ) -> Result<Vec<MessageRow>, sqlx::Error> {
-        let rows: Vec<(i64, String, String, String, String, String, Option<String>, i64)> =
-            sqlx::query_as(
-                "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+        let rows: Vec<(
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
                  FROM messages WHERE thread_id = ? ORDER BY id ASC",
-            )
-            .bind(thread_id)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(thread_id)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.into_iter().map(row_to_message).collect())
     }
 
@@ -430,27 +434,43 @@ impl Store {
         thread_id: &str,
         after_id: i64,
     ) -> Result<Vec<MessageRow>, sqlx::Error> {
-        let rows: Vec<(i64, String, String, String, String, String, Option<String>, i64)> =
-            sqlx::query_as(
-                "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+        let rows: Vec<(
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
                  FROM messages WHERE thread_id = ? AND id > ? ORDER BY id ASC",
-            )
-            .bind(thread_id)
-            .bind(after_id)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(thread_id)
+        .bind(after_id)
+        .fetch_all(&self.pool)
+        .await?;
         Ok(rows.into_iter().map(row_to_message).collect())
     }
 
     pub async fn get_message(&self, id: i64) -> Result<Option<MessageRow>, sqlx::Error> {
-        let row: Option<(i64, String, String, String, String, String, Option<String>, i64)> =
-            sqlx::query_as(
-                "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+        let row: Option<(
+            i64,
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
                  FROM messages WHERE id = ?",
-            )
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(row_to_message))
     }
 
@@ -521,9 +541,19 @@ impl Store {
         .await?;
 
         let row: Option<(
-            String, String, String, String, i64,
-            Option<i64>, Option<i64>, Option<i64>, Option<i64>,
-            Option<i32>, Option<String>, Option<String>, Option<String>,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT id, thread_id, agent_alias, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
@@ -643,9 +673,19 @@ impl Store {
         thread_id: &str,
     ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
         let rows: Vec<(
-            String, String, String, String, i64,
-            Option<i64>, Option<i64>, Option<i64>, Option<i64>,
-            Option<i32>, Option<String>, Option<String>, Option<String>,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT id, thread_id, agent_alias, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
@@ -664,9 +704,19 @@ impl Store {
         thread_id: &str,
     ) -> Result<Option<ExecutionRow>, sqlx::Error> {
         let row: Option<(
-            String, String, String, String, i64,
-            Option<i64>, Option<i64>, Option<i64>, Option<i64>,
-            Option<i32>, Option<String>, Option<String>, Option<String>,
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT id, thread_id, agent_alias, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
@@ -681,11 +731,71 @@ impl Store {
 
     /// Get queue depth (number of queued executions).
     pub async fn queue_depth(&self) -> Result<i64, sqlx::Error> {
-        let row: (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM executions WHERE status = 'queued'")
-                .fetch_one(&self.pool)
-                .await?;
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM executions WHERE status = 'queued'")
+            .fetch_one(&self.pool)
+            .await?;
         Ok(row.0)
+    }
+
+    /// Get the most recent executions for a specific agent, newest first.
+    pub async fn recent_agent_executions(
+        &self,
+        agent_alias: &str,
+        limit: i64,
+    ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, agent_alias, status, queued_at,
+                    picked_up_at, started_at, finished_at, duration_ms,
+                    exit_code, output_preview, error_detail, parsed_intent
+             FROM executions WHERE agent_alias = ? ORDER BY queued_at DESC LIMIT ?",
+        )
+        .bind(agent_alias)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_execution).collect())
+    }
+
+    /// Get the most recent executions across all agents, newest first.
+    pub async fn recent_executions(&self, limit: i64) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, agent_alias, status, queued_at,
+                    picked_up_at, started_at, finished_at, duration_ms,
+                    exit_code, output_preview, error_detail, parsed_intent
+             FROM executions ORDER BY queued_at DESC LIMIT ?",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(row_to_execution).collect())
     }
 
     /// Count active executions per agent.
@@ -731,10 +841,20 @@ impl Store {
         sql.push_str(" ORDER BY t.updated_at DESC LIMIT ?");
 
         type Row = (
-            String, Option<String>, String, i64, i64,
-            Option<String>, Option<String>, Option<String>, Option<i64>,
-            Option<i64>, Option<i64>, Option<i64>,
-            Option<String>, Option<String>,
+            String,
+            Option<String>,
+            String,
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<String>,
+            Option<String>,
         );
         let mut query = sqlx::query_as::<_, Row>(&sql);
         if let Some(t) = thread_id {
@@ -836,7 +956,16 @@ pub struct ThreadStatusView {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn row_to_message(
-    r: (i64, String, String, String, String, String, Option<String>, i64),
+    r: (
+        i64,
+        String,
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        i64,
+    ),
 ) -> MessageRow {
     MessageRow {
         id: r.0,
@@ -852,9 +981,19 @@ fn row_to_message(
 
 fn row_to_execution(
     r: (
-        String, String, String, String, i64,
-        Option<i64>, Option<i64>, Option<i64>, Option<i64>,
-        Option<i32>, Option<String>, Option<String>, Option<String>,
+        String,
+        String,
+        String,
+        String,
+        i64,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i32>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
     ),
 ) -> ExecutionRow {
     ExecutionRow {
@@ -956,7 +1095,13 @@ mod tests {
         store.mark_execution_executing(&exec_id).await.unwrap();
 
         store
-            .complete_execution(&exec_id, Some(0), Some("output"), Some("review-request"), 5000)
+            .complete_execution(
+                &exec_id,
+                Some(0),
+                Some("output"),
+                Some("review-request"),
+                5000,
+            )
             .await
             .unwrap();
 

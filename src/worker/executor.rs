@@ -118,21 +118,23 @@ pub async fn execute_trigger(
     let instruction = instruction.to_string();
     let start = Instant::now();
 
-    let trigger_result: Result<TriggerResult, String> =
-        tokio::task::spawn_blocking(move || {
-            // We need a runtime handle to call async methods from blocking context.
-            // Use Handle::current() which was captured before spawn_blocking.
-            let rt = tokio::runtime::Handle::current();
-            rt.block_on(async {
-                let session = backend.start_session(&agent).await.map_err(|e| e.to_string())?;
-                backend
-                    .trigger(&agent, &session, Some(&instruction))
-                    .await
-                    .map_err(|e| e.to_string())
-            })
+    let trigger_result: Result<TriggerResult, String> = tokio::task::spawn_blocking(move || {
+        // We need a runtime handle to call async methods from blocking context.
+        // Use Handle::current() which was captured before spawn_blocking.
+        let rt = tokio::runtime::Handle::current();
+        rt.block_on(async {
+            let session = backend
+                .start_session(&agent)
+                .await
+                .map_err(|e| e.to_string())?;
+            backend
+                .trigger(&agent, &session, Some(&instruction))
+                .await
+                .map_err(|e| e.to_string())
         })
-        .await
-        .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)));
+    })
+    .await
+    .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)));
 
     let duration_ms = start.elapsed().as_millis() as i64;
 

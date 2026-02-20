@@ -11,10 +11,7 @@ use crate::store::ThreadStatus;
 impl OrchestratorMcpServer {
     // ── orch_approve ─────────────────────────────────────────────────────
 
-    pub async fn approve_impl(
-        &self,
-        params: ApproveParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn approve_impl(&self, params: ApproveParams) -> Result<CallToolResult, rmcp::Error> {
         // Verify thread exists
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
@@ -57,10 +54,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_reject ──────────────────────────────────────────────────────
 
-    pub async fn reject_impl(
-        &self,
-        params: RejectParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn reject_impl(&self, params: RejectParams) -> Result<CallToolResult, rmcp::Error> {
         // Verify thread exists
         if let Ok(None) | Err(_) = self.store.get_thread(&params.thread_id).await {
             return Ok(err_text(format!("thread not found: {}", params.thread_id)));
@@ -101,7 +95,11 @@ impl OrchestratorMcpServer {
             .unwrap_or(false);
 
         let execution_id = if target_is_worker {
-            match self.store.insert_execution(&params.thread_id, &params.to).await {
+            match self
+                .store
+                .insert_execution(&params.thread_id, &params.to)
+                .await
+            {
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::error!(error = %e, "failed to queue re-trigger on reject");
@@ -178,10 +176,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_abandon ─────────────────────────────────────────────────────
 
-    pub async fn abandon_impl(
-        &self,
-        params: AbandonParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn abandon_impl(&self, params: AbandonParams) -> Result<CallToolResult, rmcp::Error> {
         // Verify thread exists
         match self.store.get_thread(&params.thread_id).await {
             Ok(Some(_)) => {}
@@ -221,10 +216,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_reopen ──────────────────────────────────────────────────────
 
-    pub async fn reopen_impl(
-        &self,
-        params: ReopenParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn reopen_impl(&self, params: ReopenParams) -> Result<CallToolResult, rmcp::Error> {
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
             Ok(None) => return Ok(err_text(format!("thread not found: {}", params.thread_id))),
