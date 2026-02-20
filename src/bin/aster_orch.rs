@@ -10,10 +10,12 @@ use aster_orch::backend::gemini::GeminiBackend;
 use aster_orch::backend::opencode::OpenCodeBackend;
 use aster_orch::backend::registry::BackendRegistry;
 use aster_orch::mcp::server::OrchestratorMcpServer;
+use aster_orch::wait::{self, WaitOutcome, WaitRequest};
 use aster_orch::worker::WorkerRunner;
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -48,32 +50,76 @@ enum Commands {
         #[arg(long, default_value = "2")]
         poll_interval: u64,
     },
+    /// Wait for a message on a thread (reads SQLite directly, no MCP required).
+    ///
+    /// Exits 0 when a matching message is found, 1 on timeout, 2 on error.
+    /// Output is key=value lines on stdout for easy bash parsing.
+    Wait {
+        /// Path to config YAML
+        #[arg(long)]
+        config: PathBuf,
+        /// Thread ID to wait on
+        #[arg(long)]
+        thread_id: String,
+        /// Wait for a specific intent (e.g. "review-request", "approved")
+        #[arg(long)]
+        intent: Option<String>,
+        /// Message cursor — only consider messages newer than this (db:<id> or numeric)
+        #[arg(long)]
+        since: Option<String>,
+        /// Only consider messages created after this command starts
+        #[arg(long)]
+        strict_new: bool,
+        /// Timeout in seconds (default 120)
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Worker { config } => {
             init_tracing();
-            run_worker(config).await?;
+            if let Err(e) = run_worker(config).await {
+                eprintln!("error: {}", e);
+                return ExitCode::from(2);
+            }
         }
         Commands::McpServer { config } => {
             // MCP server uses stdio — don't pollute stdout with tracing
             init_tracing_stderr();
-            run_mcp_server(config).await?;
+            if let Err(e) = run_mcp_server(config).await {
+                eprintln!("error: {}", e);
+                return ExitCode::from(2);
+            }
         }
         Commands::Dashboard {
             config,
             poll_interval,
         } => {
             // TUI dashboard — no tracing to stdout (would corrupt the TUI)
-            run_dashboard(config, poll_interval).await?;
+            if let Err(e) = run_dashboard(config, poll_interval).await {
+                eprintln!("error: {}", e);
+                return ExitCode::from(2);
+            }
+        }
+        Commands::Wait {
+            config,
+            thread_id,
+            intent,
+            since,
+            strict_new,
+            timeout,
+        } => {
+            // Wait outputs key=value to stdout — no tracing there
+            return run_wait(config, thread_id, intent, since, strict_new, timeout).await;
         }
     }
 
-    Ok(())
+    ExitCode::SUCCESS
 }
 
 fn init_tracing() {
@@ -250,6 +296,82 @@ async fn run_dashboard(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Wait mode
+// ---------------------------------------------------------------------------
+
+async fn run_wait(
+    config_path: PathBuf,
+    thread_id: String,
+    intent: Option<String>,
+    since: Option<String>,
+    strict_new: bool,
+    timeout: u64,
+) -> ExitCode {
+    let config = match aster_orch::config::load_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: failed to load config: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let db_path = resolve_db_path(&config_path, &config);
+    let pool = match connect_db(&db_path, &config).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: failed to connect to database: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let store = aster_orch::store::Store::new(pool);
+
+    let req = WaitRequest {
+        thread_id,
+        intent,
+        since_reference: since,
+        strict_new,
+        timeout: Duration::from_secs(timeout),
+        trigger_intents: config.orchestration.trigger_intents.clone(),
+    };
+
+    match wait::wait_for_message(&store, &req).await {
+        Ok(WaitOutcome::Found(msg)) => {
+            println!("found=true");
+            println!("thread_id={}", msg.thread_id);
+            println!("message_id={}", msg.id);
+            println!("ref=db:{}", msg.id);
+            println!("from={}", msg.from_alias);
+            println!("to={}", msg.to_alias);
+            println!("intent={}", msg.intent);
+            if let Some(batch) = &msg.batch_id {
+                println!("batch={}", batch);
+            }
+            println!("created_at={}", msg.created_at);
+            // Body last — may be multiline. Delimited for easy parsing.
+            println!("---BODY---");
+            println!("{}", msg.body);
+            ExitCode::SUCCESS
+        }
+        Ok(WaitOutcome::Timeout {
+            thread_id,
+            timeout_secs,
+            intent_filter,
+        }) => {
+            println!("found=false");
+            println!("thread_id={}", thread_id);
+            println!("timeout_secs={}", timeout_secs);
+            if let Some(intent) = intent_filter {
+                println!("intent_filter={}", intent);
+            }
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Cli, Commands};
@@ -307,6 +429,77 @@ mod tests {
             assert_eq!(poll_interval, 2);
         } else {
             panic!("expected Dashboard command");
+        }
+    }
+
+    #[test]
+    fn test_wait_requires_config_and_thread_id() {
+        let parsed = Cli::try_parse_from(["aster-orch", "wait"]);
+        assert!(parsed.is_err());
+        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--config", "foo.yaml"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_wait_parses_minimal() {
+        let parsed = Cli::try_parse_from([
+            "aster-orch",
+            "wait",
+            "--config",
+            "foo.yaml",
+            "--thread-id",
+            "t-123",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Wait {
+                thread_id, timeout, ..
+            } = cli.command
+            {
+                assert_eq!(thread_id, "t-123");
+                assert_eq!(timeout, 120); // default
+            } else {
+                panic!("expected Wait command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_wait_parses_all_flags() {
+        let parsed = Cli::try_parse_from([
+            "aster-orch",
+            "wait",
+            "--config",
+            "foo.yaml",
+            "--thread-id",
+            "t-abc",
+            "--intent",
+            "review-request",
+            "--since",
+            "db:42",
+            "--strict-new",
+            "--timeout",
+            "300",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Wait {
+                thread_id,
+                intent,
+                since,
+                strict_new,
+                timeout,
+                ..
+            } = cli.command
+            {
+                assert_eq!(thread_id, "t-abc");
+                assert_eq!(intent, Some("review-request".to_string()));
+                assert_eq!(since, Some("db:42".to_string()));
+                assert!(strict_new);
+                assert_eq!(timeout, 300);
+            } else {
+                panic!("expected Wait command");
+            }
         }
     }
 }
