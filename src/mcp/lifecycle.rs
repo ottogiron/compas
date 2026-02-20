@@ -11,7 +11,7 @@ use crate::store::ThreadStatus;
 impl OrchestratorMcpServer {
     // ── orch_approve ─────────────────────────────────────────────────────
 
-    pub(crate) async fn approve_impl(
+    pub async fn approve_impl(
         &self,
         params: ApproveParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -57,7 +57,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_reject ──────────────────────────────────────────────────────
 
-    pub(crate) async fn reject_impl(
+    pub async fn reject_impl(
         &self,
         params: RejectParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -128,7 +128,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_complete ────────────────────────────────────────────────────
 
-    pub(crate) async fn complete_impl(
+    pub async fn complete_impl(
         &self,
         params: CompleteParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -178,7 +178,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_abandon ─────────────────────────────────────────────────────
 
-    pub(crate) async fn abandon_impl(
+    pub async fn abandon_impl(
         &self,
         params: AbandonParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -221,7 +221,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_reopen ──────────────────────────────────────────────────────
 
-    pub(crate) async fn reopen_impl(
+    pub async fn reopen_impl(
         &self,
         params: ReopenParams,
     ) -> Result<CallToolResult, rmcp::Error> {

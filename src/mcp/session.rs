@@ -8,7 +8,7 @@ use super::server::{json_text, OrchestratorMcpServer};
 impl OrchestratorMcpServer {
     // ── orch_session_info ────────────────────────────────────────────────
 
-    pub(crate) fn session_info_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+    pub fn session_info_impl(&self) -> Result<CallToolResult, rmcp::Error> {
         #[derive(Serialize)]
         struct SessionInfo {
             server: String,
@@ -27,7 +27,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_list_agents ─────────────────────────────────────────────────
 
-    pub(crate) fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+    pub fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::Error> {
         #[derive(Serialize)]
         struct AgentInfo {
             alias: String,

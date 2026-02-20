@@ -11,7 +11,7 @@ use crate::store::ThreadStatus;
 impl OrchestratorMcpServer {
     // ── orch_health ──────────────────────────────────────────────────────
 
-    pub(crate) async fn health_impl(
+    pub async fn health_impl(
         &self,
         params: HealthParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -106,7 +106,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_diagnose ────────────────────────────────────────────────────
 
-    pub(crate) async fn diagnose_impl(
+    pub async fn diagnose_impl(
         &self,
         params: DiagnoseParams,
     ) -> Result<CallToolResult, rmcp::Error> {

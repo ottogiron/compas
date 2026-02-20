@@ -22,24 +22,24 @@ pub use super::params::*;
 
 #[derive(Clone)]
 pub struct OrchestratorMcpServer {
-    pub(crate) config: Arc<OrchestratorConfig>,
-    pub(crate) store: Store,
+    pub config: Arc<OrchestratorConfig>,
+    pub store: Store,
     /// Backend registry — used by orch_health for backend pings.
-    pub(crate) backend_registry: Arc<BackendRegistry>,
+    pub backend_registry: Arc<BackendRegistry>,
 }
 
 // ---------------------------------------------------------------------------
 // Shared helpers (used across multiple modules)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn json_text<T: Serialize>(val: &T) -> CallToolResult {
+pub fn json_text<T: Serialize>(val: &T) -> CallToolResult {
     match serde_json::to_string_pretty(val) {
         Ok(json) => CallToolResult::success(vec![Content::text(json)]),
         Err(e) => CallToolResult::error(vec![Content::text(format!("serialization error: {}", e))]),
     }
 }
 
-pub(crate) fn err_text(msg: impl std::fmt::Display) -> CallToolResult {
+pub fn err_text(msg: impl std::fmt::Display) -> CallToolResult {
     CallToolResult::error(vec![Content::text(msg.to_string())])
 }
 

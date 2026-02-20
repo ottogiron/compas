@@ -12,7 +12,7 @@ use crate::store;
 const POLL_INTERVAL_MS: u64 = 200;
 
 impl OrchestratorMcpServer {
-    pub(crate) async fn wait_impl(
+    pub async fn wait_impl(
         &self,
         params: WaitParams,
     ) -> Result<CallToolResult, rmcp::Error> {

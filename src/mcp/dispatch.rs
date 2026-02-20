@@ -16,7 +16,7 @@ struct DispatchResult {
 }
 
 impl OrchestratorMcpServer {
-    pub(crate) async fn dispatch_impl(
+    pub async fn dispatch_impl(
         &self,
         params: DispatchParams,
     ) -> Result<CallToolResult, rmcp::Error> {

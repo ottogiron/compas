@@ -38,7 +38,7 @@ impl From<ThreadStatusView> for StatusEntry {
 }
 
 impl OrchestratorMcpServer {
-    pub(crate) async fn status_impl(
+    pub async fn status_impl(
         &self,
         params: StatusParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -62,7 +62,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_transcript ──────────────────────────────────────────────────
 
-    pub(crate) async fn transcript_impl(
+    pub async fn transcript_impl(
         &self,
         params: TranscriptParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -148,7 +148,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_read ────────────────────────────────────────────────────────
 
-    pub(crate) async fn read_impl(
+    pub async fn read_impl(
         &self,
         params: ReadParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -191,7 +191,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_metrics ─────────────────────────────────────────────────────
 
-    pub(crate) async fn metrics_impl(
+    pub async fn metrics_impl(
         &self,
         _params: MetricsParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -222,7 +222,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_poll ────────────────────────────────────────────────────────
 
-    pub(crate) async fn poll_impl(
+    pub async fn poll_impl(
         &self,
         params: PollParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -308,7 +308,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_batch_status ────────────────────────────────────────────────
 
-    pub(crate) async fn batch_status_impl(
+    pub async fn batch_status_impl(
         &self,
         params: BatchStatusParams,
     ) -> Result<CallToolResult, rmcp::Error> {
@@ -349,7 +349,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_tasks ───────────────────────────────────────────────────────
 
-    pub(crate) async fn tasks_impl(
+    pub async fn tasks_impl(
         &self,
         params: TasksParams,
     ) -> Result<CallToolResult, rmcp::Error> {
