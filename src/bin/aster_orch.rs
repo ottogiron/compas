@@ -83,9 +83,9 @@ async fn connect_db(
 ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
-        .max_connections(config.apalis.db_max_connections)
-        .min_connections(config.apalis.db_min_connections)
-        .acquire_timeout(Duration::from_millis(config.apalis.db_acquire_timeout_ms))
+        .max_connections(config.database.max_connections)
+        .min_connections(config.database.min_connections)
+        .acquire_timeout(Duration::from_millis(config.database.acquire_timeout_ms))
         .connect(&db_url)
         .await?;
     let store = aster_orch::store::Store::new(pool.clone());

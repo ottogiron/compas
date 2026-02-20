@@ -251,9 +251,19 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("poll messages failed: {}", e))),
         };
 
-        // Filter by intent if specified
+        // Filter by intent if specified, or auto-exclude trigger intents.
+        //
+        // When neither `intent` nor `since_reference` is provided, trigger
+        // intents (dispatch, handoff, changes-requested) are auto-excluded
+        // so the caller gets the agent's response, not their own dispatch.
         let filtered: Vec<&MessageRow> = if let Some(ref intent) = params.intent {
             messages.iter().filter(|m| m.intent == *intent).collect()
+        } else if params.since_reference.is_none() {
+            let trigger_intents = &self.config.orchestration.trigger_intents;
+            messages
+                .iter()
+                .filter(|m| !trigger_intents.contains(&m.intent))
+                .collect()
         } else {
             messages.iter().collect()
         };

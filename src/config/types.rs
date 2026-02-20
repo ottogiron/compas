@@ -18,9 +18,9 @@ pub struct OrchestratorConfig {
     pub agents: Vec<AgentConfig>,
     #[serde(default)]
     pub orchestration: OrchestrationConfig,
-    /// Apalis worker queue behavior tuning.
-    #[serde(default)]
-    pub apalis: ApalisConfig,
+    /// SQLite connection pool settings for MCP + worker.
+    #[serde(default, alias = "apalis")]
+    pub database: DatabaseConfig,
     /// Telegram notification settings (flattened from NotificationConfig).
     #[serde(default)]
     pub telegram: Option<TelegramConfig>,
@@ -51,78 +51,39 @@ fn default_db_path() -> PathBuf {
     PathBuf::from("~/.aster/orch/jobs.sqlite")
 }
 
+/// SQLite connection pool configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApalisConfig {
-    /// Enable callback/listener-driven queue wakeups for near-immediate pickup.
-    #[serde(default = "default_apalis_listener_enabled")]
-    pub listener_enabled: bool,
-    /// Poll interval fallback in milliseconds.
-    #[serde(default = "default_apalis_poll_interval_ms")]
-    pub poll_interval_ms: u64,
-    /// Maximum poll backoff in milliseconds.
-    #[serde(default = "default_apalis_poll_max_backoff_ms")]
-    pub poll_max_backoff_ms: u64,
-    /// Poll jitter percent (0..=100).
-    #[serde(default = "default_apalis_poll_jitter_pct")]
-    pub poll_jitter_pct: u8,
-    /// apalis fetch buffer size.
-    #[serde(default = "default_apalis_buffer_size")]
-    pub buffer_size: usize,
-    /// Shared SQLite pool max connections for MCP + worker.
-    #[serde(default = "default_apalis_db_max_connections")]
-    pub db_max_connections: u32,
-    /// Shared SQLite pool min idle connections.
-    #[serde(default = "default_apalis_db_min_connections")]
-    pub db_min_connections: u32,
-    /// Shared SQLite pool acquire timeout in milliseconds.
-    #[serde(default = "default_apalis_db_acquire_timeout_ms")]
-    pub db_acquire_timeout_ms: u64,
+pub struct DatabaseConfig {
+    /// SQLite pool max connections for MCP + worker.
+    #[serde(default = "default_db_max_connections")]
+    pub max_connections: u32,
+    /// SQLite pool min idle connections.
+    #[serde(default = "default_db_min_connections")]
+    pub min_connections: u32,
+    /// SQLite pool acquire timeout in milliseconds.
+    #[serde(default = "default_db_acquire_timeout_ms")]
+    pub acquire_timeout_ms: u64,
 }
 
-impl Default for ApalisConfig {
+impl Default for DatabaseConfig {
     fn default() -> Self {
         Self {
-            listener_enabled: default_apalis_listener_enabled(),
-            poll_interval_ms: default_apalis_poll_interval_ms(),
-            poll_max_backoff_ms: default_apalis_poll_max_backoff_ms(),
-            poll_jitter_pct: default_apalis_poll_jitter_pct(),
-            buffer_size: default_apalis_buffer_size(),
-            db_max_connections: default_apalis_db_max_connections(),
-            db_min_connections: default_apalis_db_min_connections(),
-            db_acquire_timeout_ms: default_apalis_db_acquire_timeout_ms(),
+            max_connections: default_db_max_connections(),
+            min_connections: default_db_min_connections(),
+            acquire_timeout_ms: default_db_acquire_timeout_ms(),
         }
     }
 }
 
-fn default_apalis_listener_enabled() -> bool {
-    true
-}
-
-fn default_apalis_poll_interval_ms() -> u64 {
-    150
-}
-
-fn default_apalis_poll_max_backoff_ms() -> u64 {
-    800
-}
-
-fn default_apalis_poll_jitter_pct() -> u8 {
-    10
-}
-
-fn default_apalis_buffer_size() -> usize {
-    10
-}
-
-fn default_apalis_db_max_connections() -> u32 {
+fn default_db_max_connections() -> u32 {
     32
 }
 
-fn default_apalis_db_min_connections() -> u32 {
+fn default_db_min_connections() -> u32 {
     4
 }
 
-fn default_apalis_db_acquire_timeout_ms() -> u64 {
+fn default_db_acquire_timeout_ms() -> u64 {
     30000
 }
 

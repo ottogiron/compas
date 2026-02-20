@@ -157,7 +157,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_wait",
-        description = "Poll for a message on a thread, optionally filtering by intent. Blocks up to timeout_secs."
+        description = "Poll for a message on a thread, optionally filtering by intent. Blocks up to timeout_secs. When neither intent nor since_reference is provided, trigger intents (dispatch, handoff, changes-requested) are auto-excluded so the result is the agent's response."
     )]
     async fn orch_wait(
         &self,
@@ -168,7 +168,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_poll",
-        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting."
+        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting. When neither intent nor since_reference is provided, trigger intents are auto-excluded."
     )]
     async fn orch_poll(
         &self,

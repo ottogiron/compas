@@ -83,8 +83,8 @@ agents:
         let config = load_config_from_str(yaml).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.poll_interval_secs, 1); // default (ORCH-REL-19)
-        assert!(config.apalis.listener_enabled);
-        assert_eq!(config.apalis.poll_interval_ms, 150);
+        assert_eq!(config.database.max_connections, 32); // default
+        assert_eq!(config.database.min_connections, 4); // default
     }
 
     #[test]
