@@ -49,6 +49,9 @@ enum Commands {
         /// How often (in seconds) to re-query SQLite for fresh metrics
         #[arg(long, default_value = "2")]
         poll_interval: u64,
+        /// Run an embedded worker alongside the dashboard
+        #[arg(long)]
+        with_worker: bool,
     },
     /// Wait for a message on a thread (reads SQLite directly, no MCP required).
     ///
@@ -99,9 +102,10 @@ async fn main() -> ExitCode {
         Commands::Dashboard {
             config,
             poll_interval,
+            with_worker,
         } => {
             // TUI dashboard — no tracing to stdout (would corrupt the TUI)
-            if let Err(e) = run_dashboard(config, poll_interval).await {
+            if let Err(e) = run_dashboard(config, poll_interval, with_worker).await {
                 eprintln!("error: {}", e);
                 return ExitCode::from(2);
             }
@@ -257,11 +261,40 @@ async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::
 async fn run_dashboard(
     config_path: PathBuf,
     poll_interval: u64,
+    with_worker: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = aster_orch::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config);
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
+
+    // If requested, spawn the worker in the background.
+    let mut worker_task = None;
+    let mut worker_reporter = None;
+    if with_worker {
+        let backend_registry = build_backend_registry(&config);
+        let worker_store = store.clone();
+        let worker_config = config.clone();
+
+        let runner = WorkerRunner::new(worker_config, worker_store, backend_registry);
+        let (worker_error_tx, mut worker_error_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        worker_task = Some(tokio::spawn(async move {
+            // Worker logs via tracing. Since we haven't initialized a subscriber
+            // (to avoid corrupting the TUI), these logs will be dropped.
+            // This is intentional.
+            if let Err(e) = runner.run().await {
+                let _ = worker_error_tx.send(e.to_string());
+            }
+        }));
+
+        worker_reporter = Some(tokio::spawn(async move {
+            if let Some(err) = worker_error_rx.recv().await {
+                // Use stderr so we don't corrupt the TUI's stdout rendering.
+                eprintln!("warning: embedded worker exited: {}", err);
+            }
+        }));
+    }
 
     // Capture the runtime handle before entering the blocking thread.
     // The TUI uses it to drive async store queries via Handle::block_on.
@@ -272,7 +305,7 @@ async fn run_dashboard(
 
     // The TUI event loop is synchronous (crossterm blocking I/O).
     // Run it in a dedicated blocking thread so the tokio runtime stays healthy.
-    tokio::task::spawn_blocking(move || {
+    let tui_result = tokio::task::spawn_blocking(move || {
         aster_orch::dashboard::app::run_tui(
             store,
             config,
@@ -281,7 +314,18 @@ async fn run_dashboard(
             poll_interval,
         )
     })
-    .await??;
+    .await;
+
+    if let Some(task) = worker_task {
+        task.abort();
+        let _ = task.await;
+    }
+    if let Some(task) = worker_reporter {
+        task.abort();
+        let _ = task.await;
+    }
+
+    tui_result??;
 
     Ok(())
 }
@@ -419,6 +463,44 @@ mod tests {
             assert_eq!(poll_interval, 2);
         } else {
             panic!("expected Dashboard command");
+        }
+    }
+
+    #[test]
+    fn test_dashboard_with_worker_default_false() {
+        let parsed =
+            Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]).unwrap();
+        if let Commands::Dashboard { with_worker, .. } = parsed.command {
+            assert!(!with_worker);
+        } else {
+            panic!("expected Dashboard command");
+        }
+    }
+
+    #[test]
+    fn test_dashboard_parses_with_with_worker_flag() {
+        let parsed = Cli::try_parse_from([
+            "aster-orch",
+            "dashboard",
+            "--config",
+            "foo.yaml",
+            "--poll-interval",
+            "5",
+            "--with-worker",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Dashboard {
+                with_worker,
+                poll_interval,
+                ..
+            } = cli.command
+            {
+                assert!(with_worker);
+                assert_eq!(poll_interval, 5);
+            } else {
+                panic!("expected Dashboard command");
+            }
         }
     }
 

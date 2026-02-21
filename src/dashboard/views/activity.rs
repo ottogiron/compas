@@ -44,6 +44,10 @@ use crate::store::ThreadStatusView;
 
 fn is_needs_attention(t: &ThreadStatusView) -> bool {
     let ts = t.thread_status.as_str();
+    // Completed/abandoned threads are terminal and not actionable.
+    if matches!(ts, "Completed" | "Abandoned") {
+        return false;
+    }
     let es = t.execution_status.as_deref().unwrap_or("");
     ts == "ReviewPending" || matches!(es, "failed" | "timed_out" | "crashed")
 }
@@ -588,6 +592,13 @@ mod tests {
     }
 
     #[test]
+    fn test_selectable_indices_needs_attention_failed_thread_with_failed_exec() {
+        let rows = vec![make_row("t1", "Failed", Some("failed"), None, None, 0)];
+        let idxs = selectable_indices(&rows);
+        assert_eq!(idxs, vec![0]);
+    }
+
+    #[test]
     fn test_selectable_indices_needs_attention_timed_out() {
         let rows = vec![make_row("t1", "Active", Some("timed_out"), None, None, 0)];
         let idxs = selectable_indices(&rows);
@@ -654,6 +665,16 @@ mod tests {
     }
 
     #[test]
+    fn test_selectable_indices_completed_not_needs_attention() {
+        let rows = vec![
+            make_row("t0", "Completed", Some("completed"), None, Some(100), 0),
+            make_row("t1", "Active", Some("executing"), Some(1000), None, 1),
+        ];
+        let idxs = selectable_indices(&rows);
+        assert_eq!(idxs, vec![1, 0], "completed row must not be in Needs Attention");
+    }
+
+    #[test]
     fn test_selectable_indices_review_pending_with_completed_exec_no_duplicate() {
         // A ReviewPending thread with a completed execution should appear
         // exactly once — in Needs Attention, NOT also in Recently Completed.
@@ -676,6 +697,13 @@ mod tests {
     fn test_selectable_indices_skips_non_categorized() {
         // Active thread with no execution — not in any section
         let rows = vec![make_row("t1", "Active", None, None, None, 0)];
+        let idxs = selectable_indices(&rows);
+        assert!(idxs.is_empty());
+    }
+
+    #[test]
+    fn test_selectable_indices_abandoned_not_selectable_without_failing_exec() {
+        let rows = vec![make_row("t1", "Abandoned", None, None, None, 0)];
         let idxs = selectable_indices(&rows);
         assert!(idxs.is_empty());
     }
