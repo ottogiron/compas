@@ -226,6 +226,8 @@ models:
     backend: claude
   - id: claude-opus-4-6
     backend: claude
+  - id: opencode/minimax-m2.5
+    backend: opencode
 
 agents:
   - alias: focused

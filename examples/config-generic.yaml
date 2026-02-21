@@ -18,6 +18,8 @@ models:
     backend: claude
   - id: gpt-5.3-codex
     backend: codex
+  - id: opencode/minimax-m2.5
+    backend: opencode
 
 agents:
   - alias: implementer
