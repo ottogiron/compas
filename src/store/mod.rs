@@ -134,6 +134,7 @@ pub struct MessageRow {
 pub struct ExecutionRow {
     pub id: String,
     pub thread_id: String,
+    pub batch_id: Option<String>,
     pub agent_alias: String,
     pub dispatch_message_id: Option<i64>,
     pub status: String,
@@ -598,6 +599,7 @@ impl Store {
         let row: Option<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -611,10 +613,12 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions WHERE id = ?",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.id = ?",
         )
         .bind(&exec_id)
         .fetch_optional(&mut *tx)
@@ -731,6 +735,7 @@ impl Store {
         let rows: Vec<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -744,10 +749,13 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions WHERE thread_id = ? ORDER BY queued_at ASC",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.thread_id = ?
+             ORDER BY e.queued_at ASC",
         )
         .bind(thread_id)
         .fetch_all(&self.pool)
@@ -763,6 +771,7 @@ impl Store {
         let row: Option<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -776,10 +785,13 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions WHERE thread_id = ? ORDER BY queued_at DESC LIMIT 1",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.thread_id = ?
+             ORDER BY e.queued_at DESC LIMIT 1",
         )
         .bind(thread_id)
         .fetch_optional(&self.pool)
@@ -804,6 +816,7 @@ impl Store {
         let rows: Vec<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -817,10 +830,13 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions WHERE agent_alias = ? ORDER BY queued_at DESC LIMIT ?",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.agent_alias = ?
+             ORDER BY e.queued_at DESC LIMIT ?",
         )
         .bind(agent_alias)
         .bind(limit)
@@ -834,6 +850,7 @@ impl Store {
         let rows: Vec<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -847,10 +864,12 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions ORDER BY queued_at DESC LIMIT ?",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             ORDER BY e.queued_at DESC LIMIT ?",
         )
         .bind(limit)
         .fetch_all(&self.pool)
@@ -999,6 +1018,7 @@ impl Store {
         let row: Option<(
             String,
             String,
+            Option<String>,
             String,
             Option<i64>,
             String,
@@ -1012,10 +1032,12 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
-             FROM executions WHERE id = ?",
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.id = ?",
         )
         .bind(id)
         .fetch_optional(&self.pool)
@@ -1073,6 +1095,7 @@ fn row_to_execution(
     r: (
         String,
         String,
+        Option<String>,
         String,
         Option<i64>,
         String,
@@ -1090,18 +1113,19 @@ fn row_to_execution(
     ExecutionRow {
         id: r.0,
         thread_id: r.1,
-        agent_alias: r.2,
-        dispatch_message_id: r.3,
-        status: r.4,
-        queued_at: r.5,
-        picked_up_at: r.6,
-        started_at: r.7,
-        finished_at: r.8,
-        duration_ms: r.9,
-        exit_code: r.10,
-        output_preview: r.11,
-        error_detail: r.12,
-        parsed_intent: r.13,
+        batch_id: r.2,
+        agent_alias: r.3,
+        dispatch_message_id: r.4,
+        status: r.5,
+        queued_at: r.6,
+        picked_up_at: r.7,
+        started_at: r.8,
+        finished_at: r.9,
+        duration_ms: r.10,
+        exit_code: r.11,
+        output_preview: r.12,
+        error_detail: r.13,
+        parsed_intent: r.14,
     }
 }
 

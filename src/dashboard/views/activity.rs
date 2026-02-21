@@ -841,13 +841,13 @@ fn render_context_panel(
 
 fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> Line<'static> {
     let (icon, icon_color) = row_icon(t);
-    let thread_id = truncate_id(&t.thread_id, 12);
+    let thread_id = truncate_id(&t.thread_id, 16);
     let (status_text, status_color) = row_status_display(t);
     let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
     let batch = t
         .batch_id
         .as_deref()
-        .map(|b| truncate_id(b, 8))
+        .map(|b| truncate_id(b, 12))
         .unwrap_or_else(|| "-".to_string());
     let duration = row_duration(t, now_unix);
 
@@ -868,7 +868,7 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
             Style::default().fg(icon_color).bg(bg),
         ),
         Span::styled(
-            format!("{:<14}", thread_id),
+            format!("{:<18}", thread_id),
             Style::default()
                 .fg(Color::White)
                 .bg(bg)
@@ -889,7 +889,7 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<10}", batch),
+            format!("{:<14}", batch),
             Style::default()
                 .fg(Color::DarkGray)
                 .bg(bg)
@@ -940,7 +940,7 @@ fn make_batch_line(
             Style::default().fg(marker_color).bg(bg),
         ),
         Span::styled(
-            format!("{:<14}", truncate_id(&batch.batch_id, 12)),
+            format!("{:<18}", truncate_id(&batch.batch_id, 16)),
             Style::default()
                 .fg(Color::White)
                 .bg(bg)

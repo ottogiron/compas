@@ -1,32 +1,19 @@
-//! Executions tab — recent execution records across all agents.
+//! Executions tab — recent execution records grouped by batch.
 //!
-//! Layout (within the content pane):
-//!   ┌ Executions ────────────────────────────────────────────────────────────┐
-//!   │  Agent          Thread ID     Status       Duration   Exit   Error      │
-//!   │  ─────────────  ────────────  ───────────  ────────   ────   ────────   │
-//!   │  focused        abc123def456  completed    1234ms     0      -           │
-//!   │  chill          def456abc789  failed       -          1      timeout…    │
-//!   │  …                                                                      │
-//!   └────────────────────────────────────────────────────────────────────────┘
-//!
-//! Thread IDs are truncated to 12 characters.
-//! Duration is displayed as "Nms", "Ns", or "Nm" depending on magnitude.
-//! Error detail is truncated to 40 characters.
-//! Status is colour-coded (green/red/yellow/cyan).
-//! Up to 50 rows are shown, sorted newest first by `queued_at`.
-//! The selected row (controlled by `app.executions_selected`) is highlighted.
-//! Press Enter to open the log viewer for that execution.
+//! Renders section headers for each batch and selectable execution rows under
+//! each section. The special "No batch" group is shown last when present.
 
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        Table, TableState,
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
     },
     Frame,
 };
+use std::collections::HashMap;
 
 use crate::dashboard::app::App;
 use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
@@ -84,140 +71,148 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // ── Build table ───────────────────────────────────────────────────────────
+    // ── Build grouped list ────────────────────────────────────────────────────
     let selected = app
         .executions_selected
         .min(data.executions.len().saturating_sub(1));
+    let groups = group_execution_indices_by_batch(&data.executions);
+    let mut items: Vec<ListItem<'static>> = Vec::new();
+    let mut exec_to_row: HashMap<usize, usize> = HashMap::new();
 
-    let header = Row::new([
-        Cell::from("Agent").style(
+    items.push(ListItem::new(Line::from(vec![
+        Span::styled(
+            format!("{:<14}", "Agent"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Thread ID").style(
+        Span::styled(
+            format!("{:<19}", "Thread ID"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Status").style(
+        Span::styled(
+            format!("{:<13}", "Status"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Prov").style(
+        Span::styled(
+            format!("{:<6}", "Prov"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Duration").style(
+        Span::styled(
+            format!("{:<10}", "Duration"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Exit").style(
+        Span::styled(
+            format!("{:<6}", "Exit"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Cell::from("Error").style(
+        Span::styled(
+            "Error",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-    ])
-    .height(1)
-    .bottom_margin(1);
+    ])));
+    items.push(ListItem::new(Line::from(Span::raw(""))));
 
-    let rows: Vec<Row> = data
-        .executions
-        .iter()
-        .enumerate()
-        .map(|(idx, e)| {
-            let is_selected = idx == selected;
+    for group in groups {
+        items.push(ListItem::new(Line::from(vec![
+            Span::styled(
+                format!(" Batch {} ", group.label),
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("({})", group.indices.len()),
+                Style::default().fg(Color::Cyan),
+            ),
+        ])));
 
-            // Agent alias.
-            let agent = e.agent_alias.clone();
-
-            // Thread ID — first 12 chars with ellipsis when truncated.
-            let thread_id: String = if e.thread_id.len() > 12 {
-                format!("{}…", &e.thread_id[..12])
-            } else {
-                e.thread_id.clone()
+        for &exec_idx in &group.indices {
+            let Some(e) = data.executions.get(exec_idx) else {
+                continue;
             };
-
-            // Status — humanized and colour-coded cell.
+            exec_to_row.insert(exec_idx, items.len());
             let status_color = exec_status_color(&e.status);
-            let status_cell = Cell::from(humanize_exec_status(&e.status))
-                .style(Style::default().fg(status_color));
-
-            // Duration — human-readable.
+            let thread_id = truncate(&e.thread_id, 16);
             let duration = e
                 .duration_ms
                 .map(format_duration_ms)
                 .unwrap_or_else(|| "-".to_string());
             let provenance = if e.dispatch_message_id.is_some() {
-                Span::styled("L", Style::default().fg(Color::Green))
+                "L".to_string()
             } else {
-                Span::styled("U", Style::default().fg(Color::Red))
+                "U".to_string()
             };
-
-            // Exit code — dash if absent.
             let exit_code = e
                 .exit_code
                 .map(|c| c.to_string())
                 .unwrap_or_else(|| "-".to_string());
-
-            // Error preview — truncated to 40 chars, dash if absent.
             let error_preview = e
                 .error_detail
                 .as_deref()
                 .map(|s| truncate(s, 40))
                 .unwrap_or_else(|| "-".to_string());
 
-            let row_style = if is_selected {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().bg(Color::Black)
-            };
+            items.push(ListItem::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled(
+                    format!("{:<14}", e.agent_alias),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<19}", thread_id),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<13}", humanize_exec_status(&e.status)),
+                    Style::default().fg(status_color),
+                ),
+                Span::styled(
+                    format!("{:<6}", provenance),
+                    Style::default().fg(if e.dispatch_message_id.is_some() {
+                        Color::Green
+                    } else {
+                        Color::Red
+                    }),
+                ),
+                Span::styled(
+                    format!("{:<10}", duration),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    format!("{:<6}", exit_code),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(error_preview, Style::default().fg(Color::White)),
+            ])));
+        }
 
-            Row::new(vec![
-                Cell::from(agent),
-                Cell::from(thread_id),
-                status_cell,
-                Cell::from(provenance),
-                Cell::from(duration),
-                Cell::from(exit_code),
-                Cell::from(error_preview),
-            ])
-            .style(row_style)
-        })
-        .collect();
+        items.push(ListItem::new(Line::from(Span::raw(""))));
+    }
 
-    let widths = [
-        Constraint::Length(14), // Agent (flexible alias)
-        Constraint::Length(15), // Thread ID (12 chars + ellipsis + padding)
-        Constraint::Length(13), // Status
-        Constraint::Length(6),  // Provenance (L/U)
-        Constraint::Length(10), // Duration
-        Constraint::Length(6),  // Exit code
-        Constraint::Min(10),    // Error preview (fills remaining width)
-    ];
-
-    let table = Table::new(rows, widths)
-        .header(header)
+    let selected_row = exec_to_row.get(&selected).copied().unwrap_or(0);
+    let mut state = ListState::default().with_selected(Some(selected_row));
+    let list = List::new(items)
         .block(block)
         .style(Style::default().bg(Color::Black).fg(Color::White))
-        .row_highlight_style(
+        .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         );
-
-    let mut state = TableState::default().with_selected(selected);
-    f.render_stateful_widget(table, area, &mut state);
+    f.render_stateful_widget(list, area, &mut state);
 
     let mut scrollbar_state = ScrollbarState::new(data.executions.len().max(1)).position(selected);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
@@ -225,6 +220,50 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+struct BatchGroup {
+    label: String,
+    indices: Vec<usize>,
+}
+
+fn group_execution_indices_by_batch(executions: &[crate::store::ExecutionRow]) -> Vec<BatchGroup> {
+    let mut grouped: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut latest_ts: HashMap<String, i64> = HashMap::new();
+
+    for (idx, e) in executions.iter().enumerate() {
+        let key = e.batch_id.clone().unwrap_or_else(|| "No batch".to_string());
+        grouped.entry(key.clone()).or_default().push(idx);
+        latest_ts
+            .entry(key)
+            .and_modify(|ts| *ts = (*ts).max(e.queued_at))
+            .or_insert(e.queued_at);
+    }
+
+    let mut labels: Vec<String> = grouped.keys().cloned().collect();
+    labels.sort_by(|a, b| {
+        if a == "No batch" && b != "No batch" {
+            return std::cmp::Ordering::Greater;
+        }
+        if b == "No batch" && a != "No batch" {
+            return std::cmp::Ordering::Less;
+        }
+        latest_ts
+            .get(b)
+            .copied()
+            .unwrap_or(0)
+            .cmp(&latest_ts.get(a).copied().unwrap_or(0))
+            .then_with(|| a.cmp(b))
+    });
+
+    labels
+        .into_iter()
+        .map(|label| BatchGroup {
+            indices: grouped.remove(&label).unwrap_or_default(),
+            label,
+        })
+        .collect()
+}
 
 /// Truncate `s` to at most `max_chars` Unicode scalar values, appending "…"
 /// if truncated.
@@ -268,5 +307,66 @@ mod tests {
     #[test]
     fn test_executions_truncate_empty() {
         assert_eq!(truncate("", 40), "");
+    }
+
+    #[test]
+    fn test_group_execution_indices_by_batch_orders_by_latest_queued_at() {
+        let rows = vec![
+            crate::store::ExecutionRow {
+                id: "1".to_string(),
+                thread_id: "t1".to_string(),
+                batch_id: Some("b1".to_string()),
+                agent_alias: "a".to_string(),
+                dispatch_message_id: None,
+                status: "completed".to_string(),
+                queued_at: 10,
+                picked_up_at: None,
+                started_at: None,
+                finished_at: None,
+                duration_ms: None,
+                exit_code: None,
+                output_preview: None,
+                error_detail: None,
+                parsed_intent: None,
+            },
+            crate::store::ExecutionRow {
+                id: "2".to_string(),
+                thread_id: "t2".to_string(),
+                batch_id: Some("b2".to_string()),
+                agent_alias: "a".to_string(),
+                dispatch_message_id: None,
+                status: "completed".to_string(),
+                queued_at: 20,
+                picked_up_at: None,
+                started_at: None,
+                finished_at: None,
+                duration_ms: None,
+                exit_code: None,
+                output_preview: None,
+                error_detail: None,
+                parsed_intent: None,
+            },
+            crate::store::ExecutionRow {
+                id: "3".to_string(),
+                thread_id: "t3".to_string(),
+                batch_id: None,
+                agent_alias: "a".to_string(),
+                dispatch_message_id: None,
+                status: "completed".to_string(),
+                queued_at: 30,
+                picked_up_at: None,
+                started_at: None,
+                finished_at: None,
+                duration_ms: None,
+                exit_code: None,
+                output_preview: None,
+                error_detail: None,
+                parsed_intent: None,
+            },
+        ];
+        let groups = group_execution_indices_by_batch(&rows);
+        assert_eq!(groups[0].label, "b2");
+        assert_eq!(groups[1].label, "b1");
+        assert_eq!(groups[2].label, "No batch");
     }
 }
