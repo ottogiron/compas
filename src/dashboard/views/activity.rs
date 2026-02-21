@@ -671,7 +671,11 @@ mod tests {
             make_row("t1", "Active", Some("executing"), Some(1000), None, 1),
         ];
         let idxs = selectable_indices(&rows);
-        assert_eq!(idxs, vec![1, 0], "completed row must not be in Needs Attention");
+        assert_eq!(
+            idxs,
+            vec![1, 0],
+            "completed row must not be in Needs Attention"
+        );
     }
 
     #[test]

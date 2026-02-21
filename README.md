@@ -106,6 +106,14 @@ aster_orch wait --config /path/to/config.yaml --thread-id <thread-id>
 `--with-worker` is intended for local convenience. For long-running or production
 operation, prefer the standard two-process setup (`worker` + `mcp-server`).
 
+Dashboard controls:
+
+- `Tab` / `Shift+Tab` / `1-4`: switch tabs
+- `↑/↓` or `j/k`: move selection
+- `Enter`: open execution log viewer
+- `b`: abandon selected thread (confirm modal)
+- `o`: reopen selected thread (confirm modal)
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` | `.aster-orch/config.yaml` | Optional config path override |

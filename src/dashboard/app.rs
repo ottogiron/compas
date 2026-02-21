@@ -38,12 +38,55 @@ use crate::dashboard::views::activity::{self, render_activity};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions;
 use crate::dashboard::views::log_viewer::{render_log_viewer, LogViewerState};
+use crate::lifecycle::LifecycleService;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const TABS: &[&str] = &["Activity", "Agents", "History", "Settings"];
 const TICK_RATE: Duration = Duration::from_millis(250);
+
+#[derive(Debug, Clone, Copy)]
+enum AdminActionKind {
+    Abandon,
+    Reopen,
+}
+
+#[derive(Debug, Clone)]
+struct PendingAdminAction {
+    kind: AdminActionKind,
+    thread_id: String,
+}
+
+impl PendingAdminAction {
+    fn verb(&self) -> &'static str {
+        match self.kind {
+            AdminActionKind::Abandon => "abandon",
+            AdminActionKind::Reopen => "reopen",
+        }
+    }
+
+    fn title(&self) -> &'static str {
+        match self.kind {
+            AdminActionKind::Abandon => " Confirm Abandon ",
+            AdminActionKind::Reopen => " Confirm Reopen ",
+        }
+    }
+
+    fn prompt(&self) -> String {
+        match self.kind {
+            AdminActionKind::Abandon => {
+                format!(
+                    "Abandon thread {} and cancel queued/running executions?",
+                    self.thread_id
+                )
+            }
+            AdminActionKind::Reopen => {
+                format!("Reopen terminal thread {} to Active?", self.thread_id)
+            }
+        }
+    }
+}
 
 // ── Activity data ─────────────────────────────────────────────────────────────
 
@@ -119,6 +162,10 @@ pub struct App {
     pub executions_selected: usize,
     /// Active log viewer state.  `Some` when the log viewer overlay is open.
     pub viewing_log: Option<LogViewerState>,
+    /// Pending admin action waiting for explicit confirmation.
+    pending_admin_action: Option<PendingAdminAction>,
+    /// Last admin action result shown in the status bar.
+    admin_notice: Option<String>,
     /// Directory where execution log files are stored (`{state_dir}/logs/`).
     pub log_dir: PathBuf,
     /// Tokio runtime handle — used to drive async store queries from the
@@ -148,6 +195,8 @@ impl App {
             executions_data: None,
             executions_selected: 0,
             viewing_log: None,
+            pending_admin_action: None,
+            admin_notice: None,
             log_dir,
             handle,
         }
@@ -422,6 +471,87 @@ impl App {
     pub fn close_log_viewer(&mut self) {
         self.viewing_log = None;
     }
+
+    // ── Admin actions ────────────────────────────────────────────────────────
+
+    fn selected_thread_id(&self) -> Option<String> {
+        match self.active_tab {
+            0 => {
+                let data = self.activity_data.as_ref()?;
+                let selectable = activity::selectable_indices(&data.rows);
+                let src_idx = *selectable.get(self.activity_selected)?;
+                data.rows.get(src_idx).map(|r| r.thread_id.clone())
+            }
+            2 => self
+                .executions_data
+                .as_ref()
+                .and_then(|d| d.executions.get(self.executions_selected))
+                .map(|e| e.thread_id.clone()),
+            _ => None,
+        }
+    }
+
+    fn queue_admin_action(&mut self, kind: AdminActionKind) {
+        let Some(thread_id) = self.selected_thread_id() else {
+            self.admin_notice = Some(
+                "No thread selected. Admin actions are available on Activity/History rows."
+                    .to_string(),
+            );
+            return;
+        };
+        self.pending_admin_action = Some(PendingAdminAction { kind, thread_id });
+    }
+
+    fn cancel_admin_action(&mut self) {
+        self.pending_admin_action = None;
+        self.admin_notice = Some("Admin action cancelled.".to_string());
+    }
+
+    fn execute_admin_action(&mut self) {
+        let Some(action) = self.pending_admin_action.take() else {
+            return;
+        };
+
+        let svc = LifecycleService::new(self.store.clone(), self.config.agents.as_slice());
+        match action.kind {
+            AdminActionKind::Abandon => {
+                let result = self
+                    .handle
+                    .block_on(async { svc.abandon(&action.thread_id).await });
+                match result {
+                    Ok(out) => {
+                        self.admin_notice = Some(format!(
+                            "Thread {} abandoned ({} executions cancelled).",
+                            out.thread_id, out.executions_cancelled
+                        ));
+                    }
+                    Err(e) => {
+                        self.admin_notice = Some(format!("Failed to {}: {}", action.verb(), e));
+                    }
+                }
+            }
+            AdminActionKind::Reopen => {
+                let result = self
+                    .handle
+                    .block_on(async { svc.reopen(&action.thread_id).await });
+                match result {
+                    Ok(out) => {
+                        self.admin_notice = Some(format!(
+                            "Thread {} reopened ({} → {}).",
+                            out.thread_id, out.previous_status, out.new_status
+                        ));
+                    }
+                    Err(e) => {
+                        self.admin_notice = Some(format!("Failed to {}: {}", action.verb(), e));
+                    }
+                }
+            }
+        }
+
+        // Refresh impacted views after a state mutation.
+        self.refresh_activity();
+        self.refresh_executions();
+    }
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -534,6 +664,8 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
                 Event::Key(key) => {
                     if app.viewing_log.is_some() {
                         handle_log_viewer_key(app, key.code);
+                    } else if app.pending_admin_action.is_some() {
+                        handle_admin_confirm_key(app, key.code);
                     } else {
                         handle_list_key(app, key.code);
                     }
@@ -598,6 +730,19 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Handle key events while an admin action confirmation modal is open.
+fn handle_admin_confirm_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+            app.execute_admin_action();
+        }
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+            app.cancel_admin_action();
+        }
+        _ => {}
+    }
+}
+
 /// Handle a key event when the normal list/tab view is active.
 fn handle_list_key(app: &mut App, code: KeyCode) {
     match code {
@@ -620,6 +765,9 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         // Row navigation (Activity and History tabs).
         KeyCode::Up | KeyCode::Char('k') => app.select_prev_row(),
         KeyCode::Down | KeyCode::Char('j') => app.select_next_row(),
+        // Lifecycle admin actions.
+        KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
+        KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
         // Open log viewer for the selected row.
         KeyCode::Enter => app.open_log_viewer(),
         _ => {}
@@ -649,7 +797,11 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     render_tab_bar(f, app, chunks[0]);
     render_content(f, app, chunks[1]);
-    render_status_bar(f, chunks[2]);
+    render_status_bar(f, app, chunks[2]);
+
+    if app.pending_admin_action.is_some() {
+        render_admin_action_modal(f, app, area);
+    }
 }
 
 fn render_tab_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -743,7 +895,7 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     f.render_widget(p, area);
 }
 
-fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect) {
+fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let key = |s: &'static str| {
         Span::styled(
             s,
@@ -753,8 +905,7 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect) {
         )
     };
     let sep = || Span::raw("  ");
-
-    let status = Paragraph::new(Line::from(vec![
+    let mut spans = vec![
         Span::raw(" "),
         key("q"),
         Span::raw(": quit"),
@@ -774,11 +925,93 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect) {
         key("↑/↓"),
         Span::raw(": select"),
         sep(),
+        key("b"),
+        Span::raw(": abandon"),
+        sep(),
+        key("o"),
+        Span::raw(": reopen"),
+        sep(),
         key("Enter"),
         Span::raw(": log"),
         Span::raw(" "),
-    ]))
-    .style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    ];
+
+    if let Some(msg) = &app.admin_notice {
+        spans.push(sep());
+        spans.push(Span::styled("last:", Style::default().fg(Color::Cyan)));
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(msg.clone(), Style::default().fg(Color::White)));
+    }
+
+    let status = Paragraph::new(Line::from(spans))
+        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
 
     f.render_widget(status, area);
+}
+
+fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let Some(action) = &app.pending_admin_action else {
+        return;
+    };
+
+    let modal = centered_rect(72, 7, area);
+    let block = Block::default().borders(Borders::ALL).title(action.title());
+    let inner = block.inner(modal);
+    f.render_widget(block, modal);
+
+    let lines = vec![
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(action.prompt(), Style::default().fg(Color::White)),
+        ]),
+        Line::from(Span::raw("")),
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": confirm  "),
+            Span::styled(
+                "n/Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": cancel"),
+        ]),
+    ];
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn centered_rect(
+    percent_x: u16,
+    height_rows: u16,
+    r: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let modal_height = height_rows.min(r.height.max(1));
+    let top_pad = r.height.saturating_sub(modal_height) / 2;
+    let pct = percent_x.clamp(1, 100);
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(top_pad),
+            Constraint::Length(modal_height),
+            Constraint::Min(0),
+        ])
+        .split(r);
+
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - pct) / 2),
+            Constraint::Percentage(pct),
+            Constraint::Min(0),
+        ])
+        .split(vertical[1]);
+
+    horizontal[1]
 }
