@@ -2,7 +2,7 @@
 //!
 //! Layout (top → bottom):
 //!   ┌─────────────────────────────────────┐  ← tab bar   (3 rows)
-//!   │  Overview  Threads  Agents  …       │
+//!   │  Activity  Agents  History  Settings │
 //!   ├─────────────────────────────────────┤
 //!   │                                     │  ← content   (fills remaining)
 //!   │  <tab placeholder>                  │
@@ -34,32 +34,31 @@ use std::{
 use tokio::runtime::Handle;
 
 use crate::config::types::OrchestratorConfig;
+use crate::dashboard::views::activity::{self, render_activity};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions;
 use crate::dashboard::views::log_viewer::{render_log_viewer, LogViewerState};
-use crate::dashboard::views::overview::render_overview;
-use crate::dashboard::views::threads::render_threads;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TABS: &[&str] = &["Overview", "Threads", "Agents", "Executions", "Settings"];
+const TABS: &[&str] = &["Activity", "Agents", "History", "Settings"];
 const TICK_RATE: Duration = Duration::from_millis(250);
 
-// ── Overview data ─────────────────────────────────────────────────────────────
+// ── Activity data ─────────────────────────────────────────────────────────────
 
-/// Snapshot of live metrics fetched from SQLite for the Overview tab.
-pub struct OverviewData {
+/// Snapshot of live metrics fetched from SQLite for the Activity tab.
+pub struct ActivityData {
+    /// All thread rows from `status_view(None, None, None, 50)`.
+    pub rows: Vec<ThreadStatusView>,
     /// Per-status thread counts: `[(status, count), …]`.
     pub thread_counts: Vec<(String, i64)>,
-    /// Number of executions in the `queued` state.
+    /// Number of executions in the `queued` state (Pending in footer).
     pub queue_depth: i64,
-    /// Total message rows in the `messages` table.
-    pub total_messages: i64,
-    /// Active execution count per agent: `[(alias, count), …]`.
-    pub active_by_agent: Vec<(String, i64)>,
     /// Most recent worker heartbeat row, if any.
     pub heartbeat: Option<(String, i64, i64, Option<String>)>,
+    /// When this snapshot was fetched (used for staleness checks).
+    pub fetched_at: Instant,
 }
 
 // ── Agents data ───────────────────────────────────────────────────────────────
@@ -82,19 +81,9 @@ pub struct AgentsData {
     pub fetched_at: Instant,
 }
 
-// ── Threads data ──────────────────────────────────────────────────────────────
-
-/// Snapshot of thread rows fetched from SQLite for the Threads tab.
-pub struct ThreadsData {
-    /// Rows returned by `store.status_view(None, None, None, 50)`.
-    pub threads: Vec<ThreadStatusView>,
-    /// When this snapshot was fetched (used for staleness checks).
-    pub fetched_at: Instant,
-}
-
 // ── Executions data ───────────────────────────────────────────────────────────
 
-/// Snapshot of recent execution rows fetched from SQLite for the Executions tab.
+/// Snapshot of recent execution rows fetched from SQLite for the History tab.
 pub struct ExecutionsData {
     /// Up to 50 most-recent execution rows, newest first.
     pub executions: Vec<ExecutionRow>,
@@ -118,17 +107,15 @@ pub struct App {
     pub config_path: PathBuf,
     /// How often to re-query SQLite for fresh metrics.
     pub poll_interval: Duration,
-    /// Most recently fetched Overview metrics; `None` until the first poll.
-    pub overview_data: Option<OverviewData>,
-    /// Most recently fetched Threads rows; `None` until the first poll on tab 1.
-    pub threads_data: Option<ThreadsData>,
-    /// Most recently fetched Agents metrics; `None` until the first poll on tab 2.
+    /// Most recently fetched Activity metrics; `None` until the first poll on tab 0.
+    pub activity_data: Option<ActivityData>,
+    /// Index of the highlighted row in the Activity tab (across all sections).
+    pub activity_selected: usize,
+    /// Most recently fetched Agents metrics; `None` until the first poll on tab 1.
     pub agents_data: Option<AgentsData>,
-    /// Most recently fetched execution rows; `None` until the first poll on tab 3.
+    /// Most recently fetched execution rows; `None` until the first poll on tab 2.
     pub executions_data: Option<ExecutionsData>,
-    /// Index of the highlighted row in the Threads tab.
-    pub threads_selected: usize,
-    /// Index of the highlighted row in the Executions tab.
+    /// Index of the highlighted row in the History tab.
     pub executions_selected: usize,
     /// Active log viewer state.  `Some` when the log viewer overlay is open.
     pub viewing_log: Option<LogViewerState>,
@@ -137,8 +124,6 @@ pub struct App {
     /// Tokio runtime handle — used to drive async store queries from the
     /// synchronous TUI thread via `Handle::block_on`.
     handle: Handle,
-    /// Instant of the last successful data refresh.
-    last_refresh: Instant,
 }
 
 impl App {
@@ -157,19 +142,14 @@ impl App {
             config,
             config_path,
             poll_interval,
-            overview_data: None,
-            threads_data: None,
+            activity_data: None,
+            activity_selected: 0,
             agents_data: None,
             executions_data: None,
-            threads_selected: 0,
             executions_selected: 0,
             viewing_log: None,
             log_dir,
             handle,
-            // Subtract the full interval so the very first tick triggers a refresh.
-            last_refresh: Instant::now()
-                .checked_sub(poll_interval)
-                .unwrap_or_else(Instant::now),
         }
     }
 
@@ -187,62 +167,43 @@ impl App {
         }
     }
 
-    /// Fetch fresh metrics from SQLite and update `overview_data`.
+    /// Fetch fresh metrics from SQLite and update `activity_data`.
     ///
-    /// Uses `Handle::block_on` to drive async queries from the synchronous
-    /// TUI thread. Silently swallows errors — stale data is preferable to a
-    /// panic inside the event loop.
-    pub fn refresh_overview(&mut self) {
-        // Split borrows explicitly so the borrow checker sees two distinct fields.
+    /// A single `status_view` call feeds all three sections; supplementary
+    /// queries populate the summary footer and worker-health dot.
+    /// Silently swallows errors — stale data is preferable to a panic inside
+    /// the event loop.
+    pub fn refresh_activity(&mut self) {
         let store = &self.store;
         let handle = &self.handle;
 
         let data = handle.block_on(async {
+            let rows = store
+                .status_view(None, None, None, 50)
+                .await
+                .unwrap_or_default();
             let thread_counts = store.thread_counts().await.unwrap_or_default();
             let queue_depth = store.queue_depth().await.unwrap_or(0);
-            let total_messages = store.message_count().await.unwrap_or(0);
-            let active_by_agent = store.active_executions_by_agent().await.unwrap_or_default();
             let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
 
-            OverviewData {
+            ActivityData {
+                rows,
                 thread_counts,
                 queue_depth,
-                total_messages,
-                active_by_agent,
                 heartbeat,
+                fetched_at: Instant::now(),
             }
         });
 
-        self.overview_data = Some(data);
-        self.last_refresh = Instant::now();
-    }
-
-    /// Fetch the latest thread rows from SQLite and update `threads_data`.
-    ///
-    /// Queries up to 50 threads ordered by `updated_at DESC`. Silently swallows
-    /// errors — stale data is preferable to a panic inside the event loop.
-    pub fn refresh_threads(&mut self) {
-        let store = &self.store;
-        let handle = &self.handle;
-
-        let threads = handle.block_on(async {
-            store
-                .status_view(None, None, None, 50)
-                .await
-                .unwrap_or_default()
-        });
-
-        // Clamp the selection to the new row count.
-        if !threads.is_empty() {
-            self.threads_selected = self.threads_selected.min(threads.len() - 1);
+        // Clamp selection to new selectable count.
+        let count = activity::selectable_count(&data.rows);
+        if count > 0 {
+            self.activity_selected = self.activity_selected.min(count - 1);
         } else {
-            self.threads_selected = 0;
+            self.activity_selected = 0;
         }
 
-        self.threads_data = Some(ThreadsData {
-            threads,
-            fetched_at: Instant::now(),
-        });
+        self.activity_data = Some(data);
     }
 
     /// Fetch fresh per-agent metrics from SQLite and update `agents_data`.
@@ -322,31 +283,31 @@ impl App {
 
     // ── Row selection ─────────────────────────────────────────────────────────
 
-    /// Move the selection up by one row on the active list tab (1 or 3).
+    /// Move the selection up by one row on the active list tab (0 or 2).
     pub fn select_prev_row(&mut self) {
         match self.active_tab {
-            1 => {
-                self.threads_selected = self.threads_selected.saturating_sub(1);
+            0 => {
+                self.activity_selected = self.activity_selected.saturating_sub(1);
             }
-            3 => {
+            2 => {
                 self.executions_selected = self.executions_selected.saturating_sub(1);
             }
             _ => {}
         }
     }
 
-    /// Move the selection down by one row on the active list tab (1 or 3).
+    /// Move the selection down by one row on the active list tab (0 or 2).
     pub fn select_next_row(&mut self) {
         match self.active_tab {
-            1 => {
+            0 => {
                 let max = self
-                    .threads_data
+                    .activity_data
                     .as_ref()
-                    .map(|d| d.threads.len().saturating_sub(1))
+                    .map(|d| activity::selectable_count(&d.rows).saturating_sub(1))
                     .unwrap_or(0);
-                self.threads_selected = (self.threads_selected + 1).min(max);
+                self.activity_selected = (self.activity_selected + 1).min(max);
             }
-            3 => {
+            2 => {
                 let max = self
                     .executions_data
                     .as_ref()
@@ -362,31 +323,34 @@ impl App {
 
     /// Open the log viewer for the currently selected row on the active tab.
     ///
-    /// For the Threads tab (tab 1): uses the latest execution attached to the
-    /// selected `ThreadStatusView`.
-    /// For the Executions tab (tab 3): uses the selected `ExecutionRow` directly.
+    /// For the Activity tab (tab 0): uses the execution attached to the selected
+    /// row.
+    /// For the History tab (tab 2): uses the selected `ExecutionRow` directly.
     /// Silently does nothing if there is no data or the selected row has no
     /// execution information.
     pub fn open_log_viewer(&mut self) {
         match self.active_tab {
-            1 => self.open_log_viewer_from_thread(),
-            3 => self.open_log_viewer_from_execution(),
+            0 => self.open_log_viewer_from_activity(),
+            2 => self.open_log_viewer_from_execution(),
             _ => {}
         }
     }
 
-    fn open_log_viewer_from_thread(&mut self) {
-        let Some(data) = &self.threads_data else {
+    fn open_log_viewer_from_activity(&mut self) {
+        let Some(data) = &self.activity_data else {
             return;
         };
-        let Some(row) = data.threads.get(self.threads_selected) else {
+        let sel_idxs = activity::selectable_indices(&data.rows);
+        let Some(&src_idx) = sel_idxs.get(self.activity_selected) else {
+            return;
+        };
+        let Some(row) = data.rows.get(src_idx) else {
             return;
         };
 
-        // Use the latest execution attached to this thread, if any.
         let exec_id = match &row.execution_id {
             Some(id) if !id.is_empty() => id.clone(),
-            _ => return, // no execution yet — nothing to show
+            _ => return,
         };
         let agent_alias = row.agent_alias.clone().unwrap_or_else(|| "-".to_string());
         let status = row
@@ -394,11 +358,8 @@ impl App {
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let duration_ms = row.duration_ms;
-
-        // Build fallback content by fetching thread messages (newest last).
         let thread_id = row.thread_id.clone();
         let fallback = self.fetch_message_fallback(&thread_id);
-
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
         self.viewing_log = Some(LogViewerState::new(
             exec_id,
@@ -528,25 +489,20 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
 
         // ── Background data refreshes (only when log viewer is closed) ────────
         if app.viewing_log.is_none() {
-            // Refresh Overview metrics if the polling interval has elapsed.
-            if app.last_refresh.elapsed() >= interval {
-                app.refresh_overview();
-            }
-
-            // Refresh Threads tab data when it is active and stale.
-            if app.active_tab == 1 {
+            // Refresh Activity tab data when it is active and stale.
+            if app.active_tab == 0 {
                 let is_stale = app
-                    .threads_data
+                    .activity_data
                     .as_ref()
                     .map(|d| d.fetched_at.elapsed() >= interval)
                     .unwrap_or(true);
                 if is_stale {
-                    app.refresh_threads();
+                    app.refresh_activity();
                 }
             }
 
             // Refresh Agents tab data when it is active and stale.
-            if app.active_tab == 2 {
+            if app.active_tab == 1 {
                 let is_stale = app
                     .agents_data
                     .as_ref()
@@ -557,8 +513,8 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
                 }
             }
 
-            // Refresh Executions tab data when it is active and stale.
-            if app.active_tab == 3 {
+            // Refresh History tab data when it is active and stale.
+            if app.active_tab == 2 {
                 let is_stale = app
                     .executions_data
                     .as_ref()
@@ -648,22 +604,20 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('q') => app.should_quit = true,
         // Manual refresh.
         KeyCode::Char('r') => match app.active_tab {
-            0 => app.refresh_overview(),
-            1 => app.refresh_threads(),
-            2 => app.refresh_agents(),
-            3 => app.refresh_executions(),
+            0 => app.refresh_activity(),
+            1 => app.refresh_agents(),
+            2 => app.refresh_executions(),
             _ => {}
         },
-        // Number keys jump directly to a tab (1-5 → index 0-4).
+        // Number keys jump directly to a tab (1-4 → index 0-3).
         KeyCode::Char('1') => app.active_tab = 0,
         KeyCode::Char('2') => app.active_tab = 1,
         KeyCode::Char('3') => app.active_tab = 2,
         KeyCode::Char('4') => app.active_tab = 3,
-        KeyCode::Char('5') => app.active_tab = 4,
         KeyCode::Tab => app.next_tab(),
         // Shift+Tab — crossterm reports this as BackTab.
         KeyCode::BackTab => app.prev_tab(),
-        // Row navigation (Threads and Executions tabs only).
+        // Row navigation (Activity and History tabs).
         KeyCode::Up | KeyCode::Char('k') => app.select_prev_row(),
         KeyCode::Down | KeyCode::Char('j') => app.select_next_row(),
         // Open log viewer for the selected row.
@@ -723,11 +677,10 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
 fn render_content(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     match app.active_tab {
-        0 => render_overview(f, app, area),
-        1 => render_threads(f, app, area),
-        2 => agents::render_agents_tab(f, app, area),
-        3 => executions::render_executions(f, app, area),
-        4 => render_settings(f, app, area),
+        0 => render_activity(f, app, area),
+        1 => agents::render_agents_tab(f, app, area),
+        2 => executions::render_executions(f, app, area),
+        3 => render_settings(f, app, area),
         _ => {
             let tab_name = TABS[app.active_tab];
             let body = format!("  {} — coming soon", tab_name);
@@ -812,7 +765,7 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect) {
         key("Shift+Tab"),
         Span::raw(": prev"),
         sep(),
-        key("1-5"),
+        key("1-4"),
         Span::raw(": jump"),
         sep(),
         key("r"),

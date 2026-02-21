@@ -1,10 +1,9 @@
 //! Tab view renderers for the aster-orch TUI dashboard.
 
+pub mod activity;
 pub mod agents;
 pub mod executions;
 pub mod log_viewer;
-pub mod overview;
-pub mod threads;
 
 use ratatui::style::Color;
 
