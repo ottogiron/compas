@@ -132,10 +132,6 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         })?;
     }
 
-    if config.orchestration.daemon_required && !config.orchestration.daemon_auto_start {
-        tracing::warn!("daemon is required but auto_start=false; commands will fail-fast until daemon is started");
-    }
-
     // Database pool bounds
     if config.database.max_connections < 1 {
         return Err(OrchestratorError::Config(
@@ -233,7 +229,6 @@ mod tests {
             orchestration: Default::default(),
             database: Default::default(),
             telegram: None,
-            audit_log_path: None,
         }
     }
 
@@ -386,14 +381,6 @@ agents:
         config.orchestration.trigger_intents = vec!["invalid-intent".into()];
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("unknown trigger intent"));
-    }
-
-    #[test]
-    fn test_config_validation_daemon_required_no_autostart_warns_only() {
-        let mut config = minimal_config();
-        config.orchestration.daemon_required = true;
-        config.orchestration.daemon_auto_start = false;
-        assert!(validate_config(&config).is_ok());
     }
 
     #[test]

@@ -1,9 +1,10 @@
 use crate::error::{OrchestratorError, Result};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::process::{Child, Command, Output, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Tracked subprocess: maps session_id → child PID, plus real CLI session IDs.
@@ -115,29 +116,118 @@ pub fn spawn_cli(
         .map_err(|e| OrchestratorError::Backend(format!("failed to spawn '{}': {}", command, e)))
 }
 
-/// Wait for a child process with an optional timeout.
-/// Returns the process output or a timeout error.
-pub fn wait_with_timeout(mut child: Child, timeout: Option<Duration>) -> Result<Output> {
+/// Wait for a child process with an optional timeout, writing output lines incrementally
+/// to `log_path` as they arrive (prevents pipe-buffer deadlock for long-running agents).
+///
+/// Stdout lines are written as-is; stderr lines are prefixed with `[stderr] `.
+/// The returned `Output` contains the full collected stdout/stderr bytes, identical
+/// in shape to what the previous blocking implementation returned.
+pub fn wait_with_timeout(
+    mut child: Child,
+    timeout: Option<Duration>,
+    log_path: Option<&Path>,
+) -> Result<Output> {
+    // Open (or create) the log file before spawning reader threads so that any
+    // open error is surfaced early and doesn't swallow output silently.
+    let log_file: Option<Arc<Mutex<std::fs::File>>> = if let Some(path) = log_path {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()
+            .map(|f| Arc::new(Mutex::new(f)))
+    } else {
+        None
+    };
+
+    // Take stdout/stderr pipes before entering the wait loop so that we drain
+    // them incrementally.  Without this, a long-running agent that produces
+    // more output than the OS pipe buffer can hold will deadlock: the agent
+    // blocks on write, the worker blocks on try_wait, neither makes progress.
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
+
+    let stdout_bytes = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let stderr_bytes = Arc::new(Mutex::new(Vec::<u8>::new()));
+
+    // Drain stdout in a background thread.
+    let mut out_thread: Option<std::thread::JoinHandle<()>> = {
+        let buf = Arc::clone(&stdout_bytes);
+        let lf = log_file.clone();
+        child_stdout.map(|stream| {
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stream);
+                for line in reader.lines() {
+                    if let Ok(l) = line {
+                        {
+                            let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
+                            b.extend_from_slice(l.as_bytes());
+                            b.push(b'\n');
+                        }
+                        if let Some(ref f) = lf {
+                            let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
+                            let _ = writeln!(guard, "{}", l);
+                        }
+                    }
+                }
+            })
+        })
+    };
+
+    // Drain stderr in a background thread (lines prefixed with `[stderr] `).
+    let mut err_thread: Option<std::thread::JoinHandle<()>> = {
+        let buf = Arc::clone(&stderr_bytes);
+        let lf = log_file.clone();
+        child_stderr.map(|stream| {
+            std::thread::spawn(move || {
+                let reader = BufReader::new(stream);
+                for line in reader.lines() {
+                    if let Ok(l) = line {
+                        {
+                            let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
+                            b.extend_from_slice(l.as_bytes());
+                            b.push(b'\n');
+                        }
+                        if let Some(ref f) = lf {
+                            let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
+                            let _ = writeln!(guard, "[stderr] {}", l);
+                        }
+                    }
+                }
+            })
+        })
+    };
+
     match timeout {
         Some(dur) => {
             let start = std::time::Instant::now();
             loop {
                 match child.try_wait() {
-                    Ok(Some(_status)) => {
-                        // Process exited — collect output
-                        let output = child.wait_with_output().map_err(|e| {
-                            OrchestratorError::Backend(format!(
-                                "failed to collect process output: {}",
-                                e
-                            ))
-                        })?;
-                        return Ok(output);
+                    Ok(Some(status)) => {
+                        // Process exited — drain any remaining pipe data then return.
+                        return Ok(collect_output(
+                            status,
+                            &mut out_thread,
+                            &mut err_thread,
+                            &stdout_bytes,
+                            &stderr_bytes,
+                        ));
                     }
                     Ok(None) => {
                         if start.elapsed() >= dur {
-                            // Timeout — kill the process
+                            // Timeout — kill the process; drain remaining output so the
+                            // log file is as complete as possible before returning error.
                             let _ = child.kill();
                             let _ = child.wait();
+                            if let Some(t) = out_thread.take() {
+                                let _ = t.join();
+                            }
+                            if let Some(t) = err_thread.take() {
+                                let _ = t.join();
+                            }
                             return Err(OrchestratorError::Timeout(format!(
                                 "process timed out after {}s",
                                 dur.as_secs()
@@ -146,6 +236,12 @@ pub fn wait_with_timeout(mut child: Child, timeout: Option<Duration>) -> Result<
                         std::thread::sleep(Duration::from_millis(100));
                     }
                     Err(e) => {
+                        if let Some(t) = out_thread.take() {
+                            let _ = t.join();
+                        }
+                        if let Some(t) = err_thread.take() {
+                            let _ = t.join();
+                        }
                         return Err(OrchestratorError::Backend(format!(
                             "error waiting for process: {}",
                             e
@@ -154,9 +250,49 @@ pub fn wait_with_timeout(mut child: Child, timeout: Option<Duration>) -> Result<
                 }
             }
         }
-        None => child
-            .wait_with_output()
-            .map_err(|e| OrchestratorError::Backend(format!("failed to wait for process: {}", e))),
+        None => {
+            // No timeout: block until the process exits, then drain remaining pipe data.
+            let status = child.wait().map_err(|e| {
+                OrchestratorError::Backend(format!("failed to wait for process: {}", e))
+            })?;
+            Ok(collect_output(
+                status,
+                &mut out_thread,
+                &mut err_thread,
+                &stdout_bytes,
+                &stderr_bytes,
+            ))
+        }
+    }
+}
+
+/// Join reader threads and build an `Output` from the collected bytes.
+///
+/// Called after the child process has exited (or been killed) so the reader
+/// threads will see EOF and terminate quickly.
+fn collect_output(
+    status: ExitStatus,
+    out_thread: &mut Option<std::thread::JoinHandle<()>>,
+    err_thread: &mut Option<std::thread::JoinHandle<()>>,
+    stdout_bytes: &Arc<Mutex<Vec<u8>>>,
+    stderr_bytes: &Arc<Mutex<Vec<u8>>>,
+) -> Output {
+    if let Some(t) = out_thread.take() {
+        let _ = t.join();
+    }
+    if let Some(t) = err_thread.take() {
+        let _ = t.join();
+    }
+    Output {
+        status,
+        stdout: stdout_bytes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        stderr: stderr_bytes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
     }
 }
 
@@ -443,7 +579,7 @@ mod tests {
     #[test]
     fn test_spawn_cli_echo() {
         let child = spawn_cli("echo", &["hello"], None, None).unwrap();
-        let output = wait_with_timeout(child, Some(Duration::from_secs(5))).unwrap();
+        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None).unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("hello"));
     }
@@ -451,9 +587,42 @@ mod tests {
     #[test]
     fn test_wait_with_timeout_expires() {
         let child = spawn_cli("sleep", &["60"], None, None).unwrap();
-        let result = wait_with_timeout(child, Some(Duration::from_millis(200)));
+        let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
+    }
+
+    #[test]
+    fn test_wait_with_timeout_logs_stdout_to_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("exec-test.log");
+        let child = spawn_cli("echo", &["hello from stdout"], None, None).unwrap();
+        let output =
+            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+        // Output bytes are still collected correctly.
+        assert!(String::from_utf8_lossy(&output.stdout).contains("hello from stdout"));
+        // Log file contains the line.
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(log.contains("hello from stdout"), "log was: {:?}", log);
+    }
+
+    #[test]
+    fn test_wait_with_timeout_logs_stderr_with_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("exec-stderr.log");
+        let child = spawn_cli("sh", &["-c", "echo 'error line' >&2"], None, None).unwrap();
+        let _ = wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+        let log = std::fs::read_to_string(&log_path).unwrap();
+        assert!(log.contains("[stderr] error line"), "log was: {:?}", log);
+    }
+
+    #[test]
+    fn test_wait_with_timeout_creates_log_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_path = dir.path().join("logs").join("nested").join("exec.log");
+        let child = spawn_cli("echo", &["hi"], None, None).unwrap();
+        let _ = wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+        assert!(log_path.exists(), "log file should have been created");
     }
 
     fn test_output(stdout: &str, stderr: &str) -> Output {

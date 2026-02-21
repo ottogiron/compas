@@ -9,6 +9,9 @@
 //!   ├─────────────────────────────────────┤
 //!   │  q: quit │ Tab: switch tab │ …      │  ← status bar (1 row)
 //!   └─────────────────────────────────────┘
+//!
+//! When `viewing_log` is `Some`, the log viewer occupies the full terminal area
+//! (tab bar and status bar are hidden for maximum vertical space).
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -25,6 +28,7 @@ use ratatui::{
 };
 use std::{
     io::{self, Stdout},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 use tokio::runtime::Handle;
@@ -32,10 +36,10 @@ use tokio::runtime::Handle;
 use crate::config::types::OrchestratorConfig;
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions;
+use crate::dashboard::views::log_viewer::{render_log_viewer, LogViewerState};
 use crate::dashboard::views::overview::render_overview;
 use crate::dashboard::views::threads::render_threads;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
-use std::path::PathBuf;
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -122,6 +126,14 @@ pub struct App {
     pub agents_data: Option<AgentsData>,
     /// Most recently fetched execution rows; `None` until the first poll on tab 3.
     pub executions_data: Option<ExecutionsData>,
+    /// Index of the highlighted row in the Threads tab.
+    pub threads_selected: usize,
+    /// Index of the highlighted row in the Executions tab.
+    pub executions_selected: usize,
+    /// Active log viewer state.  `Some` when the log viewer overlay is open.
+    pub viewing_log: Option<LogViewerState>,
+    /// Directory where execution log files are stored (`{state_dir}/logs/`).
+    pub log_dir: PathBuf,
     /// Tokio runtime handle — used to drive async store queries from the
     /// synchronous TUI thread via `Handle::block_on`.
     handle: Handle,
@@ -137,6 +149,7 @@ impl App {
         handle: Handle,
         poll_interval: Duration,
     ) -> Self {
+        let log_dir = config.log_dir();
         Self {
             active_tab: 0,
             should_quit: false,
@@ -148,6 +161,10 @@ impl App {
             threads_data: None,
             agents_data: None,
             executions_data: None,
+            threads_selected: 0,
+            executions_selected: 0,
+            viewing_log: None,
+            log_dir,
             handle,
             // Subtract the full interval so the very first tick triggers a refresh.
             last_refresh: Instant::now()
@@ -214,6 +231,13 @@ impl App {
                 .await
                 .unwrap_or_default()
         });
+
+        // Clamp the selection to the new row count.
+        if !threads.is_empty() {
+            self.threads_selected = self.threads_selected.min(threads.len() - 1);
+        } else {
+            self.threads_selected = 0;
+        }
 
         self.threads_data = Some(ThreadsData {
             threads,
@@ -283,10 +307,159 @@ impl App {
         let executions =
             handle.block_on(async { store.recent_executions(50).await.unwrap_or_default() });
 
+        // Clamp the selection to the new row count.
+        if !executions.is_empty() {
+            self.executions_selected = self.executions_selected.min(executions.len() - 1);
+        } else {
+            self.executions_selected = 0;
+        }
+
         self.executions_data = Some(ExecutionsData {
             executions,
             fetched_at: Instant::now(),
         });
+    }
+
+    // ── Row selection ─────────────────────────────────────────────────────────
+
+    /// Move the selection up by one row on the active list tab (1 or 3).
+    pub fn select_prev_row(&mut self) {
+        match self.active_tab {
+            1 => {
+                self.threads_selected = self.threads_selected.saturating_sub(1);
+            }
+            3 => {
+                self.executions_selected = self.executions_selected.saturating_sub(1);
+            }
+            _ => {}
+        }
+    }
+
+    /// Move the selection down by one row on the active list tab (1 or 3).
+    pub fn select_next_row(&mut self) {
+        match self.active_tab {
+            1 => {
+                let max = self
+                    .threads_data
+                    .as_ref()
+                    .map(|d| d.threads.len().saturating_sub(1))
+                    .unwrap_or(0);
+                self.threads_selected = (self.threads_selected + 1).min(max);
+            }
+            3 => {
+                let max = self
+                    .executions_data
+                    .as_ref()
+                    .map(|d| d.executions.len().saturating_sub(1))
+                    .unwrap_or(0);
+                self.executions_selected = (self.executions_selected + 1).min(max);
+            }
+            _ => {}
+        }
+    }
+
+    // ── Log viewer ────────────────────────────────────────────────────────────
+
+    /// Open the log viewer for the currently selected row on the active tab.
+    ///
+    /// For the Threads tab (tab 1): uses the latest execution attached to the
+    /// selected `ThreadStatusView`.
+    /// For the Executions tab (tab 3): uses the selected `ExecutionRow` directly.
+    /// Silently does nothing if there is no data or the selected row has no
+    /// execution information.
+    pub fn open_log_viewer(&mut self) {
+        match self.active_tab {
+            1 => self.open_log_viewer_from_thread(),
+            3 => self.open_log_viewer_from_execution(),
+            _ => {}
+        }
+    }
+
+    fn open_log_viewer_from_thread(&mut self) {
+        let Some(data) = &self.threads_data else {
+            return;
+        };
+        let Some(row) = data.threads.get(self.threads_selected) else {
+            return;
+        };
+
+        // Use the latest execution attached to this thread, if any.
+        let exec_id = match &row.execution_id {
+            Some(id) if !id.is_empty() => id.clone(),
+            _ => return, // no execution yet — nothing to show
+        };
+        let agent_alias = row.agent_alias.clone().unwrap_or_else(|| "-".to_string());
+        let status = row
+            .execution_status
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let duration_ms = row.duration_ms;
+
+        // Build fallback content by fetching thread messages (newest last).
+        let thread_id = row.thread_id.clone();
+        let fallback = self.fetch_message_fallback(&thread_id);
+
+        let log_path = self.log_dir.join(format!("{}.log", exec_id));
+        self.viewing_log = Some(LogViewerState::new(
+            exec_id,
+            agent_alias,
+            status,
+            duration_ms,
+            Some(log_path),
+            fallback,
+        ));
+    }
+
+    fn open_log_viewer_from_execution(&mut self) {
+        let Some(data) = &self.executions_data else {
+            return;
+        };
+        let Some(row) = data.executions.get(self.executions_selected) else {
+            return;
+        };
+
+        let exec_id = row.id.clone();
+        let agent_alias = row.agent_alias.clone();
+        let status = row.status.clone();
+        let duration_ms = row.duration_ms;
+        let output_preview = row.output_preview.clone();
+        let thread_id = row.thread_id.clone();
+
+        // Use output_preview as primary fallback; fall through to message body
+        // if it is empty.
+        let fallback = if output_preview.as_deref().unwrap_or("").is_empty() {
+            self.fetch_message_fallback(&thread_id)
+        } else {
+            output_preview
+        };
+
+        let log_path = self.log_dir.join(format!("{}.log", exec_id));
+        self.viewing_log = Some(LogViewerState::new(
+            exec_id,
+            agent_alias,
+            status,
+            duration_ms,
+            Some(log_path),
+            fallback,
+        ));
+    }
+
+    /// Fetch the body of the last message on `thread_id` as a fallback string.
+    ///
+    /// Uses `Handle::block_on`.  Returns `None` on any error.
+    fn fetch_message_fallback(&self, thread_id: &str) -> Option<String> {
+        let store = &self.store;
+        let handle = &self.handle;
+        let tid = thread_id.to_string();
+        handle.block_on(async {
+            let messages = store.get_thread_messages(&tid).await.ok()?;
+            messages.into_iter().last().map(|m| m.body)
+        })
+    }
+
+    /// Close the log viewer and return to the list view.
+    pub fn close_log_viewer(&mut self) {
+        self.viewing_log = None;
     }
 }
 
@@ -344,44 +517,56 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
     loop {
         let interval = app.poll_interval;
 
-        // Refresh Overview metrics if the polling interval has elapsed.
-        if app.last_refresh.elapsed() >= interval {
-            app.refresh_overview();
-        }
-
-        // Refresh Threads tab data when it is active and stale.
-        if app.active_tab == 1 {
-            let is_stale = app
-                .threads_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
-            if is_stale {
-                app.refresh_threads();
+        // ── Log viewer polling ────────────────────────────────────────────────
+        // If a running execution's log viewer is open, poll on every tick for
+        // new file content (TICK_RATE ≈ 250 ms, close to the 200 ms target).
+        if let Some(ref mut viewer) = app.viewing_log {
+            if viewer.is_running() {
+                viewer.poll_log_file();
             }
         }
 
-        // Refresh Agents tab data when it is active and stale.
-        if app.active_tab == 2 {
-            let is_stale = app
-                .agents_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
-            if is_stale {
-                app.refresh_agents();
+        // ── Background data refreshes (only when log viewer is closed) ────────
+        if app.viewing_log.is_none() {
+            // Refresh Overview metrics if the polling interval has elapsed.
+            if app.last_refresh.elapsed() >= interval {
+                app.refresh_overview();
             }
-        }
 
-        // Refresh Executions tab data when it is active and stale.
-        if app.active_tab == 3 {
-            let is_stale = app
-                .executions_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
-            if is_stale {
-                app.refresh_executions();
+            // Refresh Threads tab data when it is active and stale.
+            if app.active_tab == 1 {
+                let is_stale = app
+                    .threads_data
+                    .as_ref()
+                    .map(|d| d.fetched_at.elapsed() >= interval)
+                    .unwrap_or(true);
+                if is_stale {
+                    app.refresh_threads();
+                }
+            }
+
+            // Refresh Agents tab data when it is active and stale.
+            if app.active_tab == 2 {
+                let is_stale = app
+                    .agents_data
+                    .as_ref()
+                    .map(|d| d.fetched_at.elapsed() >= interval)
+                    .unwrap_or(true);
+                if is_stale {
+                    app.refresh_agents();
+                }
+            }
+
+            // Refresh Executions tab data when it is active and stale.
+            if app.active_tab == 3 {
+                let is_stale = app
+                    .executions_data
+                    .as_ref()
+                    .map(|d| d.fetched_at.elapsed() >= interval)
+                    .unwrap_or(true);
+                if is_stale {
+                    app.refresh_executions();
+                }
             }
         }
 
@@ -390,27 +575,13 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
         // Poll with a tick timeout so the loop stays responsive to resizes.
         if event::poll(TICK_RATE)? {
             match event::read()? {
-                Event::Key(key) => match key.code {
-                    KeyCode::Char('q') => app.should_quit = true,
-                    // Manual refresh — refreshes whichever tab is currently active.
-                    KeyCode::Char('r') => match app.active_tab {
-                        0 => app.refresh_overview(),
-                        1 => app.refresh_threads(),
-                        2 => app.refresh_agents(),
-                        3 => app.refresh_executions(),
-                        _ => {} // Settings tab has no data to refresh
-                    },
-                    // Number keys jump directly to a tab (1-5 → index 0-4).
-                    KeyCode::Char('1') => app.active_tab = 0,
-                    KeyCode::Char('2') => app.active_tab = 1,
-                    KeyCode::Char('3') => app.active_tab = 2,
-                    KeyCode::Char('4') => app.active_tab = 3,
-                    KeyCode::Char('5') => app.active_tab = 4,
-                    KeyCode::Tab => app.next_tab(),
-                    // Shift+Tab — crossterm reports this as BackTab.
-                    KeyCode::BackTab => app.prev_tab(),
-                    _ => {}
-                },
+                Event::Key(key) => {
+                    if app.viewing_log.is_some() {
+                        handle_log_viewer_key(app, key.code);
+                    } else {
+                        handle_list_key(app, key.code);
+                    }
+                }
                 // Resize is handled automatically by ratatui on the next draw.
                 Event::Resize(_, _) => {}
                 _ => {}
@@ -424,9 +595,92 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
     Ok(())
 }
 
+/// Handle a key event when the log viewer is open.
+fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.close_log_viewer();
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_up(1);
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_down(1);
+            }
+        }
+        KeyCode::PageUp => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                let page = viewer.visible_rows.max(1);
+                viewer.scroll_up(page);
+            }
+        }
+        KeyCode::PageDown => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                let page = viewer.visible_rows.max(1);
+                viewer.scroll_down(page);
+            }
+        }
+        KeyCode::Char('g') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_to_top();
+            }
+        }
+        KeyCode::Char('G') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_to_bottom();
+            }
+        }
+        KeyCode::Char('f') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.toggle_follow();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle a key event when the normal list/tab view is active.
+fn handle_list_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('q') => app.should_quit = true,
+        // Manual refresh.
+        KeyCode::Char('r') => match app.active_tab {
+            0 => app.refresh_overview(),
+            1 => app.refresh_threads(),
+            2 => app.refresh_agents(),
+            3 => app.refresh_executions(),
+            _ => {}
+        },
+        // Number keys jump directly to a tab (1-5 → index 0-4).
+        KeyCode::Char('1') => app.active_tab = 0,
+        KeyCode::Char('2') => app.active_tab = 1,
+        KeyCode::Char('3') => app.active_tab = 2,
+        KeyCode::Char('4') => app.active_tab = 3,
+        KeyCode::Char('5') => app.active_tab = 4,
+        KeyCode::Tab => app.next_tab(),
+        // Shift+Tab — crossterm reports this as BackTab.
+        KeyCode::BackTab => app.prev_tab(),
+        // Row navigation (Threads and Executions tabs only).
+        KeyCode::Up | KeyCode::Char('k') => app.select_prev_row(),
+        KeyCode::Down | KeyCode::Char('j') => app.select_next_row(),
+        // Open log viewer for the selected row.
+        KeyCode::Enter => app.open_log_viewer(),
+        _ => {}
+    }
+}
+
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
-fn draw(f: &mut Frame, app: &App) {
+fn draw(f: &mut Frame, app: &mut App) {
+    // When the log viewer is open, render it full-screen for maximum space.
+    if let Some(ref mut viewer) = app.viewing_log {
+        render_log_viewer(f, viewer, f.area());
+        return;
+    }
+
     let area = f.area();
 
     // Vertical split: tab bar | content | status bar.
@@ -525,6 +779,11 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             label("Agents:       "),
             value(format!(" {}", app.config.agents.len())),
         ]),
+        Line::from(vec![
+            Span::raw("  "),
+            label("Log dir:      "),
+            value(format!(" {}", app.log_dir.display())),
+        ]),
     ];
 
     let p = Paragraph::new(lines).block(block);
@@ -558,6 +817,12 @@ fn render_status_bar(f: &mut Frame, area: ratatui::layout::Rect) {
         sep(),
         key("r"),
         Span::raw(": refresh"),
+        sep(),
+        key("↑/↓"),
+        Span::raw(": select"),
+        sep(),
+        key("Enter"),
+        Span::raw(": log"),
         Span::raw(" "),
     ]))
     .style(Style::default().bg(Color::DarkGray).fg(Color::White));

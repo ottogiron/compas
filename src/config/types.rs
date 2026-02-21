@@ -24,8 +24,6 @@ pub struct OrchestratorConfig {
     /// Telegram notification settings (flattened from NotificationConfig).
     #[serde(default)]
     pub telegram: Option<TelegramConfig>,
-    #[serde(default)]
-    pub audit_log_path: Option<PathBuf>,
 }
 
 impl OrchestratorConfig {
@@ -40,6 +38,11 @@ impl OrchestratorConfig {
                     .count()
                     .max(1)
             })
+    }
+
+    /// Directory where per-execution log files are written: `{state_dir}/logs/`.
+    pub fn log_dir(&self) -> std::path::PathBuf {
+        self.state_dir.join("logs")
     }
 }
 
@@ -89,8 +92,6 @@ fn default_db_acquire_timeout_ms() -> u64 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationConfig {
-    #[serde(default)]
-    pub auto_trigger_enabled: bool,
     #[serde(default = "default_trigger_intents")]
     pub trigger_intents: Vec<String>,
     #[serde(default = "default_max_output_capture_bytes")]
@@ -119,23 +120,11 @@ pub struct OrchestrationConfig {
     /// Oldest files (by ULID-sorted name) are pruned on worker startup.
     #[serde(default = "default_log_retention_count")]
     pub log_retention_count: usize,
-    // -- Daemon fields (flattened from DaemonConfig) --
-    #[serde(default = "default_daemon_required")]
-    pub daemon_required: bool,
-    #[serde(default = "default_daemon_auto_start")]
-    pub daemon_auto_start: bool,
-    /// Staleness threshold in seconds.
-    #[serde(default)]
-    pub daemon_staleness_threshold_secs: u64,
-    /// Path to daemon log file.
-    #[serde(default)]
-    pub daemon_log_file_path: Option<PathBuf>,
 }
 
 impl Default for OrchestrationConfig {
     fn default() -> Self {
         Self {
-            auto_trigger_enabled: false,
             trigger_intents: default_trigger_intents(),
             max_output_capture_bytes: default_max_output_capture_bytes(),
             execution_timeout_secs: default_execution_timeout_secs(),
@@ -145,10 +134,6 @@ impl Default for OrchestrationConfig {
             task_history_retention: default_task_history_retention(),
             ping_timeout_secs: default_ping_timeout_secs(),
             log_retention_count: default_log_retention_count(),
-            daemon_required: default_daemon_required(),
-            daemon_auto_start: default_daemon_auto_start(),
-            daemon_staleness_threshold_secs: 0,
-            daemon_log_file_path: None,
         }
     }
 }
@@ -185,17 +170,9 @@ fn default_execution_timeout_secs() -> u64 {
     30
 }
 
-fn default_daemon_required() -> bool {
-    true
-}
-
-fn default_daemon_auto_start() -> bool {
-    true
-}
-
-/// Agent role determines daemon behavior.
-/// - `Worker`: daemon-triggered on matching intents (default).
-/// - `Operator`: coordinator driven via MCP tools, never daemon-triggered.
+/// Agent role determines worker behavior.
+/// - `Worker`: triggered on matching intents (default).
+/// - `Operator`: coordinator driven via MCP tools, never triggered.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentRole {
@@ -316,10 +293,6 @@ impl AgentConfig {
 fn default_max_message_body_bytes() -> usize {
     1_048_576 // 1MB
 }
-
-/// Hardcoded audit log rotation constants.
-pub const AUDIT_MAX_FILE_BYTES: usize = 10_485_760; // 10MB
-pub const AUDIT_MAX_ARCHIVE_FILES: usize = 10;
 
 /// Telegram notification configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]

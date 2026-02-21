@@ -111,7 +111,7 @@ impl Backend for OpenCodeBackend {
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
-        let output = wait_with_timeout(child, Some(timeout));
+        let output = wait_with_timeout(child, Some(timeout), agent.log_path.as_deref());
         self.tracker.untrack(&session.id);
 
         match output {
@@ -140,7 +140,7 @@ impl Backend for OpenCodeBackend {
         match spawn_cli("opencode", &arg_refs, agent.env.as_ref(), None) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout)) {
+                match wait_with_timeout(child, Some(timeout), None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {
@@ -197,6 +197,7 @@ mod tests {
             timeout_secs: Some(120),
             backend_args: None,
             env: None,
+            log_path: None,
         }
     }
 

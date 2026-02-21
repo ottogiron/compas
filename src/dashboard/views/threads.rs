@@ -12,6 +12,8 @@
 //! Batch IDs are truncated to 8 characters.
 //! Age is derived from `thread_updated_at` (unix seconds).
 //! Status is colour-coded using the shared `status_color` helper.
+//! The selected row (controlled by `app.threads_selected`) is highlighted.
+//! Press Enter to open the log viewer for that thread's latest execution.
 
 use ratatui::{
     layout::{Constraint, Rect},
@@ -29,7 +31,26 @@ use crate::dashboard::views::{format_duration_secs, humanize_thread_status, thre
 
 /// Render the Threads tab into `area`.
 pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Threads ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Threads ")
+        .title_bottom(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "↑/↓",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": select  "),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": view log "),
+        ]));
 
     // ── No data yet ──────────────────────────────────────────────────────────
     let Some(data) = &app.threads_data else {
@@ -58,6 +79,8 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
+
+    let selected = app.threads_selected;
 
     let header = Row::new([
         Cell::from("Thread ID").style(
@@ -92,7 +115,10 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<Row> = data
         .threads
         .iter()
-        .map(|t| {
+        .enumerate()
+        .map(|(idx, t)| {
+            let is_selected = idx == selected;
+
             // Thread ID — first 12 chars with ellipsis when truncated.
             let thread_id: String = if t.thread_id.len() > 12 {
                 format!("{}…", &t.thread_id[..12])
@@ -124,6 +150,14 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
             let age_secs = (now_unix - t.thread_updated_at).max(0) as u64;
             let age = format_duration_secs(age_secs as i64);
 
+            let row_style = if is_selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
             Row::new(vec![
                 Cell::from(thread_id),
                 status_cell,
@@ -131,6 +165,7 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(batch),
                 Cell::from(age),
             ])
+            .style(row_style)
         })
         .collect();
 

@@ -122,7 +122,6 @@ fn test_config() -> OrchestratorConfig {
         orchestration: OrchestrationConfig::default(),
         database: DatabaseConfig::default(),
         telegram: None,
-        audit_log_path: None,
     }
 }
 

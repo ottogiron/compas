@@ -74,6 +74,7 @@ impl OrchestratorMcpServer {
                 timeout_secs: agent_cfg.timeout_secs,
                 backend_args: agent_cfg.backend_args.clone(),
                 env: agent_cfg.env.clone(),
+                log_path: None,
             };
 
             let ping = match self.backend_registry.get(agent_cfg) {

@@ -14,6 +14,8 @@
 //! Error detail is truncated to 40 characters.
 //! Status is colour-coded (green/red/yellow/cyan).
 //! Up to 50 rows are shown, sorted newest first by `queued_at`.
+//! The selected row (controlled by `app.executions_selected`) is highlighted.
+//! Press Enter to open the log viewer for that execution.
 
 use ratatui::{
     layout::{Constraint, Rect},
@@ -30,7 +32,26 @@ use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_ex
 
 /// Render the Executions tab into `area`.
 pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Executions ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Executions ")
+        .title_bottom(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "↑/↓",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": select  "),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": view log "),
+        ]));
 
     // ── No data yet ──────────────────────────────────────────────────────────
     let Some(data) = &app.executions_data else {
@@ -55,6 +76,8 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // ── Build table ───────────────────────────────────────────────────────────
+    let selected = app.executions_selected;
+
     let header = Row::new([
         Cell::from("Agent").style(
             Style::default()
@@ -93,7 +116,10 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<Row> = data
         .executions
         .iter()
-        .map(|e| {
+        .enumerate()
+        .map(|(idx, e)| {
+            let is_selected = idx == selected;
+
             // Agent alias.
             let agent = e.agent_alias.clone();
 
@@ -128,6 +154,14 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 .map(|s| truncate(s, 40))
                 .unwrap_or_else(|| "-".to_string());
 
+            let row_style = if is_selected {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
             Row::new(vec![
                 Cell::from(agent),
                 Cell::from(thread_id),
@@ -136,6 +170,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(exit_code),
                 Cell::from(error_preview),
             ])
+            .style(row_style)
         })
         .collect();
 

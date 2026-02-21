@@ -168,7 +168,6 @@ state_dir: ~/.aster/orch
 db_path: ~/.aster/orch/jobs.sqlite
 poll_interval_secs: 1
 orchestration:
-  auto_trigger_enabled: true
   trigger_intents: [dispatch, handoff, changes-requested]
   execution_timeout_secs: 300
   max_concurrent_triggers: 10

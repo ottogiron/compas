@@ -10,6 +10,7 @@
 //! 3. Writes periodic heartbeats
 //! 4. Inserts reply messages from completed triggers
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -66,6 +67,13 @@ impl WorkerRunner {
             tracing::warn!(count = crashed, "marked orphaned executions as crashed");
         }
 
+        // Create log directory and prune old log files on startup.
+        let log_dir = self.config.log_dir();
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            tracing::warn!(path = %log_dir.display(), error = %e, "failed to create log dir");
+        }
+        prune_log_files(&log_dir, self.config.orchestration.log_retention_count);
+
         // Initial heartbeat
         self.store
             .write_heartbeat(&self.worker_id, env!("CARGO_PKG_VERSION"))
@@ -121,6 +129,8 @@ impl WorkerRunner {
                     let store = self.store.clone();
                     let backend_registry = self.backend_registry.clone();
                     let agent_configs = self.config.agents.clone();
+                    let execution_timeout_secs = self.config.orchestration.execution_timeout_secs;
+                    let log_dir = Some(self.config.log_dir());
                     let thread_id = execution.thread_id.clone();
 
                     tokio::spawn(async move {
@@ -148,6 +158,8 @@ impl WorkerRunner {
                             &backend_registry,
                             &agent_configs,
                             &instruction,
+                            execution_timeout_secs,
+                            log_dir,
                         )
                         .await;
 
@@ -165,6 +177,39 @@ impl WorkerRunner {
                 }
             }
         }
+    }
+}
+
+/// Prune old execution log files, keeping only the `retention_count` most recent.
+///
+/// Files are sorted by name (ULID exec IDs sort chronologically), so the oldest
+/// files appear first and are removed first.
+fn prune_log_files(log_dir: &Path, retention_count: usize) {
+    let Ok(entries) = std::fs::read_dir(log_dir) else {
+        return;
+    };
+    let mut files: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().map_or(false, |ext| ext == "log"))
+        .map(|e| e.path())
+        .collect();
+
+    files.sort();
+
+    if files.len() > retention_count {
+        let to_remove = files.len() - retention_count;
+        for path in files.iter().take(to_remove) {
+            if let Err(e) = std::fs::remove_file(path) {
+                tracing::warn!(path = %path.display(), error = %e, "failed to prune log file");
+            } else {
+                tracing::debug!(path = %path.display(), "pruned old log file");
+            }
+        }
+        tracing::info!(
+            removed = to_remove,
+            retained = retention_count,
+            "pruned execution logs"
+        );
     }
 }
 

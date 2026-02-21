@@ -3,6 +3,7 @@
 //! Wraps the blocking CLI subprocess execution so it doesn't starve the
 //! tokio runtime. Captures output, exit code, and duration.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -31,12 +32,17 @@ pub struct TriggerOutput {
 /// 2. Runs the backend trigger via `spawn_blocking`
 /// 3. Updates execution with result (completed/failed)
 /// 4. Returns the trigger output for downstream processing
+///
+/// `log_dir`: when `Some`, stdout/stderr are streamed to
+/// `{log_dir}/{exec_id}.log` during execution.
 pub async fn execute_trigger(
     execution: &ExecutionRow,
     store: &Store,
     backend_registry: &Arc<BackendRegistry>,
     agent_configs: &[AgentConfig],
     instruction: &str,
+    execution_timeout_secs: u64,
+    log_dir: Option<PathBuf>,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
     let thread_id = execution.thread_id.clone();
@@ -101,7 +107,11 @@ pub async fn execute_trigger(
         }
     };
 
-    // Build Agent from AgentConfig
+    // Build Agent from AgentConfig.
+    // Set log_path so backends can stream output to the per-execution log file.
+    let log_path = log_dir
+        .as_ref()
+        .map(|dir| dir.join(format!("{}.log", exec_id)));
     let agent = Agent {
         alias: agent_config.alias.clone(),
         identity: agent_config.identity.clone(),
@@ -109,9 +119,10 @@ pub async fn execute_trigger(
         model: agent_config.model.clone(),
         prompt: agent_config.prompt.clone(),
         prompt_file: agent_config.prompt_file.clone(),
-        timeout_secs: agent_config.timeout_secs,
+        timeout_secs: agent_config.timeout_secs.or(Some(execution_timeout_secs)),
         backend_args: agent_config.backend_args.clone(),
         env: agent_config.env.clone(),
+        log_path,
     };
 
     // Start a session then trigger — all inside spawn_blocking
