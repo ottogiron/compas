@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dashboard::app::{ActivityData, App};
-use crate::dashboard::views::payload::format_payload_lines;
 use crate::dashboard::views::{
     exec_status_color, format_duration_ms, format_duration_secs, humanize_exec_status,
     humanize_thread_status, thread_status_color,
@@ -44,6 +43,7 @@ struct BatchProgress {
 struct ClassifiedRows {
     needs_attention: Vec<usize>,
     running: Vec<usize>,
+    uncategorized: Vec<usize>,
     recently_completed: Vec<usize>,
     batches: Vec<BatchProgress>,
 }
@@ -89,6 +89,8 @@ fn classify_rows(rows: &[ThreadStatusView], drill_batch: Option<&str>) -> Classi
             out.running.push(*idx);
         } else if is_recently_completed(row) && out.recently_completed.len() < 8 {
             out.recently_completed.push(*idx);
+        } else {
+            out.uncategorized.push(*idx);
         }
     }
 
@@ -187,6 +189,15 @@ pub fn ops_selectable_targets(
             .copied()
             .map(OpsSelectable::Thread),
     );
+    if drill_batch.is_some() {
+        out.extend(
+            classified
+                .uncategorized
+                .iter()
+                .copied()
+                .map(OpsSelectable::Thread),
+        );
+    }
     out.extend(
         classified
             .batches
@@ -368,6 +379,29 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
         }
     }
 
+    if app.drill_batch.is_some() {
+        lines.push(Line::from(Span::raw("")));
+        push_section_header(
+            &mut lines,
+            "Other",
+            classified.uncategorized.len(),
+            Color::DarkGray,
+        );
+        if classified.uncategorized.is_empty() {
+            lines.push(empty_line("  none"));
+        } else {
+            for src_idx in &classified.uncategorized {
+                let Some(row) = data.rows.get(*src_idx) else {
+                    continue;
+                };
+                let is_selected = selectable_slot == app.activity_selected;
+                sel_to_line.push(lines.len());
+                lines.push(make_thread_line(row, is_selected, now_unix));
+                selectable_slot += 1;
+            }
+        }
+    }
+
     if app.drill_batch.is_none() {
         lines.push(Line::from(Span::raw("")));
         push_section_header(&mut lines, "Batches", classified.batches.len(), Color::Cyan);
@@ -486,39 +520,6 @@ fn render_context_panel(f: &mut Frame, app: &App, data: &ActivityData, area: Rec
                     "requires terminal status",
                 ));
                 lines.push(action_line("action menu", "a", true, ""));
-                lines.push(Line::from(Span::raw("")));
-
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!(
-                            "Payload [{}]",
-                            if app.pretty_payload { "pretty" } else { "raw" }
-                        ),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw("  "),
-                    Span::styled(
-                        "J",
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(": toggle"),
-                ]));
-
-                let payload = row
-                    .error_detail
-                    .as_deref()
-                    .or(row.parsed_intent.as_deref())
-                    .unwrap_or("-");
-                for formatted in format_payload_lines(payload, app.pretty_payload, 12) {
-                    lines.push(Line::from(vec![
-                        Span::raw("  "),
-                        Span::styled(formatted, Style::default().fg(Color::White)),
-                    ]));
-                }
             }
         }
         Some(OpsSelectable::Batch(batch_id)) => {
@@ -957,6 +958,22 @@ mod tests {
         let targets = ops_selectable_targets(&rows, Some("b1"));
         assert!(!targets.iter().any(|t| matches!(t, OpsSelectable::Batch(_))));
         assert_eq!(targets.len(), 1);
+    }
+
+    #[test]
+    fn test_ops_selectable_targets_drill_includes_uncategorized_threads() {
+        let rows = vec![
+            // completed thread
+            make_row("t1", Some("b1"), "Completed", Some("completed")),
+            // active thread with no running/failed/review status
+            make_row("t2", Some("b1"), "Active", None),
+        ];
+
+        let targets = ops_selectable_targets(&rows, Some("b1"));
+        assert_eq!(targets.len(), 2);
+        assert!(targets
+            .iter()
+            .all(|t| matches!(t, OpsSelectable::Thread(_))));
     }
 
     #[test]

@@ -115,7 +115,6 @@ Dashboard controls:
 - `Esc`: back out of active batch drill filter
 - `a`: open guided action menu for selected thread
 - `b` / `o`: quick aliases for abandon/reopen (still opens guided confirm)
-- `J`: toggle payload rendering in Ops context pane (pretty JSON is default)
 - `?`: open keyboard help overlay
 - `q` or `Ctrl+C`: exit dashboard
 

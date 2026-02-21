@@ -176,8 +176,6 @@ pub struct App {
     admin_notice: Option<String>,
     /// Optional batch drill filter for Ops tab.
     pub drill_batch: Option<String>,
-    /// Toggle pretty JSON formatting for details panes.
-    pub pretty_payload: bool,
     /// One-time onboarding hint banner.
     show_hint_banner: bool,
     /// Directory where execution log files are stored (`{state_dir}/logs/`).
@@ -214,7 +212,6 @@ impl App {
             pending_admin_action: None,
             admin_notice: None,
             drill_batch: None,
-            pretty_payload: true,
             show_hint_banner: true,
             log_dir,
             handle,
@@ -713,10 +710,6 @@ impl App {
         self.show_help = !self.show_help;
     }
 
-    fn toggle_pretty_payload(&mut self) {
-        self.pretty_payload = !self.pretty_payload;
-    }
-
     fn clear_batch_drill(&mut self) {
         if self.drill_batch.is_some() {
             self.drill_batch = None;
@@ -1028,8 +1021,6 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('g') => app.select_first_row(),
         KeyCode::Char('G') => app.select_last_row(),
         KeyCode::Esc => app.clear_batch_drill(),
-        // Context toggles.
-        KeyCode::Char('J') => app.toggle_pretty_payload(),
         KeyCode::Char('x') => app.clear_batch_drill(),
         // Guided admin menu.
         KeyCode::Char('a') => app.open_action_menu(),
@@ -1214,9 +1205,6 @@ fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         spans.push(sep());
         spans.push(key("Esc"));
         spans.push(Span::raw(": back batch"));
-        spans.push(sep());
-        spans.push(key("J"));
-        spans.push(Span::raw(": payload"));
     }
 
     if let Some(msg) = &app.admin_notice {
@@ -1376,7 +1364,7 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from(" Ops"),
         Line::from("   Enter open log or drill batch"),
         Line::from("   a action menu   b/o quick action aliases"),
-        Line::from("   Esc back from batch drill   J toggle payload pretty mode"),
+        Line::from("   Esc back from batch drill"),
         Line::from(" Log Viewer"),
         Line::from("   Esc back   g/G top/bottom   f follow   J JSON pretty"),
         Line::from(""),
