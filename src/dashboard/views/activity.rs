@@ -22,6 +22,8 @@ use crate::dashboard::views::{
 };
 use crate::store::ThreadStatusView;
 
+const RECENTLY_COMPLETED_LIMIT: usize = 12;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsSelectable {
     Thread(usize),
@@ -123,6 +125,11 @@ fn classify_rows(
     }
 
     out
+}
+
+fn capped_recently_completed(indices: &[usize]) -> &[usize] {
+    let end = indices.len().min(RECENTLY_COMPLETED_LIMIT);
+    &indices[..end]
 }
 
 fn sort_indices_by_updated(rows: &[ThreadStatusView], indices: &mut [usize]) {
@@ -249,8 +256,7 @@ pub fn ops_selectable_targets(
         );
     }
     out.extend(
-        classified
-            .recently_completed
+        capped_recently_completed(&classified.recently_completed)
             .iter()
             .copied()
             .map(OpsSelectable::Thread),
@@ -450,17 +456,20 @@ fn render_ops_list(
         now_unix,
         stale_after_secs,
     );
-    let recent_cap = (list_area.height as usize / 3).max(8);
-    let recent_indices: Vec<usize> = classified
-        .recently_completed
-        .iter()
-        .copied()
-        .take(recent_cap)
-        .collect();
+    let recent_indices = capped_recently_completed(&classified.recently_completed);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut sel_to_line: Vec<usize> = Vec::new();
     let mut selectable_slot = 0usize;
+    let selected_slot = app.activity_selected.min(
+        ops_selectable_count(
+            &data.rows,
+            app.drill_batch.as_deref(),
+            now_unix,
+            stale_after_secs,
+        )
+        .saturating_sub(1),
+    );
 
     if let Some(batch) = app.drill_batch.as_deref() {
         lines.push(Line::from(vec![
@@ -503,7 +512,7 @@ fn render_ops_list(
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
-            let is_selected = selectable_slot == app.activity_selected;
+            let is_selected = selectable_slot == selected_slot;
             sel_to_line.push(lines.len());
             lines.push(make_thread_line(row, is_selected, now_unix));
             selectable_slot += 1;
@@ -522,7 +531,7 @@ fn render_ops_list(
             lines.push(empty_line("  none"));
         } else {
             for batch in &classified.active_batches {
-                let is_selected = selectable_slot == app.activity_selected;
+                let is_selected = selectable_slot == selected_slot;
                 sel_to_line.push(lines.len());
                 lines.push(make_batch_line(
                     batch,
@@ -550,7 +559,7 @@ fn render_ops_list(
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
-            let is_selected = selectable_slot == app.activity_selected;
+            let is_selected = selectable_slot == selected_slot;
             sel_to_line.push(lines.len());
             lines.push(make_thread_line(row, is_selected, now_unix));
             selectable_slot += 1;
@@ -572,7 +581,7 @@ fn render_ops_list(
                 let Some(row) = data.rows.get(*src_idx) else {
                     continue;
                 };
-                let is_selected = selectable_slot == app.activity_selected;
+                let is_selected = selectable_slot == selected_slot;
                 sel_to_line.push(lines.len());
                 lines.push(make_thread_line(row, is_selected, now_unix));
                 selectable_slot += 1;
@@ -587,7 +596,7 @@ fn render_ops_list(
             lines.push(empty_line("  none"));
         } else {
             for batch in &classified.batches {
-                let is_selected = selectable_slot == app.activity_selected;
+                let is_selected = selectable_slot == selected_slot;
                 sel_to_line.push(lines.len());
                 lines.push(make_batch_line(
                     batch,
@@ -611,11 +620,11 @@ fn render_ops_list(
     if recent_indices.is_empty() {
         lines.push(empty_line("  none"));
     } else {
-        for src_idx in &recent_indices {
+        for src_idx in recent_indices {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
-            let is_selected = selectable_slot == app.activity_selected;
+            let is_selected = selectable_slot == selected_slot;
             sel_to_line.push(lines.len());
             lines.push(make_thread_line(row, is_selected, now_unix));
             selectable_slot += 1;
@@ -623,7 +632,7 @@ fn render_ops_list(
     }
 
     let visible_height = list_area.height as usize;
-    let selected_display_idx = sel_to_line.get(app.activity_selected).copied().unwrap_or(0);
+    let selected_display_idx = sel_to_line.get(selected_slot).copied().unwrap_or(0);
     let scroll = compute_scroll(selected_display_idx, visible_height, lines.len());
 
     let visible: Vec<Line<'static>> = lines
@@ -666,10 +675,19 @@ fn render_context_panel(
     )
     .len();
 
+    let selected_idx = ops_selectable_count(
+        &data.rows,
+        app.drill_batch.as_deref(),
+        now_unix,
+        stale_after_secs,
+    )
+    .saturating_sub(1)
+    .min(app.activity_selected);
+
     let selected = ops_selected_target(
         &data.rows,
         app.drill_batch.as_deref(),
-        app.activity_selected,
+        selected_idx,
         now_unix,
         stale_after_secs,
     );
@@ -1207,6 +1225,40 @@ mod tests {
         ];
         let ids = stale_active_thread_ids(&rows, Some("b1"), 1000, 300);
         assert_eq!(ids, vec!["stale".to_string()]);
+    }
+
+    #[test]
+    fn test_ops_selectable_targets_caps_recently_completed() {
+        let mut rows = Vec::new();
+        for i in 0..(RECENTLY_COMPLETED_LIMIT + 5) {
+            rows.push(make_row(
+                &format!("t{i}"),
+                Some("b1"),
+                "Completed",
+                Some("completed"),
+                i as i64,
+            ));
+        }
+
+        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let recent_threads = targets
+            .into_iter()
+            .filter(|t| matches!(t, OpsSelectable::Thread(_)))
+            .count();
+        assert_eq!(recent_threads, RECENTLY_COMPLETED_LIMIT);
+    }
+
+    #[test]
+    fn test_ops_selectable_count_matches_targets_len() {
+        let rows = vec![
+            make_row("running", Some("b1"), "Active", Some("executing"), 10),
+            make_row("active", Some("b1"), "Active", None, 9),
+            make_row("done", Some("b1"), "Completed", Some("completed"), 8),
+        ];
+
+        let count = ops_selectable_count(&rows, None, 100, 3600);
+        let targets_len = ops_selectable_targets(&rows, None, 100, 3600).len();
+        assert_eq!(count, targets_len);
     }
 
     #[test]
