@@ -52,6 +52,9 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(": view log "),
+            Span::raw("  "),
+            Span::styled("L/U", Style::default().fg(Color::Cyan)),
+            Span::raw(": linked/unlinked"),
         ]));
 
     // ── No data yet ──────────────────────────────────────────────────────────
@@ -121,10 +124,24 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     .height(1)
     .bottom_margin(1);
 
+    let visible_rows = area.height.saturating_sub(4) as usize;
+    let total = data.executions.len();
+    let scroll = if total <= visible_rows || visible_rows == 0 {
+        0
+    } else if selected < visible_rows / 2 {
+        0
+    } else if selected + visible_rows > total {
+        total - visible_rows
+    } else {
+        selected - (visible_rows / 2)
+    };
+
     let rows: Vec<Row> = data
         .executions
         .iter()
         .enumerate()
+        .skip(scroll)
+        .take(visible_rows.max(1))
         .map(|(idx, e)| {
             let is_selected = idx == selected;
 

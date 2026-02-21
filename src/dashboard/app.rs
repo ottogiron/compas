@@ -170,6 +170,8 @@ pub struct App {
     pub activity_selected: usize,
     /// Most recently fetched Agents metrics; `None` until the first poll on tab 1.
     pub agents_data: Option<AgentsData>,
+    /// Index of the highlighted card in the Agents tab.
+    pub agents_selected: usize,
     /// Most recently fetched execution rows; `None` until the first poll on tab 2.
     pub executions_data: Option<ExecutionsData>,
     /// Index of the highlighted row in the History tab.
@@ -225,6 +227,7 @@ impl App {
             activity_data: None,
             activity_selected: 0,
             agents_data: None,
+            agents_selected: 0,
             executions_data: None,
             executions_selected: 0,
             viewing_log: None,
@@ -346,6 +349,11 @@ impl App {
         });
 
         self.agents_data = Some(data);
+        if !self.config.agents.is_empty() {
+            self.agents_selected = self.agents_selected.min(self.config.agents.len() - 1);
+        } else {
+            self.agents_selected = 0;
+        }
     }
 
     /// Fetch the 50 most recent executions from SQLite and update `executions_data`.
@@ -383,6 +391,9 @@ impl App {
             2 => {
                 self.executions_selected = self.executions_selected.saturating_sub(1);
             }
+            1 => {
+                self.agents_selected = self.agents_selected.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -413,6 +424,10 @@ impl App {
                     .map(|d| d.executions.len().saturating_sub(1))
                     .unwrap_or(0);
                 self.executions_selected = (self.executions_selected + 1).min(max);
+            }
+            1 => {
+                let max = self.config.agents.len().saturating_sub(1);
+                self.agents_selected = (self.agents_selected + 1).min(max);
             }
             _ => {}
         }
@@ -872,6 +887,9 @@ impl App {
             2 => {
                 self.executions_selected = 0;
             }
+            1 => {
+                self.agents_selected = 0;
+            }
             _ => {}
         }
     }
@@ -901,6 +919,9 @@ impl App {
                     .map(|d| d.executions.len().saturating_sub(1))
                     .unwrap_or(0);
                 self.executions_selected = max;
+            }
+            1 => {
+                self.agents_selected = self.config.agents.len().saturating_sub(1);
             }
             _ => {}
         }
@@ -1348,29 +1369,49 @@ fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         sep(),
         key("↑/↓"),
         Span::raw(": select"),
-        sep(),
-        key("Enter"),
-        Span::raw(": open/drill"),
-        sep(),
-        key("a"),
-        Span::raw(": actions"),
         Span::raw(" "),
     ];
 
-    if app.active_tab == 0 {
-        spans.push(sep());
-        spans.push(key("Esc"));
-        spans.push(Span::raw(": back batch"));
-        spans.push(sep());
-        spans.push(key("s"));
-        spans.push(Span::raw(": stale cleanup"));
+    match app.active_tab {
+        0 => {
+            spans.push(sep());
+            spans.push(key("Enter"));
+            spans.push(Span::raw(": open/drill"));
+            spans.push(sep());
+            spans.push(key("a"));
+            spans.push(Span::raw(": actions"));
+            spans.push(sep());
+            spans.push(key("Esc"));
+            spans.push(Span::raw(": back batch"));
+            spans.push(sep());
+            spans.push(key("s"));
+            spans.push(Span::raw(": stale cleanup"));
+        }
+        2 => {
+            spans.push(sep());
+            spans.push(key("Enter"));
+            spans.push(Span::raw(": view execution"));
+            spans.push(sep());
+            spans.push(key("a"));
+            spans.push(Span::raw(": actions"));
+        }
+        1 => {
+            spans.push(sep());
+            spans.push(key("j/k"));
+            spans.push(Span::raw(": select agent"));
+        }
+        _ => {}
     }
 
     if let Some(msg) = &app.admin_notice {
+        let mut notice = msg.clone();
+        if notice.chars().count() > 64 {
+            notice = format!("{}…", notice.chars().take(63).collect::<String>());
+        }
         spans.push(sep());
         spans.push(Span::styled("last:", Style::default().fg(Color::Cyan)));
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(msg.clone(), Style::default().fg(Color::White)));
+        spans.push(Span::styled(notice, Style::default().fg(Color::White)));
     }
 
     if app.show_hint_banner {

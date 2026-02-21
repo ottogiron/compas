@@ -112,10 +112,6 @@ fn classify_rows(
     sort_indices_by_updated(rows, &mut out.uncategorized);
     sort_indices_by_updated(rows, &mut out.recently_completed);
 
-    if out.recently_completed.len() > 8 {
-        out.recently_completed.truncate(8);
-    }
-
     if drill_batch.is_none() {
         out.batches = batch_progress(rows, now_unix, stale_after_secs);
         out.active_batches = out
@@ -454,6 +450,13 @@ fn render_ops_list(
         now_unix,
         stale_after_secs,
     );
+    let recent_cap = (list_area.height as usize / 3).max(8);
+    let recent_indices: Vec<usize> = classified
+        .recently_completed
+        .iter()
+        .copied()
+        .take(recent_cap)
+        .collect();
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut sel_to_line: Vec<usize> = Vec::new();
@@ -602,13 +605,13 @@ fn render_ops_list(
     push_section_header(
         &mut lines,
         "Recently Completed",
-        classified.recently_completed.len(),
+        recent_indices.len(),
         Color::Green,
     );
-    if classified.recently_completed.is_empty() {
+    if recent_indices.is_empty() {
         lines.push(empty_line("  none"));
     } else {
-        for src_idx in &classified.recently_completed {
+        for src_idx in &recent_indices {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
@@ -895,7 +898,7 @@ fn make_batch_line(
     let age = batch
         .oldest_active_updated_at
         .map(|ts| format_duration_secs((now_unix - ts).max(0)))
-        .unwrap_or_else(|| "-".to_string());
+        .unwrap_or_else(|| format_duration_secs((now_unix - batch.latest_updated_at).max(0)));
 
     let bg = if is_selected {
         Color::DarkGray

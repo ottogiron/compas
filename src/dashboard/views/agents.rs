@@ -50,24 +50,38 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
     const CARD_HEIGHT: u16 = 6;
 
     let n = app.config.agents.len();
-    let mut constraints: Vec<Constraint> =
-        (0..n).map(|_| Constraint::Length(CARD_HEIGHT)).collect();
-    // Absorb any remaining vertical space so ratatui doesn't complain.
-    constraints.push(Constraint::Min(0));
+    let cards_per_page = (area.height / CARD_HEIGHT).max(1) as usize;
+    let selected = app.agents_selected.min(n.saturating_sub(1));
+    let start = if n <= cards_per_page {
+        0
+    } else if selected < cards_per_page / 2 {
+        0
+    } else if selected + cards_per_page > n {
+        n - cards_per_page
+    } else {
+        selected - (cards_per_page / 2)
+    };
+    let end = (start + cards_per_page).min(n);
 
+    let visible_count = end - start;
+    let mut constraints: Vec<Constraint> = (0..visible_count)
+        .map(|_| Constraint::Length(CARD_HEIGHT))
+        .collect();
+    constraints.push(Constraint::Min(0));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(constraints)
         .split(area);
 
-    for (i, agent) in app.config.agents.iter().enumerate() {
-        render_agent_card(f, app, agent, chunks[i]);
+    for (idx, agent) in app.config.agents[start..end].iter().enumerate() {
+        let abs_idx = start + idx;
+        render_agent_card(f, app, agent, chunks[idx], abs_idx == selected);
     }
 }
 
 // ── Agent card ────────────────────────────────────────────────────────────────
 
-fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) {
+fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect, selected: bool) {
     // ── Health dot colour based on heartbeat age ──────────────────────────────
     let health_color = app
         .agents_data
@@ -178,7 +192,12 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
             Block::default()
                 .borders(Borders::ALL)
                 .style(Style::default().bg(Color::Black).fg(Color::White))
-                .title(title),
+                .title(title)
+                .border_style(Style::default().fg(if selected {
+                    Color::Yellow
+                } else {
+                    Color::DarkGray
+                })),
         );
     f.render_widget(p, area);
 }
