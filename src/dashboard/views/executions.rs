@@ -24,7 +24,7 @@ use ratatui::{
 };
 
 use crate::dashboard::app::App;
-use crate::dashboard::views::humanize_exec_status;
+use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -158,36 +158,6 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Map an execution status string to a display colour.
-fn exec_status_color(status: &str) -> Color {
-    match status {
-        "completed" => Color::Green,
-        "failed" | "crashed" | "timed_out" => Color::Red,
-        "executing" | "picked_up" => Color::Yellow,
-        "queued" => Color::Cyan,
-        "cancelled" => Color::DarkGray,
-        _ => Color::White,
-    }
-}
-
-/// Format milliseconds as a compact human-readable label.
-///
-/// * < 10 000 ms → "1234ms"
-/// * < 600 000 ms → "45s"
-/// * otherwise → "12m"
-fn format_duration_ms(ms: i64) -> String {
-    if ms < 0 {
-        return "-".to_string();
-    }
-    if ms < 10_000 {
-        format!("{}ms", ms)
-    } else if ms < 600_000 {
-        format!("{}s", ms / 1_000)
-    } else {
-        format!("{}m", ms / 60_000)
-    }
-}
-
 /// Truncate `s` to at most `max_chars` Unicode scalar values, appending "…"
 /// if truncated.
 fn truncate(s: &str, max_chars: usize) -> String {
@@ -205,84 +175,6 @@ fn truncate(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // exec_status_color
-
-    #[test]
-    fn test_executions_status_color_completed() {
-        assert_eq!(exec_status_color("completed"), Color::Green);
-    }
-
-    #[test]
-    fn test_executions_status_color_failed() {
-        assert_eq!(exec_status_color("failed"), Color::Red);
-    }
-
-    #[test]
-    fn test_executions_status_color_crashed() {
-        assert_eq!(exec_status_color("crashed"), Color::Red);
-    }
-
-    #[test]
-    fn test_executions_status_color_timed_out() {
-        assert_eq!(exec_status_color("timed_out"), Color::Red);
-    }
-
-    #[test]
-    fn test_executions_status_color_executing() {
-        assert_eq!(exec_status_color("executing"), Color::Yellow);
-    }
-
-    #[test]
-    fn test_executions_status_color_picked_up() {
-        assert_eq!(exec_status_color("picked_up"), Color::Yellow);
-    }
-
-    #[test]
-    fn test_executions_status_color_queued() {
-        assert_eq!(exec_status_color("queued"), Color::Cyan);
-    }
-
-    #[test]
-    fn test_executions_status_color_cancelled() {
-        assert_eq!(exec_status_color("cancelled"), Color::DarkGray);
-    }
-
-    #[test]
-    fn test_executions_status_color_unknown() {
-        assert_eq!(exec_status_color("other"), Color::White);
-    }
-
-    // format_duration_ms
-
-    #[test]
-    fn test_executions_format_duration_ms_zero() {
-        assert_eq!(format_duration_ms(0), "0ms");
-    }
-
-    #[test]
-    fn test_executions_format_duration_ms_millis() {
-        assert_eq!(format_duration_ms(1234), "1234ms");
-        assert_eq!(format_duration_ms(9999), "9999ms");
-    }
-
-    #[test]
-    fn test_executions_format_duration_ms_seconds() {
-        assert_eq!(format_duration_ms(10_000), "10s");
-        assert_eq!(format_duration_ms(45_000), "45s");
-        assert_eq!(format_duration_ms(599_999), "599s");
-    }
-
-    #[test]
-    fn test_executions_format_duration_ms_minutes() {
-        assert_eq!(format_duration_ms(600_000), "10m");
-        assert_eq!(format_duration_ms(3_600_000), "60m");
-    }
-
-    #[test]
-    fn test_executions_format_duration_ms_negative() {
-        assert_eq!(format_duration_ms(-1), "-");
-    }
 
     // truncate
 

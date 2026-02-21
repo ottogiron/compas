@@ -23,8 +23,7 @@ use ratatui::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dashboard::app::App;
-use crate::dashboard::views::humanize_thread_status;
-use crate::dashboard::views::overview::status_color;
+use crate::dashboard::views::{format_duration_secs, humanize_thread_status, thread_status_color};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -104,7 +103,7 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
             // Status — humanized and colour-coded.
             let status = &t.thread_status;
             let status_cell = Cell::from(humanize_thread_status(status))
-                .style(Style::default().fg(status_color(status)));
+                .style(Style::default().fg(thread_status_color(status)));
 
             // Agent alias — dash if absent.
             let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
@@ -123,7 +122,7 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
 
             // Age — elapsed since last update.
             let age_secs = (now_unix - t.thread_updated_at).max(0) as u64;
-            let age = format_age(age_secs);
+            let age = format_duration_secs(age_secs as i64);
 
             Row::new(vec![
                 Cell::from(thread_id),
@@ -149,53 +148,4 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(Color::White));
 
     f.render_widget(table, area);
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Format elapsed seconds as a compact label: "5s", "3m", "2h", "4d".
-fn format_age(secs: u64) -> String {
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86400)
-    }
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_threads_format_age_seconds() {
-        assert_eq!(format_age(0), "0s");
-        assert_eq!(format_age(1), "1s");
-        assert_eq!(format_age(59), "59s");
-    }
-
-    #[test]
-    fn test_threads_format_age_minutes() {
-        assert_eq!(format_age(60), "1m");
-        assert_eq!(format_age(120), "2m");
-        assert_eq!(format_age(3599), "59m");
-    }
-
-    #[test]
-    fn test_threads_format_age_hours() {
-        assert_eq!(format_age(3600), "1h");
-        assert_eq!(format_age(7200), "2h");
-        assert_eq!(format_age(86399), "23h");
-    }
-
-    #[test]
-    fn test_threads_format_age_days() {
-        assert_eq!(format_age(86400), "1d");
-        assert_eq!(format_age(172800), "2d");
-    }
 }

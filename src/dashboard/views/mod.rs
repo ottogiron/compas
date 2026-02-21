@@ -5,6 +5,8 @@ pub mod executions;
 pub mod overview;
 pub mod threads;
 
+use ratatui::style::Color;
+
 /// Convert a raw thread-status string to a human-readable label.
 ///
 /// Known snake_case / PascalCase variants are normalised to title-case words;
@@ -32,6 +34,75 @@ pub fn humanize_exec_status(raw: &str) -> &str {
         "crashed" => "Crashed",
         "cancelled" => "Cancelled",
         other => other,
+    }
+}
+
+// ── Shared duration formatters ─────────────────────────────────────────────────
+
+/// Format a duration in seconds to human-readable tiers.
+///
+/// * `< 60`    → `"Ns"`
+/// * `< 3600`  → `"Nm Ss"`
+/// * `< 86400` → `"Nh Mm"`
+/// * `≥ 86400` → `"Nd Hh"`
+pub fn format_duration_secs(secs: i64) -> String {
+    let secs = secs.max(0);
+    if secs < 60 {
+        format!("{}s", secs)
+    } else if secs < 3_600 {
+        let m = secs / 60;
+        let s = secs % 60;
+        format!("{}m {}s", m, s)
+    } else if secs < 86_400 {
+        let h = secs / 3_600;
+        let m = (secs % 3_600) / 60;
+        format!("{}h {}m", h, m)
+    } else {
+        let d = secs / 86_400;
+        let h = (secs % 86_400) / 3_600;
+        format!("{}d {}h", d, h)
+    }
+}
+
+/// Format a duration in milliseconds to human-readable tiers.
+///
+/// * `< 0`    → `"-"`
+/// * `< 1000` → `"Nms"`
+/// * otherwise delegates to [`format_duration_secs`] with `ms / 1000`.
+pub fn format_duration_ms(ms: i64) -> String {
+    if ms < 0 {
+        return "-".to_string();
+    }
+    if ms < 1_000 {
+        format!("{}ms", ms)
+    } else {
+        format_duration_secs(ms / 1_000)
+    }
+}
+
+// ── Shared colour helpers ──────────────────────────────────────────────────────
+
+/// Color for thread status values.
+pub fn thread_status_color(status: &str) -> Color {
+    match status {
+        "Active" | "active" => Color::Yellow,
+        "ReviewPending" | "review_pending" => Color::Blue,
+        "Completed" | "completed" => Color::Green,
+        "Failed" | "failed" => Color::Red,
+        "Abandoned" | "abandoned" => Color::DarkGray,
+        _ => Color::White,
+    }
+}
+
+/// Color for execution status values.
+pub fn exec_status_color(status: &str) -> Color {
+    match status {
+        "completed" => Color::Green,
+        "failed" | "crashed" | "timed_out" => Color::Red,
+        "executing" | "picked_up" => Color::Yellow,
+        "queued" => Color::Cyan,
+        "cancelled" => Color::DarkGray,
+        _ => Color::White,
     }
 }
 
@@ -129,5 +200,151 @@ mod tests {
             humanize_exec_status("some_future_status"),
             "some_future_status"
         );
+    }
+
+    // format_duration_secs
+
+    #[test]
+    fn test_format_duration_secs_zero() {
+        assert_eq!(format_duration_secs(0), "0s");
+    }
+
+    #[test]
+    fn test_format_duration_secs_seconds() {
+        assert_eq!(format_duration_secs(30), "30s");
+        assert_eq!(format_duration_secs(59), "59s");
+    }
+
+    #[test]
+    fn test_format_duration_secs_minutes() {
+        // 90s → 1m 30s
+        assert_eq!(format_duration_secs(90), "1m 30s");
+        assert_eq!(format_duration_secs(3599), "59m 59s");
+    }
+
+    #[test]
+    fn test_format_duration_secs_hours() {
+        // 3661s → 1h 1m
+        assert_eq!(format_duration_secs(3_661), "1h 1m");
+        assert_eq!(format_duration_secs(86_399), "23h 59m");
+    }
+
+    #[test]
+    fn test_format_duration_secs_days() {
+        // 90000s = 1d 1h
+        assert_eq!(format_duration_secs(90_000), "1d 1h");
+        assert_eq!(format_duration_secs(172_800), "2d 0h");
+    }
+
+    #[test]
+    fn test_format_duration_secs_negative_clamps_to_zero() {
+        assert_eq!(format_duration_secs(-5), "0s");
+    }
+
+    // format_duration_ms
+
+    #[test]
+    fn test_format_duration_ms_zero() {
+        assert_eq!(format_duration_ms(0), "0ms");
+    }
+
+    #[test]
+    fn test_format_duration_ms_millis() {
+        assert_eq!(format_duration_ms(500), "500ms");
+        assert_eq!(format_duration_ms(999), "999ms");
+    }
+
+    #[test]
+    fn test_format_duration_ms_delegates_to_secs() {
+        // 1500ms → format_duration_secs(1) → "1s"
+        assert_eq!(format_duration_ms(1_500), "1s");
+        // 174929ms → format_duration_secs(174) → "2m 54s"
+        assert_eq!(format_duration_ms(174_929), "2m 54s");
+    }
+
+    #[test]
+    fn test_format_duration_ms_negative() {
+        assert_eq!(format_duration_ms(-1), "-");
+    }
+
+    // thread_status_color
+
+    #[test]
+    fn test_thread_status_color_active() {
+        assert_eq!(thread_status_color("Active"), Color::Yellow);
+        assert_eq!(thread_status_color("active"), Color::Yellow);
+    }
+
+    #[test]
+    fn test_thread_status_color_review_pending() {
+        assert_eq!(thread_status_color("ReviewPending"), Color::Blue);
+        assert_eq!(thread_status_color("review_pending"), Color::Blue);
+    }
+
+    #[test]
+    fn test_thread_status_color_completed() {
+        assert_eq!(thread_status_color("Completed"), Color::Green);
+    }
+
+    #[test]
+    fn test_thread_status_color_failed() {
+        assert_eq!(thread_status_color("Failed"), Color::Red);
+    }
+
+    #[test]
+    fn test_thread_status_color_abandoned() {
+        assert_eq!(thread_status_color("Abandoned"), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_thread_status_color_unknown() {
+        assert_eq!(thread_status_color("SomeFuture"), Color::White);
+    }
+
+    // exec_status_color
+
+    #[test]
+    fn test_exec_status_color_completed() {
+        assert_eq!(exec_status_color("completed"), Color::Green);
+    }
+
+    #[test]
+    fn test_exec_status_color_failed() {
+        assert_eq!(exec_status_color("failed"), Color::Red);
+    }
+
+    #[test]
+    fn test_exec_status_color_crashed() {
+        assert_eq!(exec_status_color("crashed"), Color::Red);
+    }
+
+    #[test]
+    fn test_exec_status_color_timed_out() {
+        assert_eq!(exec_status_color("timed_out"), Color::Red);
+    }
+
+    #[test]
+    fn test_exec_status_color_executing() {
+        assert_eq!(exec_status_color("executing"), Color::Yellow);
+    }
+
+    #[test]
+    fn test_exec_status_color_picked_up() {
+        assert_eq!(exec_status_color("picked_up"), Color::Yellow);
+    }
+
+    #[test]
+    fn test_exec_status_color_queued() {
+        assert_eq!(exec_status_color("queued"), Color::Cyan);
+    }
+
+    #[test]
+    fn test_exec_status_color_cancelled() {
+        assert_eq!(exec_status_color("cancelled"), Color::DarkGray);
+    }
+
+    #[test]
+    fn test_exec_status_color_unknown() {
+        assert_eq!(exec_status_color("other"), Color::White);
     }
 }

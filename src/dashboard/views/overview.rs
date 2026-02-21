@@ -19,7 +19,7 @@ use ratatui::{
 };
 
 use crate::dashboard::app::App;
-use crate::dashboard::views::humanize_thread_status;
+use crate::dashboard::views::{format_duration_secs, humanize_thread_status, thread_status_color};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -58,7 +58,7 @@ fn render_metrics(f: &mut Frame, app: &App, area: Rect) {
 
     // Thread count badges — one per status, coloured by severity.
     for (status, count) in &data.thread_counts {
-        let color = status_color(status);
+        let color = thread_status_color(status);
         spans.push(Span::styled("● ", Style::default().fg(color)));
         spans.push(Span::styled(
             format!("{}: {} ", humanize_thread_status(status), count),
@@ -185,8 +185,8 @@ fn render_heartbeat(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let uptime_secs = (now_unix - started_at).max(0) as u64;
-            let age_label = format_duration(age_secs);
-            let uptime_label = format_duration(uptime_secs);
+            let age_label = format_duration_secs(age_secs as i64);
+            let uptime_label = format_duration_secs(uptime_secs as i64);
 
             // Truncate long worker IDs to keep the line tidy.
             let id_display = if worker_id.len() > 22 {
@@ -216,18 +216,6 @@ fn render_heartbeat(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Map a thread status string to a display colour.
-pub fn status_color(status: &str) -> Color {
-    match status {
-        "Active" | "active" => Color::Yellow,
-        "ReviewPending" | "review_pending" => Color::Blue,
-        "Completed" | "completed" => Color::Green,
-        "Failed" | "failed" => Color::Red,
-        "Abandoned" | "abandoned" => Color::DarkGray,
-        _ => Color::White,
-    }
-}
-
 /// Build a fixed-width ASCII gauge bar: `[===>      ]`.
 ///
 /// Bar width (between the brackets) is `BAR_WIDTH` characters.
@@ -250,17 +238,6 @@ fn gauge_bar(active: usize, max: usize) -> String {
         let bars = filled.saturating_sub(1);
         let empty = BAR_WIDTH - filled;
         format!("[{}>{}]", "=".repeat(bars), " ".repeat(empty))
-    }
-}
-
-/// Format seconds as a short human-readable duration: "5s", "3m", "2h".
-fn format_duration(secs: u64) -> String {
-    if secs < 60 {
-        format!("{}s", secs)
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else {
-        format!("{}h", secs / 3600)
     }
 }
 
@@ -294,38 +271,5 @@ mod tests {
     fn test_overview_gauge_bar_zero_max() {
         let bar = gauge_bar(0, 0);
         assert_eq!(bar, "[          ]");
-    }
-
-    #[test]
-    fn test_overview_format_duration_seconds() {
-        assert_eq!(format_duration(0), "0s");
-        assert_eq!(format_duration(29), "29s");
-        assert_eq!(format_duration(59), "59s");
-    }
-
-    #[test]
-    fn test_overview_format_duration_minutes() {
-        assert_eq!(format_duration(60), "1m");
-        assert_eq!(format_duration(3599), "59m");
-    }
-
-    #[test]
-    fn test_overview_format_duration_hours() {
-        assert_eq!(format_duration(3600), "1h");
-        assert_eq!(format_duration(7200), "2h");
-    }
-
-    #[test]
-    fn test_overview_status_color_known() {
-        assert_eq!(status_color("Active"), Color::Yellow);
-        assert_eq!(status_color("Completed"), Color::Green);
-        assert_eq!(status_color("Failed"), Color::Red);
-        assert_eq!(status_color("ReviewPending"), Color::Blue);
-        assert_eq!(status_color("Abandoned"), Color::DarkGray);
-    }
-
-    #[test]
-    fn test_overview_status_color_unknown() {
-        assert_eq!(status_color("SomeOtherStatus"), Color::White);
     }
 }

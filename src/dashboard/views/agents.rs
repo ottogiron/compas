@@ -20,7 +20,7 @@ use ratatui::{
 
 use crate::config::types::{AgentConfig, AgentRole};
 use crate::dashboard::app::App;
-use crate::dashboard::views::humanize_exec_status;
+use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
             .map(|e| {
                 let dur_label = e
                     .duration_ms
-                    .map(|ms| format!("{}ms", ms))
+                    .map(format_duration_ms)
                     .unwrap_or_else(|| "-".to_string());
                 let color = exec_status_color(&e.status);
                 Line::from(vec![
@@ -168,70 +168,4 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
     let title = format!(" {} ", agent.alias);
     let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(p, area);
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/// Map an execution status string to a display colour.
-fn exec_status_color(status: &str) -> Color {
-    match status {
-        "completed" => Color::Green,
-        "failed" | "crashed" | "timed_out" => Color::Red,
-        "executing" | "picked_up" => Color::Yellow,
-        "queued" => Color::Cyan,
-        "cancelled" => Color::DarkGray,
-        _ => Color::White,
-    }
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_agents_exec_status_color_completed() {
-        assert_eq!(exec_status_color("completed"), Color::Green);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_failed() {
-        assert_eq!(exec_status_color("failed"), Color::Red);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_crashed() {
-        assert_eq!(exec_status_color("crashed"), Color::Red);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_timed_out() {
-        assert_eq!(exec_status_color("timed_out"), Color::Red);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_executing() {
-        assert_eq!(exec_status_color("executing"), Color::Yellow);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_picked_up() {
-        assert_eq!(exec_status_color("picked_up"), Color::Yellow);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_queued() {
-        assert_eq!(exec_status_color("queued"), Color::Cyan);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_cancelled() {
-        assert_eq!(exec_status_color("cancelled"), Color::DarkGray);
-    }
-
-    #[test]
-    fn test_agents_exec_status_color_unknown() {
-        assert_eq!(exec_status_color("some_other_status"), Color::White);
-    }
 }
