@@ -31,7 +31,6 @@ impl OrchestratorMcpServer {
         #[derive(Serialize)]
         struct AgentInfo {
             alias: String,
-            identity: String,
             backend: String,
             role: String,
             model: Option<String>,
@@ -44,7 +43,6 @@ impl OrchestratorMcpServer {
             .iter()
             .map(|a| AgentInfo {
                 alias: a.alias.clone(),
-                identity: a.identity.clone(),
                 backend: a.backend.clone(),
                 role: format!("{:?}", a.role).to_lowercase(),
                 model: a.model.clone(),

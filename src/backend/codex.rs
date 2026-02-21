@@ -71,6 +71,18 @@ impl CodexBackend {
 
         args
     }
+
+    fn build_ping_args(agent: &Agent) -> Vec<String> {
+        let mut args = vec!["exec".to_string()];
+        if let Some(ref model) = agent.model {
+            args.push("-m".to_string());
+            args.push(model.clone());
+        }
+        args.push("--full-auto".to_string());
+        args.push("--json".to_string());
+        args.push("Reply with: ok".to_string());
+        args
+    }
 }
 
 impl Default for CodexBackend {
@@ -141,12 +153,7 @@ impl Backend for CodexBackend {
 
     async fn ping(&self, agent: &Agent, timeout_secs: u64) -> PingResult {
         let start = std::time::Instant::now();
-        let args = vec![
-            "exec".to_string(),
-            "--full-auto".to_string(),
-            "--json".to_string(),
-            "Reply with: ok".to_string(),
-        ];
+        let args = Self::build_ping_args(agent);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         match spawn_cli(
             "codex",
@@ -205,7 +212,6 @@ mod tests {
     fn test_agent() -> Agent {
         Agent {
             alias: "spark".into(),
-            identity: "Codex".into(),
             backend: "codex".into(),
             model: Some("gpt-5.3-codex".into()),
             prompt: None,
@@ -258,6 +264,14 @@ mod tests {
         let args = CodexBackend::build_args(&agent, "task", false, None);
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
+    }
+
+    #[test]
+    fn test_build_ping_args_includes_model() {
+        let agent = test_agent();
+        let args = CodexBackend::build_ping_args(&agent);
+        assert!(args.contains(&"-m".to_string()));
+        assert!(args.contains(&"gpt-5.3-codex".to_string()));
     }
 
     #[tokio::test]

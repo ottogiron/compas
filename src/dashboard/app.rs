@@ -45,11 +45,13 @@ use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
 const TABS: &[&str] = &["Ops", "Agents", "History", "Settings"];
 const TICK_RATE: Duration = Duration::from_millis(250);
+const ACTIVITY_ROW_LIMIT: i64 = 250;
 
 #[derive(Debug, Clone, Copy)]
 enum AdminActionKind {
     Abandon,
     Reopen,
+    AbandonStaleActive,
 }
 
 #[derive(Debug, Clone)]
@@ -62,7 +64,8 @@ struct ActionMenuState {
 #[derive(Debug, Clone)]
 struct PendingAdminAction {
     kind: AdminActionKind,
-    thread_id: String,
+    target_label: String,
+    thread_ids: Vec<String>,
     impact_summary: String,
     guardrail: String,
 }
@@ -72,6 +75,7 @@ impl PendingAdminAction {
         match self.kind {
             AdminActionKind::Abandon => "abandon",
             AdminActionKind::Reopen => "reopen",
+            AdminActionKind::AbandonStaleActive => "abandon stale active",
         }
     }
 
@@ -79,15 +83,21 @@ impl PendingAdminAction {
         match self.kind {
             AdminActionKind::Abandon => " Confirm Abandon ",
             AdminActionKind::Reopen => " Confirm Reopen ",
+            AdminActionKind::AbandonStaleActive => " Confirm Stale Cleanup ",
         }
     }
 
     fn prompt(&self) -> String {
         match self.kind {
-            AdminActionKind::Abandon => format!("Abandon thread {}?", self.thread_id),
+            AdminActionKind::Abandon => format!("Abandon thread {}?", self.target_label),
             AdminActionKind::Reopen => {
-                format!("Reopen thread {} to Active?", self.thread_id)
+                format!("Reopen thread {} to Active?", self.target_label)
             }
+            AdminActionKind::AbandonStaleActive => format!(
+                "Abandon {} stale active thread(s) in {}?",
+                self.thread_ids.len(),
+                self.target_label
+            ),
         }
     }
 }
@@ -96,7 +106,7 @@ impl PendingAdminAction {
 
 /// Snapshot of live metrics fetched from SQLite for the Activity tab.
 pub struct ActivityData {
-    /// All thread rows from `status_view(None, None, None, 50)`.
+    /// Thread rows from `status_view(None, None, None, ACTIVITY_ROW_LIMIT)`.
     pub rows: Vec<ThreadStatusView>,
     /// Per-status thread counts: `[(status, count), …]`.
     pub thread_counts: Vec<(String, i64)>,
@@ -186,6 +196,17 @@ pub struct App {
 }
 
 impl App {
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+    }
+
+    fn stale_active_secs(&self) -> i64 {
+        self.config.orchestration.stale_active_secs as i64
+    }
+
     pub fn new(
         store: Store,
         config: OrchestratorConfig,
@@ -244,7 +265,7 @@ impl App {
 
         let data = handle.block_on(async {
             let rows = store
-                .status_view(None, None, None, 50)
+                .status_view(None, None, None, ACTIVITY_ROW_LIMIT)
                 .await
                 .unwrap_or_default();
             let thread_counts = store.thread_counts().await.unwrap_or_default();
@@ -261,7 +282,12 @@ impl App {
         });
 
         // Clamp selection to new selectable count.
-        let count = activity::ops_selectable_count(&data.rows, self.drill_batch.as_deref());
+        let count = activity::ops_selectable_count(
+            &data.rows,
+            self.drill_batch.as_deref(),
+            Self::now_unix(),
+            self.stale_active_secs(),
+        );
         if count > 0 {
             self.activity_selected = self.activity_selected.min(count - 1);
         } else {
@@ -369,8 +395,13 @@ impl App {
                     .activity_data
                     .as_ref()
                     .map(|d| {
-                        activity::ops_selectable_count(&d.rows, self.drill_batch.as_deref())
-                            .saturating_sub(1)
+                        activity::ops_selectable_count(
+                            &d.rows,
+                            self.drill_batch.as_deref(),
+                            Self::now_unix(),
+                            self.stale_active_secs(),
+                        )
+                        .saturating_sub(1)
                     })
                     .unwrap_or(0);
                 self.activity_selected = (self.activity_selected + 1).min(max);
@@ -412,6 +443,8 @@ impl App {
             &data.rows,
             self.drill_batch.as_deref(),
             self.activity_selected,
+            Self::now_unix(),
+            self.stale_active_secs(),
         ) else {
             return;
         };
@@ -430,7 +463,7 @@ impl App {
             .unwrap_or_else(|| "unknown".to_string());
         let duration_ms = row.duration_ms;
         let thread_id = row.thread_id.clone();
-        let fallback = self.fetch_message_fallback(&thread_id);
+        let input_payload = self.fetch_message_fallback(&thread_id);
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
         self.viewing_log = Some(LogViewerState::new(
             exec_id,
@@ -438,7 +471,8 @@ impl App {
             status,
             duration_ms,
             Some(log_path),
-            fallback,
+            input_payload,
+            None,
         ));
     }
 
@@ -457,13 +491,7 @@ impl App {
         let output_preview = row.output_preview.clone();
         let thread_id = row.thread_id.clone();
 
-        // Use output_preview as primary fallback; fall through to message body
-        // if it is empty.
-        let fallback = if output_preview.as_deref().unwrap_or("").is_empty() {
-            self.fetch_message_fallback(&thread_id)
-        } else {
-            output_preview
-        };
+        let input_payload = self.fetch_message_fallback(&thread_id);
 
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
         self.viewing_log = Some(LogViewerState::new(
@@ -472,7 +500,8 @@ impl App {
             status,
             duration_ms,
             Some(log_path),
-            fallback,
+            input_payload,
+            output_preview,
         ));
     }
 
@@ -502,6 +531,8 @@ impl App {
             &data.rows,
             self.drill_batch.as_deref(),
             self.activity_selected,
+            Self::now_unix(),
+            self.stale_active_secs(),
         )
     }
 
@@ -554,6 +585,7 @@ impl App {
                     Err("reopen is only valid for terminal threads")
                 }
             }
+            AdminActionKind::AbandonStaleActive => Ok(()),
         }
     }
 
@@ -590,13 +622,71 @@ impl App {
                 format!("Will move {} -> Active.", thread_status),
                 "Reopened threads can be re-triggered by operator actions.".to_string(),
             ),
+            AdminActionKind::AbandonStaleActive => (
+                "Will abandon stale active threads.".to_string(),
+                "Use the stale cleanup shortcut from Ops.".to_string(),
+            ),
         };
 
         self.pending_admin_action = Some(PendingAdminAction {
             kind,
-            thread_id,
+            target_label: thread_id.clone(),
+            thread_ids: vec![thread_id],
             impact_summary,
             guardrail,
+        });
+        self.action_menu = None;
+    }
+
+    fn stale_active_thread_ids(&self) -> Vec<String> {
+        let now_unix = Self::now_unix();
+        self.activity_data
+            .as_ref()
+            .map(|d| {
+                activity::stale_active_thread_ids(
+                    &d.rows,
+                    self.drill_batch.as_deref(),
+                    now_unix,
+                    self.stale_active_secs(),
+                )
+            })
+            .unwrap_or_default()
+    }
+
+    fn queue_stale_active_cleanup(&mut self) {
+        if self.active_tab != 0 {
+            self.admin_notice = Some("Stale cleanup is available on the Ops tab.".to_string());
+            return;
+        }
+
+        let thread_ids = self.stale_active_thread_ids();
+        if thread_ids.is_empty() {
+            self.admin_notice = Some(format!(
+                "No stale active threads found (age >= {}s, excluding queued/running).",
+                self.stale_active_secs()
+            ));
+            return;
+        }
+
+        let target_label = self
+            .drill_batch
+            .as_deref()
+            .map(|b| format!("batch {}", b))
+            .unwrap_or_else(|| "all visible threads".to_string());
+        let count = thread_ids.len();
+
+        self.pending_admin_action = Some(PendingAdminAction {
+            kind: AdminActionKind::AbandonStaleActive,
+            target_label: target_label.clone(),
+            thread_ids,
+            impact_summary: format!(
+                "Will abandon {} stale active thread(s) in {}.",
+                count, target_label
+            ),
+            guardrail: format!(
+                "Stale means Active for at least {}s with no queued/picked_up/executing execution.",
+                self.stale_active_secs()
+            ),
         });
         self.action_menu = None;
     }
@@ -668,9 +758,10 @@ impl App {
         let svc = LifecycleService::new(self.store.clone(), self.config.agents.as_slice());
         match action.kind {
             AdminActionKind::Abandon => {
+                let thread_id = action.thread_ids.first().cloned().unwrap_or_default();
                 let result = self
                     .handle
-                    .block_on(async { svc.abandon(&action.thread_id).await });
+                    .block_on(async { svc.abandon(&thread_id).await });
                 match result {
                     Ok(out) => {
                         self.admin_notice = Some(format!(
@@ -684,9 +775,8 @@ impl App {
                 }
             }
             AdminActionKind::Reopen => {
-                let result = self
-                    .handle
-                    .block_on(async { svc.reopen(&action.thread_id).await });
+                let thread_id = action.thread_ids.first().cloned().unwrap_or_default();
+                let result = self.handle.block_on(async { svc.reopen(&thread_id).await });
                 match result {
                     Ok(out) => {
                         self.admin_notice = Some(format!(
@@ -698,6 +788,26 @@ impl App {
                         self.admin_notice = Some(format!("Failed to {}: {}", action.verb(), e));
                     }
                 }
+            }
+            AdminActionKind::AbandonStaleActive => {
+                let mut abandoned = 0usize;
+                let mut cancelled_total = 0u64;
+                let mut failed = 0usize;
+
+                for thread_id in &action.thread_ids {
+                    match self.handle.block_on(async { svc.abandon(thread_id).await }) {
+                        Ok(out) => {
+                            abandoned += 1;
+                            cancelled_total += out.executions_cancelled;
+                        }
+                        Err(_) => failed += 1,
+                    }
+                }
+
+                self.admin_notice = Some(format!(
+                    "Stale cleanup complete: {} abandoned, {} failed ({} executions cancelled).",
+                    abandoned, failed, cancelled_total
+                ));
             }
         }
 
@@ -725,6 +835,8 @@ impl App {
             &data.rows,
             self.drill_batch.as_deref(),
             self.activity_selected,
+            Self::now_unix(),
+            self.stale_active_secs(),
         ) else {
             return;
         };
@@ -752,8 +864,13 @@ impl App {
                     .activity_data
                     .as_ref()
                     .map(|d| {
-                        activity::ops_selectable_count(&d.rows, self.drill_batch.as_deref())
-                            .saturating_sub(1)
+                        activity::ops_selectable_count(
+                            &d.rows,
+                            self.drill_batch.as_deref(),
+                            Self::now_unix(),
+                            self.stale_active_secs(),
+                        )
+                        .saturating_sub(1)
                     })
                     .unwrap_or(0);
                 self.activity_selected = max;
@@ -916,6 +1033,26 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         KeyCode::Esc => {
             app.close_log_viewer();
         }
+        KeyCode::Tab => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.select_next_section();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.select_prev_section();
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.collapse_selected_section();
+            }
+        }
+        KeyCode::Right | KeyCode::Char('l') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.expand_selected_section();
+            }
+        }
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut viewer) = app.viewing_log {
                 viewer.scroll_up(1);
@@ -1027,6 +1164,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         // Lifecycle admin actions.
         KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
         KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
+        KeyCode::Char('s') => app.queue_stale_active_cleanup(),
         // Enter: drill batch row in Ops, otherwise open log viewer.
         KeyCode::Enter => {
             if app.active_tab == 0
@@ -1205,6 +1343,9 @@ fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         spans.push(sep());
         spans.push(key("Esc"));
         spans.push(Span::raw(": back batch"));
+        spans.push(sep());
+        spans.push(key("s"));
+        spans.push(Span::raw(": stale cleanup"));
     }
 
     if let Some(msg) = &app.admin_notice {
@@ -1363,10 +1504,11 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("   ↑/↓ or j/k move   g/G first/last"),
         Line::from(" Ops"),
         Line::from("   Enter open log or drill batch"),
-        Line::from("   a action menu   b/o quick action aliases"),
+        Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
         Line::from("   Esc back from batch drill"),
         Line::from(" Log Viewer"),
-        Line::from("   Esc back   g/G top/bottom   f follow   J JSON pretty"),
+        Line::from("   Tab section   <-/-> collapse/expand   g/G top/bottom"),
+        Line::from("   Esc back   f follow   J JSON pretty"),
         Line::from(""),
         Line::from(" Press Esc, Enter, or ? to close this panel."),
     ];
@@ -1378,6 +1520,7 @@ fn action_name(kind: AdminActionKind) -> &'static str {
     match kind {
         AdminActionKind::Abandon => "abandon",
         AdminActionKind::Reopen => "reopen",
+        AdminActionKind::AbandonStaleActive => "abandon stale active",
     }
 }
 

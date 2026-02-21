@@ -66,7 +66,6 @@ impl OrchestratorMcpServer {
         for agent_cfg in agents_to_check {
             let agent = Agent {
                 alias: agent_cfg.alias.clone(),
-                identity: agent_cfg.identity.clone(),
                 backend: agent_cfg.backend.clone(),
                 model: agent_cfg.model.clone(),
                 prompt: agent_cfg.prompt.clone(),

@@ -115,12 +115,15 @@ Dashboard controls:
 - `Esc`: back out of active batch drill filter
 - `a`: open guided action menu for selected thread
 - `b` / `o`: quick aliases for abandon/reopen (still opens guided confirm)
+- `s`: abandon stale active threads (age >= `orchestration.stale_active_secs`, excluding queued/running)
 - `?`: open keyboard help overlay
 - `q` or `Ctrl+C`: exit dashboard
 
 Log viewer controls:
 
 - `Esc`: back to dashboard
+- `Tab` / `Shift+Tab`: switch between `Input` and `Output` sections
+- `←` / `→`: collapse/expand selected section
 - `g` / `G`: top/bottom
 - `f`: toggle follow mode
 - `J`: pretty-print JSON log lines when possible
@@ -217,6 +220,7 @@ poll_interval_secs: 1
 orchestration:
   trigger_intents: [dispatch, handoff, changes-requested]
   execution_timeout_secs: 300
+  stale_active_secs: 3600
   max_concurrent_triggers: 10
   max_triggers_per_agent: 2
   ping_timeout_secs: 15
@@ -231,12 +235,10 @@ models:
 
 agents:
   - alias: focused
-    identity: Claude
     backend: claude
     model: claude-sonnet-4-6
     prompt: "You are focused on backend implementation and tests."
   - alias: chill
-    identity: Claude
     backend: claude
     model: claude-sonnet-4-6
     prompt: "You are focused on docs and release quality."
@@ -265,6 +267,7 @@ Path resolution rules:
 | `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
 | `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
 | `orchestration.execution_timeout_secs` | 30 | Per-trigger timeout |
+| `orchestration.stale_active_secs` | 3600 | Staleness threshold for non-running Active threads |
 | `orchestration.trigger_intents` | dispatch, handoff, changes-requested | Intents that trigger worker execution |
 | `orchestration.ping_timeout_secs` | 15 | Backend ping liveness timeout |
 

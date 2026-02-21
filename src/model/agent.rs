@@ -6,7 +6,6 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Agent {
     pub alias: String,
-    pub identity: String,
     pub backend: String,
     #[serde(default)]
     pub model: Option<String>,

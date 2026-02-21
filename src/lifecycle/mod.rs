@@ -279,7 +279,6 @@ mod tests {
         vec![
             AgentConfig {
                 alias: "focused".to_string(),
-                identity: "focused".to_string(),
                 backend: "stub".to_string(),
                 role: AgentRole::Worker,
                 model: None,
@@ -293,7 +292,6 @@ mod tests {
             },
             AgentConfig {
                 alias: "operator".to_string(),
-                identity: "operator".to_string(),
                 backend: "stub".to_string(),
                 role: AgentRole::Operator,
                 model: None,

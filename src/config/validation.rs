@@ -34,12 +34,6 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 "agent alias must not be empty".into(),
             ));
         }
-        if agent.identity.is_empty() {
-            return Err(OrchestratorError::Config(format!(
-                "agent '{}' identity must not be empty",
-                agent.alias
-            )));
-        }
         if agent.backend.is_empty() {
             return Err(OrchestratorError::Config(format!(
                 "agent '{}' backend must not be empty",
@@ -137,6 +131,13 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "orchestration.max_output_capture_bytes must be >= 1".into(),
         ));
     }
+    if config.orchestration.stale_active_secs < 60
+        || config.orchestration.stale_active_secs > 604_800
+    {
+        return Err(OrchestratorError::Config(
+            "orchestration.stale_active_secs must be 60..604800".into(),
+        ));
+    }
 
     // ORCHV3-15: ensure state_dir is writable (create if needed)
     if !config.state_dir.exists() {
@@ -230,7 +231,6 @@ mod tests {
             models: None,
             agents: vec![AgentConfig {
                 alias: "focused".into(),
-                identity: "Claude".into(),
                 role: AgentRole::Worker,
                 backend: "stub".into(),
 
@@ -289,14 +289,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_empty_identity() {
-        let mut config = minimal_config();
-        config.agents[0].identity = String::new();
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("identity must not be empty"));
-    }
-
-    #[test]
     fn test_config_validation_empty_backend() {
         let mut config = minimal_config();
         config.agents[0].backend = String::new();
@@ -309,7 +301,6 @@ mod tests {
         let mut config = minimal_config();
         config.agents.push(AgentConfig {
             alias: "focused".into(),
-            identity: "Other".into(),
             backend: "stub".into(),
             role: AgentRole::Worker,
             model: None,
@@ -342,10 +333,8 @@ state_dir: /tmp/test-mail
 poll_interval_secs: 10
 agents:
   - alias: focused
-    identity: Claude
     backend: stub
   - alias: chill
-    identity: Claude
     backend: opencode
 "#;
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
@@ -395,7 +384,6 @@ state_dir: /tmp/test-mail
 poll_interval_secs: 5
 agents:
   - alias: focused
-    identity: Claude
     backend: claude
     model: claude-opus-4-6
     prompt: "You are the compiler engineer."
@@ -445,6 +433,25 @@ agents:
     }
 
     #[test]
+    fn test_config_validation_stale_active_secs_out_of_bounds() {
+        let mut config = minimal_config();
+        config.orchestration.stale_active_secs = 59;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("stale_active_secs"));
+
+        config.orchestration.stale_active_secs = 604_801;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("stale_active_secs"));
+    }
+
+    #[test]
+    fn test_config_validation_stale_active_secs_valid() {
+        let mut config = minimal_config();
+        config.orchestration.stale_active_secs = 3_600;
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
     fn test_config_validation_state_dir_created() {
         let dir = tempfile::tempdir().unwrap();
         let new_path = dir.path().join("new-state");
@@ -482,7 +489,6 @@ agents:
         // Add a second worker
         config.agents.push(AgentConfig {
             alias: "spark".into(),
-            identity: "Claude".into(),
             backend: "stub".into(),
             role: AgentRole::Worker,
             model: None,
@@ -500,7 +506,6 @@ agents:
         // Operator agents don't count
         config.agents.push(AgentConfig {
             alias: "operator".into(),
-            identity: "Claude".into(),
             backend: "stub".into(),
             role: AgentRole::Operator,
             model: None,
@@ -722,7 +727,6 @@ project_root: /tmp
 state_dir: /tmp/test
 agents:
   - alias: a1
-    identity: Claude
     backend: claude
     models:
       - id: opus
@@ -749,7 +753,6 @@ project_root: /tmp
 state_dir: /tmp/test
 agents:
   - alias: a1
-    identity: Claude
     backend: claude
     model: opus
 "#;
@@ -771,7 +774,6 @@ models:
     backend: opencode
 agents:
   - alias: a1
-    identity: Claude
     backend: claude
     preferred_models:
       - opus

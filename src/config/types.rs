@@ -122,6 +122,9 @@ pub struct OrchestrationConfig {
     /// Oldest files (by ULID-sorted name) are pruned on worker startup.
     #[serde(default = "default_log_retention_count")]
     pub log_retention_count: usize,
+    /// Age threshold (seconds) after which non-running Active threads are considered stale.
+    #[serde(default = "default_stale_active_secs")]
+    pub stale_active_secs: u64,
 }
 
 impl Default for OrchestrationConfig {
@@ -136,6 +139,7 @@ impl Default for OrchestrationConfig {
             task_history_retention: default_task_history_retention(),
             ping_timeout_secs: default_ping_timeout_secs(),
             log_retention_count: default_log_retention_count(),
+            stale_active_secs: default_stale_active_secs(),
         }
     }
 }
@@ -162,6 +166,10 @@ fn default_ping_timeout_secs() -> u64 {
 
 fn default_log_retention_count() -> usize {
     100
+}
+
+fn default_stale_active_secs() -> u64 {
+    3600
 }
 
 fn default_max_output_capture_bytes() -> usize {
@@ -242,7 +250,6 @@ impl<'de> serde::Deserialize<'de> for ModelEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub alias: String,
-    pub identity: String,
     pub backend: String,
     #[serde(default)]
     pub role: AgentRole,

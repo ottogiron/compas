@@ -93,7 +93,6 @@ fn test_config() -> OrchestratorConfig {
         agents: vec![
             AgentConfig {
                 alias: "focused".to_string(),
-                identity: "Test focused agent".to_string(),
                 backend: "stub".to_string(),
                 role: AgentRole::Worker,
                 model: Some("test-model".to_string()),
@@ -107,7 +106,6 @@ fn test_config() -> OrchestratorConfig {
             },
             AgentConfig {
                 alias: "spark".to_string(),
-                identity: "Test spark agent".to_string(),
                 backend: "stub".to_string(),
                 role: AgentRole::Worker,
                 model: Some("test-model".to_string()),
@@ -611,7 +609,6 @@ mod registry_tests {
 
         let agent_cfg = AgentConfig {
             alias: "test".to_string(),
-            identity: "test".to_string(),
             backend: "stub".to_string(),
             role: AgentRole::Worker,
             model: None,
@@ -635,7 +632,6 @@ mod registry_tests {
 
         let agent_cfg = AgentConfig {
             alias: "test".to_string(),
-            identity: "test".to_string(),
             backend: "nonexistent".to_string(),
             role: AgentRole::Worker,
             model: None,

@@ -9,6 +9,7 @@ orchestration:
     - handoff
     - changes-requested
   execution_timeout_secs: 600
+  stale_active_secs: 3600
   max_concurrent_triggers: 4
   max_triggers_per_agent: 1
   ping_timeout_secs: 30
@@ -23,14 +24,12 @@ models:
 
 agents:
   - alias: implementer
-    identity: Claude
     backend: claude
     model: claude-sonnet-4-6
     prompt: >
       You implement changes in this repository and report verification results.
       End with a JSON line: {"intent":"review-request","to":"operator"}.
   - alias: reviewer
-    identity: Codex
     backend: codex
     model: gpt-5.3-codex
     prompt: >

@@ -227,7 +227,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_list_agents",
-        description = "List all configured agents with their alias, identity, backend, model, and other settings."
+        description = "List all configured agents with their alias, backend, model, and other settings."
     )]
     fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::Error> {
         self.list_agents_impl()

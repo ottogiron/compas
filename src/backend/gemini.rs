@@ -74,6 +74,19 @@ impl GeminiBackend {
 
         Ok(args)
     }
+
+    fn build_ping_args(agent: &Agent) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(ref model) = agent.model {
+            args.push("--model".to_string());
+            args.push(model.clone());
+        }
+        args.push("--output-format".to_string());
+        args.push("json".to_string());
+        args.push("--prompt".to_string());
+        args.push("Reply with: ok".to_string());
+        args
+    }
 }
 
 impl Default for GeminiBackend {
@@ -166,12 +179,7 @@ impl Backend for GeminiBackend {
 
     async fn ping(&self, agent: &Agent, timeout_secs: u64) -> PingResult {
         let start = std::time::Instant::now();
-        let args = vec![
-            "--output-format".to_string(),
-            "json".to_string(),
-            "--prompt".to_string(),
-            "Reply with: ok".to_string(),
-        ];
+        let args = Self::build_ping_args(agent);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         match spawn_cli(
             "gemini",
@@ -231,7 +239,6 @@ mod tests {
     fn test_agent() -> Agent {
         Agent {
             alias: "spark".into(),
-            identity: "Gemini".into(),
             backend: "gemini".into(),
             model: Some("gemini-1.5-pro".into()),
             prompt: Some("You are a test agent.".into()),
@@ -267,6 +274,14 @@ mod tests {
         agent.backend_args = Some(vec!["--verbose".into()]);
         let args = GeminiBackend::build_args(&agent, "task").unwrap();
         assert!(args.contains(&"--verbose".to_string()));
+    }
+
+    #[test]
+    fn test_build_ping_args_includes_model() {
+        let agent = test_agent();
+        let args = GeminiBackend::build_ping_args(&agent);
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"gemini-1.5-pro".to_string()));
     }
 
     #[tokio::test]

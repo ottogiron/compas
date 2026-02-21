@@ -114,7 +114,6 @@ pub async fn execute_trigger(
         .map(|dir| dir.join(format!("{}.log", exec_id)));
     let agent = Agent {
         alias: agent_config.alias.clone(),
-        identity: agent_config.identity.clone(),
         backend: agent_config.backend.clone(),
         model: agent_config.model.clone(),
         prompt: agent_config.prompt.clone(),

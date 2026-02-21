@@ -140,7 +140,6 @@ state_dir: /tmp/test-mail
 db_path: ~/.aster/orch/jobs.sqlite
 agents:
   - alias: focused
-    identity: Claude
     backend: stub
 "#;
         let config = load_config_from_str(yaml).unwrap();
@@ -179,7 +178,6 @@ state_dir: ./.aster-orch/state
 db_path: ./.aster-orch/jobs.sqlite
 agents:
   - alias: focused
-    identity: Claude
     backend: stub
     prompt_file: prompts/focused.txt
 "#,

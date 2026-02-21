@@ -74,6 +74,18 @@ impl OpenCodeBackend {
     fn looks_like_agent_name(value: &str) -> bool {
         !value.trim().is_empty() && !value.chars().any(char::is_whitespace)
     }
+
+    fn build_ping_args(agent: &Agent) -> Vec<String> {
+        let mut args = vec!["run".to_string()];
+        if let Some(ref model) = agent.model {
+            args.push("-m".to_string());
+            args.push(model.clone());
+        }
+        args.push("--format".to_string());
+        args.push("json".to_string());
+        args.push("Reply with: ok".to_string());
+        args
+    }
 }
 
 impl Default for OpenCodeBackend {
@@ -142,12 +154,7 @@ impl Backend for OpenCodeBackend {
 
     async fn ping(&self, agent: &Agent, timeout_secs: u64) -> PingResult {
         let start = std::time::Instant::now();
-        let args = vec![
-            "run".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-            "Reply with: ok".to_string(),
-        ];
+        let args = Self::build_ping_args(agent);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         match spawn_cli(
             "opencode",
@@ -206,7 +213,6 @@ mod tests {
     fn test_agent() -> Agent {
         Agent {
             alias: "chill".into(),
-            identity: "OpenCode".into(),
             backend: "opencode".into(),
             model: Some("zai-coding-plan/glm-5".into()),
             prompt: Some("chill-agent".into()),
@@ -277,6 +283,14 @@ mod tests {
         let args = OpenCodeBackend::build_args(&agent, "task").unwrap();
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
+    }
+
+    #[test]
+    fn test_build_ping_args_includes_model() {
+        let agent = test_agent();
+        let args = OpenCodeBackend::build_ping_args(&agent);
+        assert!(args.contains(&"-m".to_string()));
+        assert!(args.contains(&"zai-coding-plan/glm-5".to_string()));
     }
 
     fn test_output(stdout: &str, stderr: &str) -> Output {

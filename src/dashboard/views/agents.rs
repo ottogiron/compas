@@ -129,7 +129,7 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
 
     // ── Assemble card lines ───────────────────────────────────────────────────
     let mut lines: Vec<Line> = vec![
-        // Row 1: identity / config summary
+        // Row 1: config summary
         Line::from(vec![
             Span::raw("  "),
             Span::styled("● ", Style::default().fg(health_color)),

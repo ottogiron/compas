@@ -85,6 +85,23 @@ impl ClaudeCodeBackend {
 
         Ok(args)
     }
+
+    fn build_ping_args(agent: &Agent) -> Vec<String> {
+        let mut args = vec![
+            "-p".to_string(),
+            "--dangerously-skip-permissions".to_string(),
+            "--output-format".to_string(),
+            "json".to_string(),
+            "--max-turns".to_string(),
+            "1".to_string(),
+        ];
+        if let Some(ref model) = agent.model {
+            args.push("--model".to_string());
+            args.push(model.clone());
+        }
+        args.push("Reply with: ok".to_string());
+        args
+    }
 }
 
 impl Default for ClaudeCodeBackend {
@@ -186,15 +203,7 @@ impl Backend for ClaudeCodeBackend {
 
     async fn ping(&self, agent: &Agent, timeout_secs: u64) -> PingResult {
         let start = std::time::Instant::now();
-        let args = vec![
-            "-p".to_string(),
-            "--dangerously-skip-permissions".to_string(),
-            "--output-format".to_string(),
-            "json".to_string(),
-            "--max-turns".to_string(),
-            "1".to_string(),
-            "Reply with: ok".to_string(),
-        ];
+        let args = Self::build_ping_args(agent);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         match spawn_cli(
             "claude",
@@ -255,7 +264,6 @@ mod tests {
     fn test_agent() -> Agent {
         Agent {
             alias: "focused".into(),
-            identity: "Claude".into(),
             backend: "claude".into(),
             model: Some("sonnet".into()),
             prompt: Some("You are a test agent.".into()),
@@ -315,6 +323,14 @@ mod tests {
 
         assert!(!args.contains(&"--model".to_string()));
         assert!(!args.contains(&"--system-prompt".to_string()));
+    }
+
+    #[test]
+    fn test_build_ping_args_includes_model() {
+        let agent = test_agent();
+        let args = ClaudeCodeBackend::build_ping_args(&agent);
+        assert!(args.contains(&"--model".to_string()));
+        assert!(args.contains(&"sonnet".to_string()));
     }
 
     #[tokio::test]
