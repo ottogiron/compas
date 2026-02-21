@@ -531,7 +531,7 @@ impl Store {
         };
         let exec_id = candidate.0;
 
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE executions
              SET status = 'picked_up', picked_up_at = strftime('%s','now')
              WHERE id = ? AND status = 'queued'",
@@ -539,6 +539,11 @@ impl Store {
         .bind(&exec_id)
         .execute(&mut *tx)
         .await?;
+
+        if result.rows_affected() == 0 {
+            tx.commit().await?;
+            return Ok(None);
+        }
 
         let row: Option<(
             String,
