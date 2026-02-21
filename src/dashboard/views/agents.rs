@@ -11,10 +11,13 @@
 //!   └────────────────────────────────────────────────────────────────────────┘
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 
@@ -46,42 +49,40 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    // Each card: border-top + 4 content rows + border-bottom = 6 rows.
-    const CARD_HEIGHT: u16 = 6;
-
     let n = app.config.agents.len();
-    let cards_per_page = (area.height / CARD_HEIGHT).max(1) as usize;
     let selected = app.agents_selected.min(n.saturating_sub(1));
-    let start = if n <= cards_per_page {
-        0
-    } else if selected < cards_per_page / 2 {
-        0
-    } else if selected + cards_per_page > n {
-        n - cards_per_page
-    } else {
-        selected - (cards_per_page / 2)
-    };
-    let end = (start + cards_per_page).min(n);
-
-    let visible_count = end - start;
-    let mut constraints: Vec<Constraint> = (0..visible_count)
-        .map(|_| Constraint::Length(CARD_HEIGHT))
-        .collect();
-    constraints.push(Constraint::Min(0));
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
-
-    for (idx, agent) in app.config.agents[start..end].iter().enumerate() {
-        let abs_idx = start + idx;
-        render_agent_card(f, app, agent, chunks[idx], abs_idx == selected);
+    let mut items: Vec<ListItem> = Vec::new();
+    for (idx, agent) in app.config.agents.iter().enumerate() {
+        if idx > 0 {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "────────────────────────────────────────────────────────────────────────────",
+                Style::default().fg(Color::DarkGray),
+            ))));
+        }
+        items.push(build_agent_item(app, agent));
     }
+
+    let mut state = ListState::default();
+    state.select(Some(selected.saturating_mul(2)));
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Black).fg(Color::White))
+                .title(" Agents "),
+        )
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    f.render_stateful_widget(list, area, &mut state);
+
+    let mut scrollbar_state = ScrollbarState::new(n.max(1)).position(selected);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
 // ── Agent card ────────────────────────────────────────────────────────────────
 
-fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect, selected: bool) {
+fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
     // ── Health dot colour based on heartbeat age ──────────────────────────────
     let health_color = app
         .agents_data
@@ -185,19 +186,5 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect, 
     // Rows 3+: recent execution summaries (up to 3)
     lines.extend(recent_lines);
 
-    let title = format!(" {} ", agent.alias);
-    let p = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().bg(Color::Black).fg(Color::White))
-                .title(title)
-                .border_style(Style::default().fg(if selected {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                })),
-        );
-    f.render_widget(p, area);
+    ListItem::new(lines)
 }

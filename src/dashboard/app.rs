@@ -23,7 +23,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs},
     Frame, Terminal,
 };
 use std::{
@@ -1527,38 +1527,37 @@ fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rec
     f.render_widget(Clear, modal);
     f.render_widget(block, modal);
 
-    let mut lines = vec![Line::from(vec![
+    let mut items = vec![ListItem::new(Line::from(vec![
         Span::raw(" "),
         Span::styled("Thread: ", Style::default().fg(Color::Cyan)),
         Span::styled(menu.thread_id.clone(), Style::default().fg(Color::White)),
-    ])];
+    ]))];
 
     for (idx, action) in menu.options.iter().enumerate() {
-        let selected = idx == menu.selected;
-        let marker = if selected { ">" } else { " " };
-        lines.push(Line::from(vec![
-            Span::raw(format!(" {} ", marker)),
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("   "),
             Span::styled(
                 action_name(*action).to_string(),
-                Style::default()
-                    .fg(if selected {
-                        Color::Yellow
-                    } else {
-                        Color::White
-                    })
-                    .add_modifier(if selected {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
+                Style::default().fg(Color::White),
             ),
-        ]));
+        ])));
+        if idx + 1 < menu.options.len() {
+            items.push(ListItem::new(Line::from(Span::raw("   "))));
+        }
     }
 
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
-        inner,
-    );
+    let mut state = ListState::default();
+    state.select(Some(1 + menu.selected.saturating_mul(2)));
+
+    let list = List::new(items)
+        .highlight_symbol(" > ")
+        .highlight_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    f.render_stateful_widget(list, inner, &mut state);
 }
 
 fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {

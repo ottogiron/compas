@@ -21,7 +21,10 @@ use ratatui::{
     layout::{Constraint, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{
+        Block, Borders, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        Table, TableState,
+    },
     Frame,
 };
 
@@ -82,7 +85,9 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // ── Build table ───────────────────────────────────────────────────────────
-    let selected = app.executions_selected;
+    let selected = app
+        .executions_selected
+        .min(data.executions.len().saturating_sub(1));
 
     let header = Row::new([
         Cell::from("Agent").style(
@@ -124,24 +129,10 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     .height(1)
     .bottom_margin(1);
 
-    let visible_rows = area.height.saturating_sub(4) as usize;
-    let total = data.executions.len();
-    let scroll = if total <= visible_rows || visible_rows == 0 {
-        0
-    } else if selected < visible_rows / 2 {
-        0
-    } else if selected + visible_rows > total {
-        total - visible_rows
-    } else {
-        selected - (visible_rows / 2)
-    };
-
     let rows: Vec<Row> = data
         .executions
         .iter()
         .enumerate()
-        .skip(scroll)
-        .take(visible_rows.max(1))
         .map(|(idx, e)| {
             let is_selected = idx == selected;
 
@@ -218,9 +209,19 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .style(Style::default().bg(Color::Black).fg(Color::White));
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .row_highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        );
 
-    f.render_widget(table, area);
+    let mut state = TableState::default().with_selected(selected);
+    f.render_stateful_widget(table, area, &mut state);
+
+    let mut scrollbar_state = ScrollbarState::new(data.executions.len().max(1)).position(selected);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -9,7 +9,10 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState,
+    },
     Frame,
 };
 use std::collections::HashMap;
@@ -458,8 +461,8 @@ fn render_ops_list(
     );
     let recent_indices = capped_recently_completed(&classified.recently_completed);
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut sel_to_line: Vec<usize> = Vec::new();
+    let mut items: Vec<ListItem<'static>> = Vec::new();
+    let mut sel_to_row: Vec<usize> = Vec::new();
     let mut selectable_slot = 0usize;
     let selected_slot = app.activity_selected.min(
         ops_selectable_count(
@@ -472,7 +475,7 @@ fn render_ops_list(
     );
 
     if let Some(batch) = app.drill_batch.as_deref() {
-        lines.push(Line::from(vec![
+        items.push(ListItem::new(Line::from(vec![
             Span::raw(" "),
             Span::styled(
                 format!("Filter: batch {}", truncate_id(batch, 22)),
@@ -495,156 +498,158 @@ fn render_ops_list(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(": back"),
-        ]));
-        lines.push(Line::from(Span::raw("")));
+        ])));
+        items.push(ListItem::new(Line::from(Span::raw(""))));
     }
 
     push_section_header(
-        &mut lines,
+        &mut items,
         "Running",
         classified.running.len(),
         Color::Yellow,
     );
     if classified.running.is_empty() {
-        lines.push(empty_line("  none"));
+        items.push(empty_line("  none"));
     } else {
         for src_idx in &classified.running {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
             let is_selected = selectable_slot == selected_slot;
-            sel_to_line.push(lines.len());
-            lines.push(make_thread_line(row, is_selected, now_unix));
+            sel_to_row.push(items.len());
+            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
             selectable_slot += 1;
         }
     }
 
     if app.drill_batch.is_none() {
-        lines.push(Line::from(Span::raw("")));
+        items.push(ListItem::new(Line::from(Span::raw(""))));
         push_section_header(
-            &mut lines,
+            &mut items,
             "Active Batches",
             classified.active_batches.len(),
             Color::Yellow,
         );
         if classified.active_batches.is_empty() {
-            lines.push(empty_line("  none"));
+            items.push(empty_line("  none"));
         } else {
             for batch in &classified.active_batches {
                 let is_selected = selectable_slot == selected_slot;
-                sel_to_line.push(lines.len());
-                lines.push(make_batch_line(
+                sel_to_row.push(items.len());
+                items.push(ListItem::new(make_batch_line(
                     batch,
                     is_selected,
                     now_unix,
                     "A",
                     Color::Yellow,
-                ));
+                )));
                 selectable_slot += 1;
             }
         }
     }
 
-    lines.push(Line::from(Span::raw("")));
+    items.push(ListItem::new(Line::from(Span::raw(""))));
     push_section_header(
-        &mut lines,
+        &mut items,
         "Active Threads",
         classified.active_threads.len(),
         Color::Yellow,
     );
     if classified.active_threads.is_empty() {
-        lines.push(empty_line("  none"));
+        items.push(empty_line("  none"));
     } else {
         for src_idx in &classified.active_threads {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
             let is_selected = selectable_slot == selected_slot;
-            sel_to_line.push(lines.len());
-            lines.push(make_thread_line(row, is_selected, now_unix));
+            sel_to_row.push(items.len());
+            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
             selectable_slot += 1;
         }
     }
 
     if app.drill_batch.is_some() {
-        lines.push(Line::from(Span::raw("")));
+        items.push(ListItem::new(Line::from(Span::raw(""))));
         push_section_header(
-            &mut lines,
+            &mut items,
             "Other",
             classified.uncategorized.len(),
             Color::DarkGray,
         );
         if classified.uncategorized.is_empty() {
-            lines.push(empty_line("  none"));
+            items.push(empty_line("  none"));
         } else {
             for src_idx in &classified.uncategorized {
                 let Some(row) = data.rows.get(*src_idx) else {
                     continue;
                 };
                 let is_selected = selectable_slot == selected_slot;
-                sel_to_line.push(lines.len());
-                lines.push(make_thread_line(row, is_selected, now_unix));
+                sel_to_row.push(items.len());
+                items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
                 selectable_slot += 1;
             }
         }
     }
 
     if app.drill_batch.is_none() {
-        lines.push(Line::from(Span::raw("")));
-        push_section_header(&mut lines, "Batches", classified.batches.len(), Color::Cyan);
+        items.push(ListItem::new(Line::from(Span::raw(""))));
+        push_section_header(&mut items, "Batches", classified.batches.len(), Color::Cyan);
         if classified.batches.is_empty() {
-            lines.push(empty_line("  none"));
+            items.push(empty_line("  none"));
         } else {
             for batch in &classified.batches {
                 let is_selected = selectable_slot == selected_slot;
-                sel_to_line.push(lines.len());
-                lines.push(make_batch_line(
+                sel_to_row.push(items.len());
+                items.push(ListItem::new(make_batch_line(
                     batch,
                     is_selected,
                     now_unix,
                     "B",
                     Color::Cyan,
-                ));
+                )));
                 selectable_slot += 1;
             }
         }
     }
 
-    lines.push(Line::from(Span::raw("")));
+    items.push(ListItem::new(Line::from(Span::raw(""))));
     push_section_header(
-        &mut lines,
+        &mut items,
         "Recently Completed",
         recent_indices.len(),
         Color::Green,
     );
     if recent_indices.is_empty() {
-        lines.push(empty_line("  none"));
+        items.push(empty_line("  none"));
     } else {
         for src_idx in recent_indices {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
             let is_selected = selectable_slot == selected_slot;
-            sel_to_line.push(lines.len());
-            lines.push(make_thread_line(row, is_selected, now_unix));
+            sel_to_row.push(items.len());
+            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
             selectable_slot += 1;
         }
     }
 
     let visible_height = list_area.height as usize;
-    let selected_display_idx = sel_to_line.get(selected_slot).copied().unwrap_or(0);
-    let scroll = compute_scroll(selected_display_idx, visible_height, lines.len());
+    let selected_display_idx = sel_to_row.get(selected_slot).copied().unwrap_or(0);
+    let scroll = compute_scroll(selected_display_idx, visible_height, items.len());
 
-    let visible: Vec<Line<'static>> = lines
-        .into_iter()
-        .skip(scroll)
-        .take(visible_height.max(1))
-        .collect();
+    let mut state = ListState::default().with_selected(Some(selected_display_idx));
+    *state.offset_mut() = scroll;
 
-    f.render_widget(
-        Paragraph::new(visible).style(Style::default().bg(Color::Black).fg(Color::White)),
-        list_area,
-    );
+    let list = List::new(items)
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .style(Style::default().bg(Color::Black).fg(Color::White));
+    f.render_stateful_widget(list, list_area, &mut state);
+
+    let mut scrollbar_state = ScrollbarState::new(selectable_slot.max(1)).position(selected_slot);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    f.render_stateful_widget(scrollbar, list_area, &mut scrollbar_state);
+
     f.render_widget(
         Paragraph::new(build_footer_line(data, now_unix, stale_after_secs))
             .style(Style::default().bg(Color::Black).fg(Color::DarkGray)),
@@ -975,8 +980,13 @@ fn make_batch_line(
     ])
 }
 
-fn push_section_header(lines: &mut Vec<Line<'static>>, title: &str, count: usize, color: Color) {
-    lines.push(Line::from(vec![
+fn push_section_header(
+    items: &mut Vec<ListItem<'static>>,
+    title: &str,
+    count: usize,
+    color: Color,
+) {
+    items.push(ListItem::new(Line::from(vec![
         Span::raw(" "),
         Span::styled(
             title.to_string(),
@@ -989,14 +999,14 @@ fn push_section_header(lines: &mut Vec<Line<'static>>, title: &str, count: usize
             format!("({count})"),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
-    ]));
+    ])));
 }
 
-fn empty_line(s: &str) -> Line<'static> {
-    Line::from(Span::styled(
+fn empty_line(s: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
         s.to_string(),
         Style::default().fg(Color::DarkGray),
-    ))
+    )))
 }
 
 fn kv_line(label: &str, value: &str) -> Line<'static> {
