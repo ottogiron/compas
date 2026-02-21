@@ -826,19 +826,21 @@ impl Store {
     ) -> Result<Vec<ThreadStatusView>, sqlx::Error> {
         let mut sql = String::from(
             "SELECT t.thread_id, t.batch_id, t.status, t.created_at, t.updated_at,
-                    e.id, e.agent_alias, e.status, e.queued_at,
+                    e.id, COALESCE(e.agent_alias, m.to_alias), e.status, e.queued_at,
                     e.started_at, e.finished_at, e.duration_ms,
                     e.error_detail, e.parsed_intent
              FROM threads t
              LEFT JOIN executions e ON e.thread_id = t.thread_id
                AND e.queued_at = (SELECT MAX(e2.queued_at) FROM executions e2 WHERE e2.thread_id = t.thread_id)
+             LEFT JOIN messages m ON m.thread_id = t.thread_id
+               AND m.id = (SELECT MAX(m2.id) FROM messages m2 WHERE m2.thread_id = t.thread_id)
              WHERE 1=1",
         );
         if thread_id.is_some() {
             sql.push_str(" AND t.thread_id = ?");
         }
         if agent.is_some() {
-            sql.push_str(" AND e.agent_alias = ?");
+            sql.push_str(" AND COALESCE(e.agent_alias, m.to_alias) = ?");
         }
         if batch.is_some() {
             sql.push_str(" AND t.batch_id = ?");
@@ -1163,5 +1165,36 @@ mod tests {
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "chill").await.unwrap();
         assert_eq!(store.queue_depth().await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_status_view_uses_latest_message_agent_when_no_execution() {
+        let store = test_store().await;
+        store
+            .insert_message(
+                "t-1",
+                "operator",
+                "focused",
+                "dispatch",
+                "body",
+                Some("b-1"),
+            )
+            .await
+            .unwrap();
+
+        let rows = store
+            .status_view(Some("t-1"), None, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].execution_id, None);
+        assert_eq!(rows[0].agent_alias.as_deref(), Some("focused"));
+
+        let filtered = store
+            .status_view(Some("t-1"), Some("focused"), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].agent_alias.as_deref(), Some("focused"));
     }
 }

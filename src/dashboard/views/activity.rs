@@ -1,5 +1,5 @@
-//! Ops tab — unified selectable control-plane list with Needs Attention,
-//! Running, Batches, and Recently Completed sections.
+//! Ops tab — unified selectable control-plane list with Running, Active Batches,
+//! Active Threads, Batches, and Recently Completed.
 //!
 //! Layout (within content pane):
 //! - Left: grouped list with keyboard selection and section counts.
@@ -37,40 +37,54 @@ struct BatchProgress {
     review: usize,
     failed: usize,
     oldest_active_updated_at: Option<i64>,
+    latest_updated_at: i64,
 }
 
 #[derive(Debug, Default)]
 struct ClassifiedRows {
-    needs_attention: Vec<usize>,
     running: Vec<usize>,
+    active_threads: Vec<usize>,
     uncategorized: Vec<usize>,
     recently_completed: Vec<usize>,
+    active_batches: Vec<BatchProgress>,
     batches: Vec<BatchProgress>,
 }
 
-fn is_needs_attention(t: &ThreadStatusView) -> bool {
-    let ts = t.thread_status.as_str();
-    let es = t.execution_status.as_deref().unwrap_or("");
-
-    if matches!(ts, "Completed" | "Abandoned") {
-        return false;
-    }
-
-    ts == "ReviewPending" || ts == "Failed" || matches!(es, "failed" | "timed_out" | "crashed")
-}
-
-fn is_running(t: &ThreadStatusView) -> bool {
+fn is_running_now(t: &ThreadStatusView) -> bool {
     matches!(
         t.execution_status.as_deref().unwrap_or(""),
         "executing" | "picked_up" | "queued"
     )
 }
 
+fn is_latest_exec_completed(t: &ThreadStatusView) -> bool {
+    t.execution_status.as_deref() == Some("completed")
+}
+
+fn is_stale_active(t: &ThreadStatusView, now_unix: i64, stale_after_secs: i64) -> bool {
+    t.thread_status == "Active"
+        && !is_running_now(t)
+        && !is_latest_exec_completed(t)
+        && (now_unix - t.thread_updated_at).max(0) >= stale_after_secs
+}
+
+fn is_active_waiting(t: &ThreadStatusView, now_unix: i64, stale_after_secs: i64) -> bool {
+    t.thread_status == "Active"
+        && !is_running_now(t)
+        && !is_latest_exec_completed(t)
+        && !is_stale_active(t, now_unix, stale_after_secs)
+}
+
 fn is_recently_completed(t: &ThreadStatusView) -> bool {
     t.execution_status.as_deref() == Some("completed") || t.thread_status == "Completed"
 }
 
-fn classify_rows(rows: &[ThreadStatusView], drill_batch: Option<&str>) -> ClassifiedRows {
+fn classify_rows(
+    rows: &[ThreadStatusView],
+    drill_batch: Option<&str>,
+    now_unix: i64,
+    stale_after_secs: i64,
+) -> ClassifiedRows {
     let filtered: Vec<(usize, &ThreadStatusView)> = rows
         .iter()
         .enumerate()
@@ -83,25 +97,52 @@ fn classify_rows(rows: &[ThreadStatusView], drill_batch: Option<&str>) -> Classi
     let mut out = ClassifiedRows::default();
 
     for (idx, row) in &filtered {
-        if is_needs_attention(row) {
-            out.needs_attention.push(*idx);
-        } else if is_running(row) {
+        if is_running_now(row) {
             out.running.push(*idx);
-        } else if is_recently_completed(row) && out.recently_completed.len() < 8 {
+        } else if is_active_waiting(row, now_unix, stale_after_secs) {
+            out.active_threads.push(*idx);
+        } else if is_recently_completed(row) {
             out.recently_completed.push(*idx);
         } else {
             out.uncategorized.push(*idx);
         }
     }
 
+    sort_indices_by_updated(rows, &mut out.running);
+    sort_indices_by_updated(rows, &mut out.active_threads);
+    sort_indices_by_updated(rows, &mut out.uncategorized);
+    sort_indices_by_updated(rows, &mut out.recently_completed);
+
+    if out.recently_completed.len() > 8 {
+        out.recently_completed.truncate(8);
+    }
+
     if drill_batch.is_none() {
-        out.batches = batch_progress(rows);
+        out.batches = batch_progress(rows, now_unix, stale_after_secs);
+        out.active_batches = out
+            .batches
+            .iter()
+            .filter(|b| b.active > 0)
+            .cloned()
+            .collect();
     }
 
     out
 }
 
-fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
+fn sort_indices_by_updated(rows: &[ThreadStatusView], indices: &mut [usize]) {
+    indices.sort_by(|a, b| {
+        let a_ts = rows.get(*a).map(|r| r.thread_updated_at).unwrap_or(0);
+        let b_ts = rows.get(*b).map(|r| r.thread_updated_at).unwrap_or(0);
+        b_ts.cmp(&a_ts)
+    });
+}
+
+fn batch_progress(
+    rows: &[ThreadStatusView],
+    now_unix: i64,
+    stale_after_secs: i64,
+) -> Vec<BatchProgress> {
     #[derive(Default)]
     struct Agg {
         completed: usize,
@@ -110,6 +151,7 @@ fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
         review: usize,
         failed: usize,
         oldest_active_updated_at: Option<i64>,
+        latest_updated_at: i64,
     }
 
     let mut map: HashMap<String, Agg> = HashMap::new();
@@ -124,6 +166,7 @@ fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
 
         let agg = map.entry(batch_id.to_string()).or_default();
         agg.total += 1;
+        agg.latest_updated_at = agg.latest_updated_at.max(r.thread_updated_at);
 
         let es = r.execution_status.as_deref().unwrap_or("");
         if r.thread_status == "Completed" || es == "completed" {
@@ -135,7 +178,7 @@ fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
         if r.thread_status == "Failed" || matches!(es, "failed" | "timed_out" | "crashed") {
             agg.failed += 1;
         }
-        if is_running(r) || r.thread_status == "Active" {
+        if is_running_now(r) || is_active_waiting(r, now_unix, stale_after_secs) {
             agg.active += 1;
             agg.oldest_active_updated_at = Some(match agg.oldest_active_updated_at {
                 Some(current) => current.min(r.thread_updated_at),
@@ -154,14 +197,13 @@ fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
             review: agg.review,
             failed: agg.failed,
             oldest_active_updated_at: agg.oldest_active_updated_at,
+            latest_updated_at: agg.latest_updated_at,
         })
         .collect();
 
     out.sort_by(|a, b| {
-        let a_score = (a.failed > 0, a.review > 0, a.active > 0);
-        let b_score = (b.failed > 0, b.review > 0, b.active > 0);
-        b_score
-            .cmp(&a_score)
+        b.latest_updated_at
+            .cmp(&a.latest_updated_at)
             .then_with(|| a.batch_id.cmp(&b.batch_id))
     });
 
@@ -171,20 +213,30 @@ fn batch_progress(rows: &[ThreadStatusView]) -> Vec<BatchProgress> {
 pub fn ops_selectable_targets(
     rows: &[ThreadStatusView],
     drill_batch: Option<&str>,
+    now_unix: i64,
+    stale_after_secs: i64,
 ) -> Vec<OpsSelectable> {
-    let classified = classify_rows(rows, drill_batch);
+    let classified = classify_rows(rows, drill_batch, now_unix, stale_after_secs);
     let mut out = Vec::new();
 
     out.extend(
         classified
-            .needs_attention
+            .running
             .iter()
             .copied()
             .map(OpsSelectable::Thread),
     );
+    if drill_batch.is_none() {
+        out.extend(
+            classified
+                .active_batches
+                .iter()
+                .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
+        );
+    }
     out.extend(
         classified
-            .running
+            .active_threads
             .iter()
             .copied()
             .map(OpsSelectable::Thread),
@@ -198,12 +250,14 @@ pub fn ops_selectable_targets(
                 .map(OpsSelectable::Thread),
         );
     }
-    out.extend(
-        classified
-            .batches
-            .iter()
-            .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
-    );
+    if drill_batch.is_none() {
+        out.extend(
+            classified
+                .batches
+                .iter()
+                .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
+        );
+    }
     out.extend(
         classified
             .recently_completed
@@ -219,29 +273,121 @@ pub fn ops_selected_target(
     rows: &[ThreadStatusView],
     drill_batch: Option<&str>,
     selected: usize,
+    now_unix: i64,
+    stale_after_secs: i64,
 ) -> Option<OpsSelectable> {
-    ops_selectable_targets(rows, drill_batch)
+    ops_selectable_targets(rows, drill_batch, now_unix, stale_after_secs)
         .into_iter()
         .nth(selected)
 }
 
-pub fn ops_selectable_count(rows: &[ThreadStatusView], drill_batch: Option<&str>) -> usize {
-    ops_selectable_targets(rows, drill_batch).len()
+pub fn ops_selectable_count(
+    rows: &[ThreadStatusView],
+    drill_batch: Option<&str>,
+    now_unix: i64,
+    stale_after_secs: i64,
+) -> usize {
+    ops_selectable_targets(rows, drill_batch, now_unix, stale_after_secs).len()
+}
+
+pub fn stale_active_thread_ids(
+    rows: &[ThreadStatusView],
+    drill_batch: Option<&str>,
+    now_unix: i64,
+    stale_after_secs: i64,
+) -> Vec<String> {
+    rows.iter()
+        .filter(|r| match drill_batch {
+            Some(batch) => r.batch_id.as_deref() == Some(batch),
+            None => true,
+        })
+        .filter(|r| r.thread_status == "Active")
+        .filter(|r| {
+            !matches!(
+                r.execution_status.as_deref().unwrap_or(""),
+                "queued" | "picked_up" | "executing"
+            )
+        })
+        .filter(|r| r.execution_status.as_deref() != Some("completed"))
+        .filter(|r| (now_unix - r.thread_updated_at).max(0) >= stale_after_secs)
+        .map(|r| r.thread_id.clone())
+        .collect()
 }
 
 // Compatibility helpers retained for existing call sites/tests.
 pub fn selectable_indices(rows: &[ThreadStatusView]) -> Vec<usize> {
     let ClassifiedRows {
-        needs_attention,
         running,
+        active_threads,
         recently_completed,
         ..
-    } = classify_rows(rows, None);
-    needs_attention
+    } = classify_rows(rows, None, 0, 3600);
+    running
         .into_iter()
-        .chain(running)
+        .chain(active_threads)
         .chain(recently_completed)
         .collect()
+}
+
+fn footer_counts(
+    data: &ActivityData,
+    now_unix: i64,
+    stale_after_secs: i64,
+) -> (i64, i64, i64, i64, i64) {
+    let active = data
+        .rows
+        .iter()
+        .filter(|r| is_running_now(r) || is_active_waiting(r, now_unix, stale_after_secs))
+        .count() as i64;
+    let stale = data
+        .rows
+        .iter()
+        .filter(|r| is_stale_active(r, now_unix, stale_after_secs))
+        .count() as i64;
+
+    let mut review = 0i64;
+    let mut failed = 0i64;
+    let mut completed = 0i64;
+    for (status, count) in &data.thread_counts {
+        match status.as_str() {
+            "ReviewPending" | "review_pending" => review += count,
+            "Failed" | "failed" => failed += count,
+            "Completed" | "completed" => completed += count,
+            _ => {}
+        }
+    }
+    (active, review, failed, completed, stale)
+}
+
+fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) -> Line<'static> {
+    let (active, review, failed, completed, stale) =
+        footer_counts(data, now_unix, stale_after_secs);
+
+    let label = |s: &str, color: Color| -> Span<'static> {
+        Span::styled(s.to_string(), Style::default().fg(color))
+    };
+    let val = |n: i64| -> Span<'static> {
+        Span::styled(format!("{}  ", n), Style::default().fg(Color::White))
+    };
+
+    Line::from(vec![
+        Span::raw(" "),
+        label("Active: ", Color::Yellow),
+        val(active),
+        label("Stale: ", Color::DarkGray),
+        val(stale),
+        label("Review: ", Color::Blue),
+        val(review),
+        label("Failed: ", Color::Red),
+        val(failed),
+        label("Completed: ", Color::Green),
+        val(completed),
+        label("Pending: ", Color::Cyan),
+        Span::styled(
+            format!("{}", data.queue_depth),
+            Style::default().fg(Color::White),
+        ),
+    ])
 }
 
 pub fn selectable_count(rows: &[ThreadStatusView]) -> usize {
@@ -291,11 +437,19 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
     let left = panes[0];
     let right = panes[1];
 
-    render_ops_list(f, app, data, left, now_unix);
-    render_context_panel(f, app, data, right, now_unix);
+    let stale_after_secs = app.config.orchestration.stale_active_secs as i64;
+    render_ops_list(f, app, data, left, now_unix, stale_after_secs);
+    render_context_panel(f, app, data, right, now_unix, stale_after_secs);
 }
 
-fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, now_unix: i64) {
+fn render_ops_list(
+    f: &mut Frame,
+    app: &App,
+    data: &ActivityData,
+    area: Rect,
+    now_unix: i64,
+    stale_after_secs: i64,
+) {
     let layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(1)])
@@ -303,7 +457,12 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
     let list_area = layout[0];
     let footer_area = layout[1];
 
-    let classified = classify_rows(&data.rows, app.drill_batch.as_deref());
+    let classified = classify_rows(
+        &data.rows,
+        app.drill_batch.as_deref(),
+        now_unix,
+        stale_after_secs,
+    );
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut sel_to_line: Vec<usize> = Vec::new();
@@ -339,14 +498,14 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
 
     push_section_header(
         &mut lines,
-        "Needs Attention",
-        classified.needs_attention.len(),
-        Color::Red,
+        "Running",
+        classified.running.len(),
+        Color::Yellow,
     );
-    if classified.needs_attention.is_empty() {
+    if classified.running.is_empty() {
         lines.push(empty_line("  none"));
     } else {
-        for src_idx in &classified.needs_attention {
+        for src_idx in &classified.running {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
@@ -357,18 +516,43 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
         }
     }
 
-    lines.push(Line::from(Span::raw("")));
+    if app.drill_batch.is_none() {
+        lines.push(Line::from(Span::raw("")));
+        push_section_header(
+            &mut lines,
+            "Active Batches",
+            classified.active_batches.len(),
+            Color::Yellow,
+        );
+        if classified.active_batches.is_empty() {
+            lines.push(empty_line("  none"));
+        } else {
+            for batch in &classified.active_batches {
+                let is_selected = selectable_slot == app.activity_selected;
+                sel_to_line.push(lines.len());
+                lines.push(make_batch_line(
+                    batch,
+                    is_selected,
+                    now_unix,
+                    "A",
+                    Color::Yellow,
+                ));
+                selectable_slot += 1;
+            }
+        }
+    }
 
+    lines.push(Line::from(Span::raw("")));
     push_section_header(
         &mut lines,
-        "Running",
-        classified.running.len(),
+        "Active Threads",
+        classified.active_threads.len(),
         Color::Yellow,
     );
-    if classified.running.is_empty() {
+    if classified.active_threads.is_empty() {
         lines.push(empty_line("  none"));
     } else {
-        for src_idx in &classified.running {
+        for src_idx in &classified.active_threads {
             let Some(row) = data.rows.get(*src_idx) else {
                 continue;
             };
@@ -411,7 +595,13 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
             for batch in &classified.batches {
                 let is_selected = selectable_slot == app.activity_selected;
                 sel_to_line.push(lines.len());
-                lines.push(make_batch_line(batch, is_selected, now_unix));
+                lines.push(make_batch_line(
+                    batch,
+                    is_selected,
+                    now_unix,
+                    "B",
+                    Color::Cyan,
+                ));
                 selectable_slot += 1;
             }
         }
@@ -450,20 +640,38 @@ fn render_ops_list(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, no
 
     f.render_widget(Paragraph::new(visible), list_area);
     f.render_widget(
-        Paragraph::new(build_footer_line(data)).style(Style::default().fg(Color::DarkGray)),
+        Paragraph::new(build_footer_line(data, now_unix, stale_after_secs))
+            .style(Style::default().fg(Color::DarkGray)),
         footer_area,
     );
 }
 
-fn render_context_panel(f: &mut Frame, app: &App, data: &ActivityData, area: Rect, now_unix: i64) {
+fn render_context_panel(
+    f: &mut Frame,
+    app: &App,
+    data: &ActivityData,
+    area: Rect,
+    now_unix: i64,
+    stale_after_secs: i64,
+) {
     let block = Block::default().borders(Borders::ALL).title(" Context ");
     let inner = block.inner(area);
     f.render_widget(block, area);
+
+    let stale_count = stale_active_thread_ids(
+        &data.rows,
+        app.drill_batch.as_deref(),
+        now_unix,
+        stale_after_secs,
+    )
+    .len();
 
     let selected = ops_selected_target(
         &data.rows,
         app.drill_batch.as_deref(),
         app.activity_selected,
+        now_unix,
+        stale_after_secs,
     );
 
     let mut lines: Vec<Line> = Vec::new();
@@ -519,6 +727,12 @@ fn render_context_panel(f: &mut Frame, app: &App, data: &ActivityData, area: Rec
                     can_reopen,
                     "requires terminal status",
                 ));
+                lines.push(action_line(
+                    "abandon stale active",
+                    "s",
+                    stale_count > 0,
+                    "no stale active threads",
+                ));
                 lines.push(action_line("action menu", "a", true, ""));
             }
         }
@@ -542,7 +756,7 @@ fn render_context_panel(f: &mut Frame, app: &App, data: &ActivityData, area: Rec
                 if row.thread_status == "Failed" {
                     failed += 1;
                 }
-                if row.thread_status == "Active" {
+                if is_running_now(row) || is_active_waiting(row, now_unix, stale_after_secs) {
                     active += 1;
                 }
             }
@@ -563,6 +777,12 @@ fn render_context_panel(f: &mut Frame, app: &App, data: &ActivityData, area: Rec
                 ),
                 Span::raw(":"),
             ]));
+            lines.push(action_line(
+                "abandon stale active",
+                "s",
+                stale_count > 0,
+                "no stale active threads",
+            ));
             if app.drill_batch.as_deref() == Some(batch_id.as_str()) {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
@@ -664,7 +884,13 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
     ])
 }
 
-fn make_batch_line(batch: &BatchProgress, is_selected: bool, now_unix: i64) -> Line<'static> {
+fn make_batch_line(
+    batch: &BatchProgress,
+    is_selected: bool,
+    now_unix: i64,
+    marker: &str,
+    marker_color: Color,
+) -> Line<'static> {
     let fill = if batch.total == 0 {
         0
     } else {
@@ -688,7 +914,10 @@ fn make_batch_line(batch: &BatchProgress, is_selected: bool, now_unix: i64) -> L
     };
 
     Line::from(vec![
-        Span::styled(" B ", Style::default().fg(Color::Cyan).bg(bg)),
+        Span::styled(
+            format!(" {} ", marker),
+            Style::default().fg(marker_color).bg(bg),
+        ),
         Span::styled(
             format!("{:<14}", truncate_id(&batch.batch_id, 12)),
             Style::default()
@@ -859,53 +1088,12 @@ fn compute_health(data: &Option<ActivityData>, now_unix: i64) -> (String, Color)
             Some((_, last_beat_at, _, _)) => {
                 let age = (now_unix - last_beat_at).max(0);
                 let color = if age < 30 { Color::Green } else { Color::Red };
-                (format!(" * {}s ", age), color)
+                (format!(" worker beat: {}s ", age), color)
             }
-            None => (" o no beat ".to_string(), Color::DarkGray),
+            None => (" worker beat: none ".to_string(), Color::DarkGray),
         },
         None => (" ".to_string(), Color::DarkGray),
     }
-}
-
-fn build_footer_line(data: &ActivityData) -> Line<'static> {
-    let mut active = 0i64;
-    let mut review = 0i64;
-    let mut failed = 0i64;
-    let mut completed = 0i64;
-
-    for (status, count) in &data.thread_counts {
-        match status.as_str() {
-            "Active" | "active" => active += count,
-            "ReviewPending" | "review_pending" => review += count,
-            "Failed" | "failed" => failed += count,
-            "Completed" | "completed" => completed += count,
-            _ => {}
-        }
-    }
-
-    let label = |s: &str, color: Color| -> Span<'static> {
-        Span::styled(s.to_string(), Style::default().fg(color))
-    };
-    let val = |n: i64| -> Span<'static> {
-        Span::styled(format!("{}  ", n), Style::default().fg(Color::White))
-    };
-
-    Line::from(vec![
-        Span::raw(" "),
-        label("Active: ", Color::Yellow),
-        val(active),
-        label("Review: ", Color::Blue),
-        val(review),
-        label("Failed: ", Color::Red),
-        val(failed),
-        label("Completed: ", Color::Green),
-        val(completed),
-        label("Pending: ", Color::Cyan),
-        Span::styled(
-            format!("{}", data.queue_depth),
-            Style::default().fg(Color::White),
-        ),
-    ])
 }
 
 #[cfg(test)]
@@ -917,13 +1105,14 @@ mod tests {
         batch_id: Option<&str>,
         thread_status: &str,
         execution_status: Option<&str>,
+        updated_at: i64,
     ) -> ThreadStatusView {
         ThreadStatusView {
             thread_id: thread_id.to_string(),
             batch_id: batch_id.map(|b| b.to_string()),
             thread_status: thread_status.to_string(),
             thread_created_at: 0,
-            thread_updated_at: 0,
+            thread_updated_at: updated_at,
             execution_id: None,
             agent_alias: None,
             execution_status: execution_status.map(|s| s.to_string()),
@@ -939,55 +1128,95 @@ mod tests {
     #[test]
     fn test_ops_selectable_targets_includes_batches() {
         let rows = vec![
-            make_row("t1", Some("b1"), "Active", Some("executing")),
-            make_row("t2", Some("b1"), "ReviewPending", Some("queued")),
-            make_row("t3", Some("b2"), "Completed", Some("completed")),
+            make_row("t1", Some("b1"), "Active", Some("executing"), 1),
+            make_row("t2", Some("b1"), "ReviewPending", Some("queued"), 2),
+            make_row("t3", Some("b2"), "Completed", Some("completed"), 3),
         ];
 
-        let targets = ops_selectable_targets(&rows, None);
+        let targets = ops_selectable_targets(&rows, None, 100, 3600);
         assert!(targets.iter().any(|t| matches!(t, OpsSelectable::Batch(_))));
     }
 
     #[test]
     fn test_ops_selectable_targets_drill_excludes_batches() {
         let rows = vec![
-            make_row("t1", Some("b1"), "Active", Some("executing")),
-            make_row("t2", Some("b2"), "Active", Some("queued")),
+            make_row("t1", Some("b1"), "Active", Some("executing"), 1),
+            make_row("t2", Some("b2"), "Active", Some("queued"), 2),
         ];
 
-        let targets = ops_selectable_targets(&rows, Some("b1"));
+        let targets = ops_selectable_targets(&rows, Some("b1"), 100, 3600);
         assert!(!targets.iter().any(|t| matches!(t, OpsSelectable::Batch(_))));
         assert_eq!(targets.len(), 1);
     }
 
     #[test]
-    fn test_ops_selectable_targets_drill_includes_uncategorized_threads() {
-        let rows = vec![
-            // completed thread
-            make_row("t1", Some("b1"), "Completed", Some("completed")),
-            // active thread with no running/failed/review status
-            make_row("t2", Some("b1"), "Active", None),
-        ];
-
-        let targets = ops_selectable_targets(&rows, Some("b1"));
-        assert_eq!(targets.len(), 2);
-        assert!(targets
-            .iter()
-            .all(|t| matches!(t, OpsSelectable::Thread(_))));
-    }
-
-    #[test]
     fn test_batch_progress_counts() {
         let rows = vec![
-            make_row("t1", Some("b1"), "Active", Some("executing")),
-            make_row("t2", Some("b1"), "ReviewPending", Some("queued")),
-            make_row("t3", Some("b1"), "Completed", Some("completed")),
+            make_row("t1", Some("b1"), "Active", Some("executing"), 1),
+            make_row("t2", Some("b1"), "ReviewPending", Some("queued"), 2),
+            make_row("t3", Some("b1"), "Completed", Some("completed"), 3),
         ];
 
-        let batches = batch_progress(&rows);
+        let batches = batch_progress(&rows, 100, 3600);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].total, 3);
         assert_eq!(batches[0].completed, 1);
         assert_eq!(batches[0].review, 1);
+    }
+
+    #[test]
+    fn test_section_threads_sorted_desc_by_updated_at() {
+        let rows = vec![
+            make_row("older", Some("b1"), "Active", None, 10),
+            make_row("newer", Some("b1"), "Active", None, 20),
+        ];
+        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let active_thread_ids: Vec<String> = targets
+            .into_iter()
+            .filter_map(|t| match t {
+                OpsSelectable::Thread(idx) => Some(rows[idx].thread_id.clone()),
+                OpsSelectable::Batch(_) => None,
+            })
+            .collect();
+        assert_eq!(active_thread_ids[0], "newer");
+    }
+
+    #[test]
+    fn test_stale_active_thread_ids_filters_running_and_fresh() {
+        let rows = vec![
+            make_row("stale", Some("b1"), "Active", None, 100),
+            make_row("running", Some("b1"), "Active", Some("executing"), 100),
+            make_row("done", Some("b1"), "Active", Some("completed"), 100),
+            make_row("fresh", Some("b1"), "Active", None, 990),
+        ];
+        let ids = stale_active_thread_ids(&rows, Some("b1"), 1000, 300);
+        assert_eq!(ids, vec!["stale".to_string()]);
+    }
+
+    #[test]
+    fn test_footer_counts_excludes_stale_from_active() {
+        let data = ActivityData {
+            rows: vec![
+                make_row("running", Some("b1"), "Active", Some("executing"), 950),
+                make_row("fresh", Some("b1"), "Active", None, 980),
+                make_row("stale", Some("b1"), "Active", None, 100),
+            ],
+            thread_counts: vec![
+                ("Active".to_string(), 3),
+                ("ReviewPending".to_string(), 0),
+                ("Failed".to_string(), 0),
+                ("Completed".to_string(), 0),
+            ],
+            queue_depth: 0,
+            heartbeat: None,
+            fetched_at: std::time::Instant::now(),
+        };
+
+        let (active, review, failed, completed, stale) = footer_counts(&data, 1000, 300);
+        assert_eq!(active, 2);
+        assert_eq!(review, 0);
+        assert_eq!(failed, 0);
+        assert_eq!(completed, 0);
+        assert_eq!(stale, 1);
     }
 }
