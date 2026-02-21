@@ -4,6 +4,7 @@ pub mod activity;
 pub mod agents;
 pub mod executions;
 pub mod log_viewer;
+pub mod payload;
 
 use ratatui::style::Color;
 

@@ -110,9 +110,21 @@ Dashboard controls:
 
 - `Tab` / `Shift+Tab` / `1-4`: switch tabs
 - `↑/↓` or `j/k`: move selection
-- `Enter`: open execution log viewer
-- `b`: abandon selected thread (confirm modal)
-- `o`: reopen selected thread (confirm modal)
+- `g` / `G`: jump to first/last row
+- `Enter`: open selected log, or drill into selected batch on Ops
+- `Esc`: back out of active batch drill filter
+- `a`: open guided action menu for selected thread
+- `b` / `o`: quick aliases for abandon/reopen (still opens guided confirm)
+- `J`: toggle payload rendering in Ops context pane (pretty JSON is default)
+- `?`: open keyboard help overlay
+- `q` or `Ctrl+C`: exit dashboard
+
+Log viewer controls:
+
+- `Esc`: back to dashboard
+- `g` / `G`: top/bottom
+- `f`: toggle follow mode
+- `J`: pretty-print JSON log lines when possible
 
 | Flag | Default | Description |
 |------|---------|-------------|

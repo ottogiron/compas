@@ -23,6 +23,7 @@ use ratatui::{
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
+use crate::dashboard::views::payload::format_log_line;
 use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -50,6 +51,8 @@ pub struct LogViewerState {
     /// Cached number of visible content rows from the last render pass.
     /// Used by the event loop to compute page-scroll distances.
     pub visible_rows: usize,
+    /// If true, JSON log lines are pretty-printed while rendering.
+    pub pretty_json: bool,
 }
 
 impl LogViewerState {
@@ -78,6 +81,7 @@ impl LogViewerState {
             log_path: None,
             file_pos: 0,
             visible_rows: 20,
+            pretty_json: true,
         };
 
         // Try to load from the log file first.
@@ -194,6 +198,11 @@ impl LogViewerState {
         }
     }
 
+    /// Toggle JSON pretty rendering mode.
+    pub fn toggle_pretty_json(&mut self) {
+        self.pretty_json = !self.pretty_json;
+    }
+
     /// Returns `true` if the execution is still in a running state and the log
     /// file should be polled for new content.
     pub fn is_running(&self) -> bool {
@@ -220,6 +229,7 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
         .map(format_duration_ms)
         .unwrap_or_else(|| "–".to_string());
     let follow_indicator = if state.follow { "  [follow]" } else { "" };
+    let json_indicator = if state.pretty_json { "  [json]" } else { "" };
 
     let title_spans: Vec<Span> = vec![
         Span::raw(" "),
@@ -246,6 +256,12 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled(
+            json_indicator,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
     ];
 
@@ -255,17 +271,23 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
     let visible_rows = area.height.saturating_sub(2) as usize;
     state.visible_rows = visible_rows;
 
+    let display_lines: Vec<String> = state
+        .lines
+        .iter()
+        .flat_map(|line| format_log_line(line, state.pretty_json))
+        .collect();
+
     // Clamp scroll offset so we never show blank lines below the content.
-    let max_offset = state.lines.len().saturating_sub(visible_rows).max(0);
+    let max_offset = display_lines.len().saturating_sub(visible_rows).max(0);
     let scroll_offset = state.scroll_offset.min(max_offset);
 
     // ── Position indicator ────────────────────────────────────────────────────
-    let position_label: String = if state.lines.is_empty() {
+    let position_label: String = if display_lines.is_empty() {
         String::new()
     } else {
         let first = scroll_offset + 1;
-        let last = (scroll_offset + visible_rows).min(state.lines.len());
-        format!("  {first}-{last}/{total}  ", total = state.lines.len())
+        let last = (scroll_offset + visible_rows).min(display_lines.len());
+        format!("  {first}-{last}/{total}  ", total = display_lines.len())
     };
 
     // ── Footer keybinding spans ───────────────────────────────────────────────
@@ -287,7 +309,9 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
         key("G"),
         Span::raw(": bottom  "),
         key("f"),
-        Span::raw(": toggle follow"),
+        Span::raw(": follow  "),
+        key("J"),
+        Span::raw(": json"),
         Span::styled(position_label, Style::default().fg(Color::DarkGray)),
     ];
 
@@ -298,14 +322,13 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
         .title_bottom(Line::from(footer_spans));
 
     // ── Slice lines for the current viewport ──────────────────────────────────
-    let visible_lines: Vec<Line> = if state.lines.is_empty() {
+    let visible_lines: Vec<Line> = if display_lines.is_empty() {
         vec![Line::from(Span::styled(
             "  (no output)",
             Style::default().fg(Color::DarkGray),
         ))]
     } else {
-        state
-            .lines
+        display_lines
             .iter()
             .skip(scroll_offset)
             .take(visible_rows)
@@ -342,6 +365,7 @@ mod tests {
             log_path: None,
             file_pos: 0,
             visible_rows: 10,
+            pretty_json: false,
         };
         if follow && !s.lines.is_empty() {
             s.scroll_offset = s.lines.len().saturating_sub(1);

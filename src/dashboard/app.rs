@@ -14,7 +14,7 @@
 //! (tab bar and status bar are hidden for maximum vertical space).
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -34,7 +34,7 @@ use std::{
 use tokio::runtime::Handle;
 
 use crate::config::types::OrchestratorConfig;
-use crate::dashboard::views::activity::{self, render_activity};
+use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions;
 use crate::dashboard::views::log_viewer::{render_log_viewer, LogViewerState};
@@ -43,7 +43,7 @@ use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TABS: &[&str] = &["Activity", "Agents", "History", "Settings"];
+const TABS: &[&str] = &["Ops", "Agents", "History", "Settings"];
 const TICK_RATE: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, Copy)]
@@ -53,9 +53,18 @@ enum AdminActionKind {
 }
 
 #[derive(Debug, Clone)]
+struct ActionMenuState {
+    thread_id: String,
+    options: Vec<AdminActionKind>,
+    selected: usize,
+}
+
+#[derive(Debug, Clone)]
 struct PendingAdminAction {
     kind: AdminActionKind,
     thread_id: String,
+    impact_summary: String,
+    guardrail: String,
 }
 
 impl PendingAdminAction {
@@ -75,14 +84,9 @@ impl PendingAdminAction {
 
     fn prompt(&self) -> String {
         match self.kind {
-            AdminActionKind::Abandon => {
-                format!(
-                    "Abandon thread {} and cancel queued/running executions?",
-                    self.thread_id
-                )
-            }
+            AdminActionKind::Abandon => format!("Abandon thread {}?", self.thread_id),
             AdminActionKind::Reopen => {
-                format!("Reopen terminal thread {} to Active?", self.thread_id)
+                format!("Reopen thread {} to Active?", self.thread_id)
             }
         }
     }
@@ -162,10 +166,20 @@ pub struct App {
     pub executions_selected: usize,
     /// Active log viewer state.  `Some` when the log viewer overlay is open.
     pub viewing_log: Option<LogViewerState>,
+    /// Whether the help overlay is visible.
+    pub show_help: bool,
+    /// Optional action menu state for guided admin actions.
+    action_menu: Option<ActionMenuState>,
     /// Pending admin action waiting for explicit confirmation.
     pending_admin_action: Option<PendingAdminAction>,
     /// Last admin action result shown in the status bar.
     admin_notice: Option<String>,
+    /// Optional batch drill filter for Ops tab.
+    pub drill_batch: Option<String>,
+    /// Toggle pretty JSON formatting for details panes.
+    pub pretty_payload: bool,
+    /// One-time onboarding hint banner.
+    show_hint_banner: bool,
     /// Directory where execution log files are stored (`{state_dir}/logs/`).
     pub log_dir: PathBuf,
     /// Tokio runtime handle — used to drive async store queries from the
@@ -195,8 +209,13 @@ impl App {
             executions_data: None,
             executions_selected: 0,
             viewing_log: None,
+            show_help: false,
+            action_menu: None,
             pending_admin_action: None,
             admin_notice: None,
+            drill_batch: None,
+            pretty_payload: true,
+            show_hint_banner: true,
             log_dir,
             handle,
         }
@@ -245,7 +264,7 @@ impl App {
         });
 
         // Clamp selection to new selectable count.
-        let count = activity::selectable_count(&data.rows);
+        let count = activity::ops_selectable_count(&data.rows, self.drill_batch.as_deref());
         if count > 0 {
             self.activity_selected = self.activity_selected.min(count - 1);
         } else {
@@ -352,7 +371,10 @@ impl App {
                 let max = self
                     .activity_data
                     .as_ref()
-                    .map(|d| activity::selectable_count(&d.rows).saturating_sub(1))
+                    .map(|d| {
+                        activity::ops_selectable_count(&d.rows, self.drill_batch.as_deref())
+                            .saturating_sub(1)
+                    })
                     .unwrap_or(0);
                 self.activity_selected = (self.activity_selected + 1).min(max);
             }
@@ -389,8 +411,11 @@ impl App {
         let Some(data) = &self.activity_data else {
             return;
         };
-        let sel_idxs = activity::selectable_indices(&data.rows);
-        let Some(&src_idx) = sel_idxs.get(self.activity_selected) else {
+        let Some(OpsSelectable::Thread(src_idx)) = activity::ops_selected_target(
+            &data.rows,
+            self.drill_batch.as_deref(),
+            self.activity_selected,
+        ) else {
             return;
         };
         let Some(row) = data.rows.get(src_idx) else {
@@ -474,32 +499,163 @@ impl App {
 
     // ── Admin actions ────────────────────────────────────────────────────────
 
-    fn selected_thread_id(&self) -> Option<String> {
+    fn selected_activity_target(&self) -> Option<OpsSelectable> {
+        let data = self.activity_data.as_ref()?;
+        activity::ops_selected_target(
+            &data.rows,
+            self.drill_batch.as_deref(),
+            self.activity_selected,
+        )
+    }
+
+    fn selected_thread_row_from_ops(&self) -> Option<ThreadStatusView> {
+        let data = self.activity_data.as_ref()?;
+        let OpsSelectable::Thread(src_idx) = self.selected_activity_target()? else {
+            return None;
+        };
+        data.rows.get(src_idx).cloned()
+    }
+
+    fn selected_thread_id_and_status(&self) -> Option<(String, String)> {
         match self.active_tab {
-            0 => {
-                let data = self.activity_data.as_ref()?;
-                let selectable = activity::selectable_indices(&data.rows);
-                let src_idx = *selectable.get(self.activity_selected)?;
-                data.rows.get(src_idx).map(|r| r.thread_id.clone())
-            }
+            0 => self
+                .selected_thread_row_from_ops()
+                .map(|r| (r.thread_id, r.thread_status)),
             2 => self
                 .executions_data
                 .as_ref()
                 .and_then(|d| d.executions.get(self.executions_selected))
-                .map(|e| e.thread_id.clone()),
+                .map(|e| {
+                    let status = self.handle.block_on(async {
+                        self.store
+                            .get_thread(&e.thread_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|t| t.status)
+                    });
+                    let status = status.unwrap_or_else(|| "Unknown".to_string());
+                    (e.thread_id.clone(), status)
+                }),
             _ => None,
         }
     }
 
+    fn action_allowed(kind: AdminActionKind, thread_status: &str) -> Result<(), &'static str> {
+        match kind {
+            AdminActionKind::Abandon => {
+                if thread_status == "Abandoned" {
+                    Err("thread is already Abandoned")
+                } else {
+                    Ok(())
+                }
+            }
+            AdminActionKind::Reopen => {
+                if matches!(thread_status, "Completed" | "Failed" | "Abandoned") {
+                    Ok(())
+                } else {
+                    Err("reopen is only valid for terminal threads")
+                }
+            }
+        }
+    }
+
+    fn estimate_cancellable_executions(&self, thread_id: &str) -> usize {
+        let store = self.store.clone();
+        let tid = thread_id.to_string();
+        self.handle
+            .block_on(async { store.get_thread_executions(&tid).await.unwrap_or_default() })
+            .into_iter()
+            .filter(|e| matches!(e.status.as_str(), "queued" | "picked_up" | "executing"))
+            .count()
+    }
+
     fn queue_admin_action(&mut self, kind: AdminActionKind) {
-        let Some(thread_id) = self.selected_thread_id() else {
-            self.admin_notice = Some(
-                "No thread selected. Admin actions are available on Activity/History rows."
-                    .to_string(),
-            );
+        let Some((thread_id, thread_status)) = self.selected_thread_id_and_status() else {
+            self.admin_notice =
+                Some("No thread selected. Pick a thread row in Ops/History first.".to_string());
             return;
         };
-        self.pending_admin_action = Some(PendingAdminAction { kind, thread_id });
+        if let Err(reason) = Self::action_allowed(kind, &thread_status) {
+            self.admin_notice = Some(format!("Cannot {}: {}", action_name(kind), reason));
+            return;
+        }
+
+        let (impact_summary, guardrail) = match kind {
+            AdminActionKind::Abandon => {
+                let cancellable = self.estimate_cancellable_executions(&thread_id);
+                (
+                    format!("Will cancel {} queued/running executions.", cancellable),
+                    "Use abandon only when work should stop immediately.".to_string(),
+                )
+            }
+            AdminActionKind::Reopen => (
+                format!("Will move {} -> Active.", thread_status),
+                "Reopened threads can be re-triggered by operator actions.".to_string(),
+            ),
+        };
+
+        self.pending_admin_action = Some(PendingAdminAction {
+            kind,
+            thread_id,
+            impact_summary,
+            guardrail,
+        });
+        self.action_menu = None;
+    }
+
+    fn open_action_menu(&mut self) {
+        let Some((thread_id, thread_status)) = self.selected_thread_id_and_status() else {
+            self.admin_notice = Some("Action menu requires a selected thread row.".to_string());
+            return;
+        };
+
+        let mut options = Vec::new();
+        if Self::action_allowed(AdminActionKind::Abandon, &thread_status).is_ok() {
+            options.push(AdminActionKind::Abandon);
+        }
+        if Self::action_allowed(AdminActionKind::Reopen, &thread_status).is_ok() {
+            options.push(AdminActionKind::Reopen);
+        }
+
+        if options.is_empty() {
+            self.admin_notice =
+                Some("No admin actions available for the selected thread status.".to_string());
+            return;
+        }
+
+        self.action_menu = Some(ActionMenuState {
+            thread_id,
+            options,
+            selected: 0,
+        });
+    }
+
+    fn close_action_menu(&mut self) {
+        self.action_menu = None;
+    }
+
+    fn action_menu_prev(&mut self) {
+        if let Some(menu) = &mut self.action_menu {
+            menu.selected = menu.selected.saturating_sub(1);
+        }
+    }
+
+    fn action_menu_next(&mut self) {
+        if let Some(menu) = &mut self.action_menu {
+            let max = menu.options.len().saturating_sub(1);
+            menu.selected = (menu.selected + 1).min(max);
+        }
+    }
+
+    fn action_menu_confirm(&mut self) {
+        let Some(menu) = self.action_menu.as_ref() else {
+            return;
+        };
+        let Some(&kind) = menu.options.get(menu.selected) else {
+            return;
+        };
+        self.queue_admin_action(kind);
     }
 
     fn cancel_admin_action(&mut self) {
@@ -551,6 +707,74 @@ impl App {
         // Refresh impacted views after a state mutation.
         self.refresh_activity();
         self.refresh_executions();
+    }
+
+    fn toggle_help(&mut self) {
+        self.show_help = !self.show_help;
+    }
+
+    fn toggle_pretty_payload(&mut self) {
+        self.pretty_payload = !self.pretty_payload;
+    }
+
+    fn clear_batch_drill(&mut self) {
+        if self.drill_batch.is_some() {
+            self.drill_batch = None;
+            self.activity_selected = 0;
+        }
+    }
+
+    fn enter_batch_drill(&mut self) {
+        let Some(data) = &self.activity_data else {
+            return;
+        };
+        let Some(OpsSelectable::Batch(batch_id)) = activity::ops_selected_target(
+            &data.rows,
+            self.drill_batch.as_deref(),
+            self.activity_selected,
+        ) else {
+            return;
+        };
+        self.drill_batch = Some(batch_id);
+        self.activity_selected = 0;
+        self.refresh_activity();
+    }
+
+    fn select_first_row(&mut self) {
+        match self.active_tab {
+            0 => {
+                self.activity_selected = 0;
+            }
+            2 => {
+                self.executions_selected = 0;
+            }
+            _ => {}
+        }
+    }
+
+    fn select_last_row(&mut self) {
+        match self.active_tab {
+            0 => {
+                let max = self
+                    .activity_data
+                    .as_ref()
+                    .map(|d| {
+                        activity::ops_selectable_count(&d.rows, self.drill_batch.as_deref())
+                            .saturating_sub(1)
+                    })
+                    .unwrap_or(0);
+                self.activity_selected = max;
+            }
+            2 => {
+                let max = self
+                    .executions_data
+                    .as_ref()
+                    .map(|d| d.executions.len().saturating_sub(1))
+                    .unwrap_or(0);
+                self.executions_selected = max;
+            }
+            _ => {}
+        }
     }
 }
 
@@ -662,10 +886,20 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
         if event::poll(TICK_RATE)? {
             match event::read()? {
                 Event::Key(key) => {
+                    if key.code == KeyCode::Char('c')
+                        && key.modifiers.contains(KeyModifiers::CONTROL)
+                    {
+                        app.should_quit = true;
+                        continue;
+                    }
                     if app.viewing_log.is_some() {
                         handle_log_viewer_key(app, key.code);
+                    } else if app.show_help {
+                        handle_help_key(app, key.code);
                     } else if app.pending_admin_action.is_some() {
                         handle_admin_confirm_key(app, key.code);
+                    } else if app.action_menu.is_some() {
+                        handle_action_menu_key(app, key.code);
                     } else {
                         handle_list_key(app, key.code);
                     }
@@ -726,6 +960,30 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
                 viewer.toggle_follow();
             }
         }
+        KeyCode::Char('J') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.toggle_pretty_json();
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle key events while help overlay is open.
+fn handle_help_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => app.toggle_help(),
+        _ => {}
+    }
+}
+
+/// Handle key events while action menu overlay is open.
+fn handle_action_menu_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => app.close_action_menu(),
+        KeyCode::Up | KeyCode::Char('k') => app.action_menu_prev(),
+        KeyCode::Down | KeyCode::Char('j') => app.action_menu_next(),
+        KeyCode::Enter => app.action_menu_confirm(),
         _ => {}
     }
 }
@@ -745,8 +1003,10 @@ fn handle_admin_confirm_key(app: &mut App, code: KeyCode) {
 
 /// Handle a key event when the normal list/tab view is active.
 fn handle_list_key(app: &mut App, code: KeyCode) {
+    app.show_hint_banner = false;
     match code {
         KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('?') => app.toggle_help(),
         // Manual refresh.
         KeyCode::Char('r') => match app.active_tab {
             0 => app.refresh_activity(),
@@ -765,11 +1025,30 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         // Row navigation (Activity and History tabs).
         KeyCode::Up | KeyCode::Char('k') => app.select_prev_row(),
         KeyCode::Down | KeyCode::Char('j') => app.select_next_row(),
+        KeyCode::Char('g') => app.select_first_row(),
+        KeyCode::Char('G') => app.select_last_row(),
+        KeyCode::Esc => app.clear_batch_drill(),
+        // Context toggles.
+        KeyCode::Char('J') => app.toggle_pretty_payload(),
+        KeyCode::Char('x') => app.clear_batch_drill(),
+        // Guided admin menu.
+        KeyCode::Char('a') => app.open_action_menu(),
         // Lifecycle admin actions.
         KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
         KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
-        // Open log viewer for the selected row.
-        KeyCode::Enter => app.open_log_viewer(),
+        // Enter: drill batch row in Ops, otherwise open log viewer.
+        KeyCode::Enter => {
+            if app.active_tab == 0
+                && matches!(
+                    app.selected_activity_target(),
+                    Some(OpsSelectable::Batch(_))
+                )
+            {
+                app.enter_batch_drill();
+            } else {
+                app.open_log_viewer();
+            }
+        }
         _ => {}
     }
 }
@@ -799,7 +1078,11 @@ fn draw(f: &mut Frame, app: &mut App) {
     render_content(f, app, chunks[1]);
     render_status_bar(f, app, chunks[2]);
 
-    if app.pending_admin_action.is_some() {
+    if app.show_help {
+        render_help_overlay(f, area);
+    } else if app.action_menu.is_some() {
+        render_action_menu_modal(f, app, area);
+    } else if app.pending_admin_action.is_some() {
         render_admin_action_modal(f, app, area);
     }
 }
@@ -905,42 +1188,50 @@ fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         )
     };
     let sep = || Span::raw("  ");
-    let mut spans = vec![
+    let mut spans: Vec<Span> = vec![
         Span::raw(" "),
         key("q"),
         Span::raw(": quit"),
         sep(),
+        key("?"),
+        Span::raw(": help"),
+        sep(),
         key("Tab"),
         Span::raw(": next"),
-        sep(),
-        key("Shift+Tab"),
-        Span::raw(": prev"),
-        sep(),
-        key("1-4"),
-        Span::raw(": jump"),
-        sep(),
-        key("r"),
-        Span::raw(": refresh"),
         sep(),
         key("↑/↓"),
         Span::raw(": select"),
         sep(),
-        key("b"),
-        Span::raw(": abandon"),
-        sep(),
-        key("o"),
-        Span::raw(": reopen"),
-        sep(),
         key("Enter"),
-        Span::raw(": log"),
+        Span::raw(": open/drill"),
+        sep(),
+        key("a"),
+        Span::raw(": actions"),
         Span::raw(" "),
     ];
+
+    if app.active_tab == 0 {
+        spans.push(sep());
+        spans.push(key("Esc"));
+        spans.push(Span::raw(": back batch"));
+        spans.push(sep());
+        spans.push(key("J"));
+        spans.push(Span::raw(": payload"));
+    }
 
     if let Some(msg) = &app.admin_notice {
         spans.push(sep());
         spans.push(Span::styled("last:", Style::default().fg(Color::Cyan)));
         spans.push(Span::raw(" "));
         spans.push(Span::styled(msg.clone(), Style::default().fg(Color::White)));
+    }
+
+    if app.show_hint_banner {
+        spans.push(sep());
+        spans.push(Span::styled(
+            "Tip: press ? for keymap, a for guided actions",
+            Style::default().fg(Color::Cyan),
+        ));
     }
 
     let status = Paragraph::new(Line::from(spans))
@@ -954,7 +1245,7 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
         return;
     };
 
-    let modal = centered_rect(72, 7, area);
+    let modal = centered_rect(74, 10, area);
     let block = Block::default().borders(Borders::ALL).title(action.title());
     let inner = block.inner(modal);
     f.render_widget(block, modal);
@@ -964,18 +1255,34 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
             Span::raw(" "),
             Span::styled(action.prompt(), Style::default().fg(Color::White)),
         ]),
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Impact: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                action.impact_summary.clone(),
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw(" "),
+            Span::styled("Guardrail: ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                action.guardrail.clone(),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
         Line::from(Span::raw("")),
         Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "y",
+                "Enter",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(": confirm  "),
             Span::styled(
-                "n/Esc",
+                "Esc",
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -985,6 +1292,105 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
     ];
 
     f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+    let Some(menu) = &app.action_menu else {
+        return;
+    };
+
+    let modal = centered_rect(58, 8, area);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Actions ")
+        .title_bottom(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "↑/↓",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": choose  "),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": continue  "),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(": close "),
+        ]));
+    let inner = block.inner(modal);
+    f.render_widget(block, modal);
+
+    let mut lines = vec![Line::from(vec![
+        Span::raw(" "),
+        Span::styled("Thread: ", Style::default().fg(Color::Cyan)),
+        Span::styled(menu.thread_id.clone(), Style::default().fg(Color::White)),
+    ])];
+
+    for (idx, action) in menu.options.iter().enumerate() {
+        let selected = idx == menu.selected;
+        let marker = if selected { ">" } else { " " };
+        lines.push(Line::from(vec![
+            Span::raw(format!(" {} ", marker)),
+            Span::styled(
+                action_name(*action).to_string(),
+                Style::default()
+                    .fg(if selected {
+                        Color::Yellow
+                    } else {
+                        Color::White
+                    })
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ]));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
+    let modal = centered_rect(72, 14, area);
+    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    let inner = block.inner(modal);
+    f.render_widget(block, modal);
+
+    let lines = vec![
+        Line::from(" Global"),
+        Line::from("   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs"),
+        Line::from("   1-4 jump tabs   r refresh"),
+        Line::from(" Navigation"),
+        Line::from("   ↑/↓ or j/k move   g/G first/last"),
+        Line::from(" Ops"),
+        Line::from("   Enter open log or drill batch"),
+        Line::from("   a action menu   b/o quick action aliases"),
+        Line::from("   Esc back from batch drill   J toggle payload pretty mode"),
+        Line::from(" Log Viewer"),
+        Line::from("   Esc back   g/G top/bottom   f follow   J JSON pretty"),
+        Line::from(""),
+        Line::from(" Press Esc, Enter, or ? to close this panel."),
+    ];
+
+    f.render_widget(Paragraph::new(lines), inner);
+}
+
+fn action_name(kind: AdminActionKind) -> &'static str {
+    match kind {
+        AdminActionKind::Abandon => "abandon",
+        AdminActionKind::Reopen => "reopen",
+    }
 }
 
 fn centered_rect(
