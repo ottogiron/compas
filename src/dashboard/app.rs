@@ -36,7 +36,7 @@ use tokio::runtime::Handle;
 use crate::config::types::OrchestratorConfig;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
-use crate::dashboard::views::executions;
+use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::lifecycle::LifecycleService;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
@@ -46,6 +46,8 @@ use crate::store::{ExecutionRow, Store, ThreadStatusView};
 const TABS: &[&str] = &["Ops", "Agents", "History", "Settings"];
 const TICK_RATE: Duration = Duration::from_millis(250);
 const ACTIVITY_ROW_LIMIT: i64 = 250;
+const HISTORY_ROW_LIMIT: i64 = 200;
+const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, Copy)]
 enum AdminActionKind {
@@ -142,7 +144,7 @@ pub struct AgentsData {
 
 /// Snapshot of recent execution rows fetched from SQLite for the History tab.
 pub struct ExecutionsData {
-    /// Up to 50 most-recent execution rows, newest first.
+    /// Up to 200 most-recent execution rows, newest first.
     pub executions: Vec<ExecutionRow>,
     /// When this snapshot was fetched (used for staleness checks).
     pub fetched_at: Instant,
@@ -188,6 +190,8 @@ pub struct App {
     admin_notice: Option<String>,
     /// Optional batch drill filter for Ops tab.
     pub drill_batch: Option<String>,
+    /// Optional batch drill filter for History tab.
+    pub history_drill_batch: Option<String>,
     /// One-time onboarding hint banner.
     show_hint_banner: bool,
     /// Directory where execution log files are stored (`{state_dir}/logs/`).
@@ -207,6 +211,10 @@ impl App {
 
     fn stale_active_secs(&self) -> i64 {
         self.config.orchestration.stale_active_secs as i64
+    }
+
+    pub fn history_group_visible_limit(&self) -> usize {
+        HISTORY_GROUP_VISIBLE_LIMIT
     }
 
     pub fn new(
@@ -236,6 +244,7 @@ impl App {
             pending_admin_action: None,
             admin_notice: None,
             drill_batch: None,
+            history_drill_batch: None,
             show_hint_banner: true,
             log_dir,
             handle,
@@ -356,7 +365,7 @@ impl App {
         }
     }
 
-    /// Fetch the 50 most recent executions from SQLite and update `executions_data`.
+    /// Fetch the most recent executions from SQLite and update `executions_data`.
     ///
     /// Ordered by `queued_at DESC`. Silently swallows errors — stale data is
     /// preferable to a panic inside the event loop.
@@ -364,12 +373,21 @@ impl App {
         let store = &self.store;
         let handle = &self.handle;
 
-        let executions =
-            handle.block_on(async { store.recent_executions(50).await.unwrap_or_default() });
+        let executions = handle.block_on(async {
+            store
+                .recent_executions(HISTORY_ROW_LIMIT)
+                .await
+                .unwrap_or_default()
+        });
 
         // Clamp the selection to the new row count.
-        if !executions.is_empty() {
-            self.executions_selected = self.executions_selected.min(executions.len() - 1);
+        let count = executions::history_selectable_count(
+            &executions,
+            self.history_drill_batch.as_deref(),
+            self.history_group_visible_limit(),
+        );
+        if count > 0 {
+            self.executions_selected = self.executions_selected.min(count - 1);
         } else {
             self.executions_selected = 0;
         }
@@ -421,7 +439,14 @@ impl App {
                 let max = self
                     .executions_data
                     .as_ref()
-                    .map(|d| d.executions.len().saturating_sub(1))
+                    .map(|d| {
+                        executions::history_selectable_count(
+                            &d.executions,
+                            self.history_drill_batch.as_deref(),
+                            self.history_group_visible_limit(),
+                        )
+                        .saturating_sub(1)
+                    })
                     .unwrap_or(0);
                 self.executions_selected = (self.executions_selected + 1).min(max);
             }
@@ -499,7 +524,10 @@ impl App {
         let Some(data) = &self.executions_data else {
             return;
         };
-        let Some(row) = data.executions.get(self.executions_selected) else {
+        let Some(HistorySelectable::Execution(exec_idx)) = self.selected_history_target() else {
+            return;
+        };
+        let Some(row) = data.executions.get(exec_idx) else {
             return;
         };
 
@@ -570,6 +598,16 @@ impl App {
         )
     }
 
+    fn selected_history_target(&self) -> Option<HistorySelectable> {
+        let data = self.executions_data.as_ref()?;
+        executions::history_selected_target(
+            &data.executions,
+            self.history_drill_batch.as_deref(),
+            self.executions_selected,
+            self.history_group_visible_limit(),
+        )
+    }
+
     fn selected_thread_row_from_ops(&self) -> Option<ThreadStatusView> {
         let data = self.activity_data.as_ref()?;
         let OpsSelectable::Thread(src_idx) = self.selected_activity_target()? else {
@@ -586,7 +624,10 @@ impl App {
             2 => self
                 .executions_data
                 .as_ref()
-                .and_then(|d| d.executions.get(self.executions_selected))
+                .and_then(|d| match self.selected_history_target() {
+                    Some(HistorySelectable::Execution(exec_idx)) => d.executions.get(exec_idx),
+                    _ => None,
+                })
                 .map(|e| {
                     let status = self.handle.block_on(async {
                         self.store
@@ -859,6 +900,10 @@ impl App {
             self.drill_batch = None;
             self.activity_selected = 0;
         }
+        if self.history_drill_batch.is_some() {
+            self.history_drill_batch = None;
+            self.executions_selected = 0;
+        }
     }
 
     fn enter_batch_drill(&mut self) {
@@ -916,7 +961,14 @@ impl App {
                 let max = self
                     .executions_data
                     .as_ref()
-                    .map(|d| d.executions.len().saturating_sub(1))
+                    .map(|d| {
+                        executions::history_selectable_count(
+                            &d.executions,
+                            self.history_drill_batch.as_deref(),
+                            self.history_group_visible_limit(),
+                        )
+                        .saturating_sub(1)
+                    })
                     .unwrap_or(0);
                 self.executions_selected = max;
             }
@@ -1190,7 +1242,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
         KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
         KeyCode::Char('s') => app.queue_stale_active_cleanup(),
-        // Enter: drill batch row in Ops, otherwise open execution detail.
+        // Enter: drill batch row in Ops/History, otherwise open execution detail.
         KeyCode::Enter => {
             if app.active_tab == 0
                 && matches!(
@@ -1199,6 +1251,17 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
                 )
             {
                 app.enter_batch_drill();
+            } else if app.active_tab == 2
+                && matches!(
+                    app.selected_history_target(),
+                    Some(HistorySelectable::Batch(_))
+                )
+            {
+                if let Some(HistorySelectable::Batch(batch_id)) = app.selected_history_target() {
+                    app.history_drill_batch = Some(batch_id);
+                    app.executions_selected = 0;
+                    app.refresh_executions();
+                }
             } else {
                 app.open_log_viewer();
             }
@@ -1390,7 +1453,10 @@ fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         2 => {
             spans.push(sep());
             spans.push(key("Enter"));
-            spans.push(Span::raw(": view execution"));
+            spans.push(Span::raw(": drill/open"));
+            spans.push(sep());
+            spans.push(key("Esc"));
+            spans.push(Span::raw(": back batch"));
             spans.push(sep());
             spans.push(key("a"));
             spans.push(Span::raw(": actions"));
@@ -1561,7 +1627,7 @@ fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rec
 }
 
 fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
-    let modal = centered_rect(72, 14, area);
+    let modal = centered_rect(72, 16, area);
     let block = Block::default()
         .borders(Borders::ALL)
         .style(Style::default().bg(Color::Black).fg(Color::White))
@@ -1580,6 +1646,8 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("   Enter open log or drill batch"),
         Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
         Line::from("   Esc back from batch drill"),
+        Line::from(" History"),
+        Line::from("   Enter drill batch/open execution   Esc back from history batch drill"),
         Line::from(" Execution Detail"),
         Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
         Line::from("   Esc back   f follow   J view mode"),
