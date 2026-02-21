@@ -23,6 +23,7 @@ use ratatui::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dashboard::app::App;
+use crate::dashboard::views::humanize_thread_status;
 use crate::dashboard::views::overview::status_color;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -93,26 +94,26 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
         .threads
         .iter()
         .map(|t| {
-            // Thread ID — first 12 chars.
+            // Thread ID — first 12 chars with ellipsis when truncated.
             let thread_id: String = if t.thread_id.len() > 12 {
-                t.thread_id[..12].to_string()
+                format!("{}…", &t.thread_id[..12])
             } else {
                 t.thread_id.clone()
             };
 
-            // Status — colour-coded.
+            // Status — humanized and colour-coded.
             let status = &t.thread_status;
-            let status_cell =
-                Cell::from(status.as_str()).style(Style::default().fg(status_color(status)));
+            let status_cell = Cell::from(humanize_thread_status(status))
+                .style(Style::default().fg(status_color(status)));
 
             // Agent alias — dash if absent.
             let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
 
-            // Batch ID — first 8 chars or dash.
+            // Batch ID — first 8 chars with ellipsis when truncated, or dash.
             let batch: String = match &t.batch_id {
                 Some(b) if !b.is_empty() => {
                     if b.len() > 8 {
-                        b[..8].to_string()
+                        format!("{}…", &b[..8])
                     } else {
                         b.clone()
                     }
@@ -135,10 +136,10 @@ pub fn render_threads(f: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let widths = [
-        Constraint::Length(14), // Thread ID (12 chars + 2 padding)
+        Constraint::Length(15), // Thread ID (12 chars + ellipsis + padding)
         Constraint::Length(16), // Status
         Constraint::Length(14), // Agent
-        Constraint::Length(10), // Batch
+        Constraint::Length(11), // Batch (8 chars + ellipsis + padding)
         Constraint::Length(6),  // Age
     ];
 

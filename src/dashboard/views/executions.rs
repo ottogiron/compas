@@ -24,6 +24,7 @@ use ratatui::{
 };
 
 use crate::dashboard::app::App;
+use crate::dashboard::views::humanize_exec_status;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -96,17 +97,17 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             // Agent alias.
             let agent = e.agent_alias.clone();
 
-            // Thread ID — first 12 chars.
+            // Thread ID — first 12 chars with ellipsis when truncated.
             let thread_id: String = if e.thread_id.len() > 12 {
-                e.thread_id[..12].to_string()
+                format!("{}…", &e.thread_id[..12])
             } else {
                 e.thread_id.clone()
             };
 
-            // Status — colour-coded cell.
+            // Status — humanized and colour-coded cell.
             let status_color = exec_status_color(&e.status);
-            let status_cell =
-                Cell::from(e.status.as_str()).style(Style::default().fg(status_color));
+            let status_cell = Cell::from(humanize_exec_status(&e.status))
+                .style(Style::default().fg(status_color));
 
             // Duration — human-readable.
             let duration = e
@@ -140,7 +141,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
     let widths = [
         Constraint::Length(14), // Agent (flexible alias)
-        Constraint::Length(14), // Thread ID (12 chars + padding)
+        Constraint::Length(15), // Thread ID (12 chars + ellipsis + padding)
         Constraint::Length(13), // Status
         Constraint::Length(10), // Duration
         Constraint::Length(6),  // Exit code

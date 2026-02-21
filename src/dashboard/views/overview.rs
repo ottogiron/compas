@@ -19,6 +19,7 @@ use ratatui::{
 };
 
 use crate::dashboard::app::App;
+use crate::dashboard::views::humanize_thread_status;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -60,7 +61,7 @@ fn render_metrics(f: &mut Frame, app: &App, area: Rect) {
         let color = status_color(status);
         spans.push(Span::styled("● ", Style::default().fg(color)));
         spans.push(Span::styled(
-            format!("{}: {} ", status, count),
+            format!("{}: {} ", humanize_thread_status(status), count),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::raw(" "));
@@ -68,7 +69,7 @@ fn render_metrics(f: &mut Frame, app: &App, area: Rect) {
 
     // Separator + queue depth.
     spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
-    spans.push(Span::raw("Queue: "));
+    spans.push(Span::raw("Pending: "));
     spans.push(Span::styled(
         format!("{} ", data.queue_depth),
         Style::default()
@@ -78,7 +79,7 @@ fn render_metrics(f: &mut Frame, app: &App, area: Rect) {
 
     // Separator + total messages.
     spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
-    spans.push(Span::raw("Messages: "));
+    spans.push(Span::raw("Total messages: "));
     spans.push(Span::styled(
         format!("{}", data.total_messages),
         Style::default()

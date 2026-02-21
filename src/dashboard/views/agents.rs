@@ -20,6 +20,7 @@ use ratatui::{
 
 use crate::config::types::{AgentConfig, AgentRole};
 use crate::dashboard::app::App;
+use crate::dashboard::views::humanize_exec_status;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -111,7 +112,7 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
                 Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        format!("{} ({})", e.status, dur_label),
+                        format!("{} ({})", humanize_exec_status(&e.status), dur_label),
                         Style::default().fg(color),
                     ),
                 ])

@@ -115,6 +115,10 @@ pub struct OrchestrationConfig {
     /// Timeout in seconds for backend ping liveness probes (default 15).
     #[serde(default = "default_ping_timeout_secs")]
     pub ping_timeout_secs: u64,
+    /// Number of execution log files to retain under `{state_dir}/logs/` (default 100).
+    /// Oldest files (by ULID-sorted name) are pruned on worker startup.
+    #[serde(default = "default_log_retention_count")]
+    pub log_retention_count: usize,
     // -- Daemon fields (flattened from DaemonConfig) --
     #[serde(default = "default_daemon_required")]
     pub daemon_required: bool,
@@ -140,6 +144,7 @@ impl Default for OrchestrationConfig {
             max_triggers_per_agent: default_max_triggers_per_agent(),
             task_history_retention: default_task_history_retention(),
             ping_timeout_secs: default_ping_timeout_secs(),
+            log_retention_count: default_log_retention_count(),
             daemon_required: default_daemon_required(),
             daemon_auto_start: default_daemon_auto_start(),
             daemon_staleness_threshold_secs: 0,
@@ -166,6 +171,10 @@ fn default_max_triggers_per_agent() -> usize {
 
 fn default_ping_timeout_secs() -> u64 {
     15
+}
+
+fn default_log_retention_count() -> usize {
+    100
 }
 
 fn default_max_output_capture_bytes() -> usize {
