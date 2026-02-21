@@ -35,7 +35,13 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
             "  No agents configured.",
             Style::default().fg(Color::DarkGray),
         )))
-        .block(Block::default().borders(Borders::ALL).title(" Agents "));
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Black).fg(Color::White))
+                .title(" Agents "),
+        );
         f.render_widget(p, area);
         return;
     }
@@ -166,6 +172,13 @@ fn render_agent_card(f: &mut Frame, app: &App, agent: &AgentConfig, area: Rect) 
     lines.extend(recent_lines);
 
     let title = format!(" {} ", agent.alias);
-    let p = Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(title));
+    let p = Paragraph::new(lines)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Black).fg(Color::White))
+                .title(title),
+        );
     f.render_widget(p, area);
 }

@@ -34,6 +34,7 @@ use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_ex
 pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(" Executions ")
         .title_bottom(Line::from(vec![
             Span::raw(" "),
@@ -59,6 +60,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             "  Fetching…",
             Style::default().fg(Color::DarkGray),
         )))
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .block(block);
         f.render_widget(p, area);
         return;
@@ -70,6 +72,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             "  No executions recorded",
             Style::default().fg(Color::DarkGray),
         )))
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .block(block);
         f.render_widget(p, area);
         return;
@@ -159,7 +162,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                     .bg(Color::DarkGray)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default()
+                Style::default().bg(Color::Black)
             };
 
             Row::new(vec![
@@ -186,7 +189,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     let table = Table::new(rows, widths)
         .header(header)
         .block(block)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().bg(Color::Black).fg(Color::White));
 
     f.render_widget(table, area);
 }

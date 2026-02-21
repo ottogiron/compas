@@ -10,8 +10,8 @@
 //!   │  q: quit │ Tab: switch tab │ …      │  ← status bar (1 row)
 //!   └─────────────────────────────────────┘
 //!
-//! When `viewing_log` is `Some`, the log viewer occupies the full terminal area
-//! (tab bar and status bar are hidden for maximum vertical space).
+//! When `viewing_log` is `Some`, the execution detail view occupies the full
+//! terminal area (tab bar and status bar are hidden for maximum vertical space).
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -37,7 +37,7 @@ use crate::config::types::OrchestratorConfig;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions;
-use crate::dashboard::views::log_viewer::{render_log_viewer, LogViewerState};
+use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::lifecycle::LifecycleService;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
@@ -174,8 +174,8 @@ pub struct App {
     pub executions_data: Option<ExecutionsData>,
     /// Index of the highlighted row in the History tab.
     pub executions_selected: usize,
-    /// Active log viewer state.  `Some` when the log viewer overlay is open.
-    pub viewing_log: Option<LogViewerState>,
+    /// Active execution detail state. `Some` when the detail overlay is open.
+    pub viewing_log: Option<ExecutionDetailState>,
     /// Whether the help overlay is visible.
     pub show_help: bool,
     /// Optional action menu state for guided admin actions.
@@ -418,15 +418,13 @@ impl App {
         }
     }
 
-    // ── Log viewer ────────────────────────────────────────────────────────────
+    // ── Execution detail viewer ──────────────────────────────────────────────
 
-    /// Open the log viewer for the currently selected row on the active tab.
+    /// Open the execution detail view for the currently selected row on the active tab.
     ///
     /// For the Activity tab (tab 0): uses the execution attached to the selected
     /// row.
     /// For the History tab (tab 2): uses the selected `ExecutionRow` directly.
-    /// Silently does nothing if there is no data or the selected row has no
-    /// execution information.
     pub fn open_log_viewer(&mut self) {
         match self.active_tab {
             0 => self.open_log_viewer_from_activity(),
@@ -452,27 +450,31 @@ impl App {
             return;
         };
 
-        let exec_id = match &row.execution_id {
-            Some(id) if !id.is_empty() => id.clone(),
-            _ => return,
-        };
         let agent_alias = row.agent_alias.clone().unwrap_or_else(|| "-".to_string());
         let status = row
             .execution_status
             .clone()
-            .unwrap_or_else(|| "unknown".to_string());
+            .unwrap_or_else(|| row.thread_status.to_lowercase());
         let duration_ms = row.duration_ms;
         let thread_id = row.thread_id.clone();
-        let input_payload = self.fetch_message_fallback(&thread_id);
-        let log_path = self.log_dir.join(format!("{}.log", exec_id));
-        self.viewing_log = Some(LogViewerState::new(
-            exec_id,
+        let (input_payload, output_payload) =
+            self.resolve_detail_payloads(&thread_id, Some(agent_alias.as_str()));
+        let log_path = row
+            .execution_id
+            .as_ref()
+            .map(|id| self.log_dir.join(format!("{}.log", id)));
+        let view_id = row
+            .execution_id
+            .clone()
+            .unwrap_or_else(|| thread_id.clone());
+        self.viewing_log = Some(ExecutionDetailState::new(
+            view_id,
             agent_alias,
             status,
             duration_ms,
-            Some(log_path),
+            log_path,
             input_payload,
-            None,
+            output_payload,
         ));
     }
 
@@ -491,34 +493,72 @@ impl App {
         let output_preview = row.output_preview.clone();
         let thread_id = row.thread_id.clone();
 
-        let input_payload = self.fetch_message_fallback(&thread_id);
+        let (input_payload, output_payload) =
+            self.resolve_detail_payloads(&thread_id, Some(agent_alias.as_str()));
 
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
-        self.viewing_log = Some(LogViewerState::new(
+        self.viewing_log = Some(ExecutionDetailState::new(
             exec_id,
             agent_alias,
             status,
             duration_ms,
             Some(log_path),
             input_payload,
-            output_preview,
+            output_payload.or(output_preview),
         ));
     }
 
-    /// Fetch the body of the last message on `thread_id` as a fallback string.
+    /// Resolve detail-view payloads from thread messages.
     ///
-    /// Uses `Handle::block_on`.  Returns `None` on any error.
-    fn fetch_message_fallback(&self, thread_id: &str) -> Option<String> {
+    /// Input: latest trigger-intent message to the agent, fallback to latest
+    /// operator->agent message.
+    /// Output: latest agent->operator reply after that input, fallback to latest
+    /// agent->operator message.
+    fn resolve_detail_payloads(
+        &self,
+        thread_id: &str,
+        agent_alias: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
         let store = &self.store;
         let handle = &self.handle;
         let tid = thread_id.to_string();
         handle.block_on(async {
-            let messages = store.get_thread_messages(&tid).await.ok()?;
-            messages.into_iter().last().map(|m| m.body)
+            let messages = store.get_thread_messages(&tid).await.unwrap_or_default();
+            let target_agent = agent_alias.unwrap_or_default();
+            let trigger_intents = &self.config.orchestration.trigger_intents;
+
+            let input_msg = messages.iter().rev().find(|m| {
+                !target_agent.is_empty()
+                    && m.to_alias == target_agent
+                    && trigger_intents.contains(&m.intent)
+            });
+
+            let input_msg = input_msg.or_else(|| {
+                messages.iter().rev().find(|m| {
+                    m.from_alias == "operator"
+                        && m.to_alias != "operator"
+                        && (target_agent.is_empty() || m.to_alias == target_agent)
+                })
+            });
+
+            let input_payload = input_msg.map(|m| m.body.clone());
+            let input_id = input_msg.map(|m| m.id).unwrap_or(0);
+
+            let output_msg = messages.iter().rev().find(|m| {
+                m.id > input_id && m.from_alias != "operator" && m.to_alias == "operator"
+            });
+            let output_msg = output_msg.or_else(|| {
+                messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.from_alias != "operator" && m.to_alias == "operator")
+            });
+
+            (input_payload, output_msg.map(|m| m.body.clone()))
         })
     }
 
-    /// Close the log viewer and return to the list view.
+    /// Close the detail view and return to the list view.
     pub fn close_log_viewer(&mut self) {
         self.viewing_log = None;
     }
@@ -1033,34 +1073,19 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         KeyCode::Esc => {
             app.close_log_viewer();
         }
-        KeyCode::Tab => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.select_next_section();
-            }
-        }
-        KeyCode::BackTab => {
+        KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut viewer) = app.viewing_log {
                 viewer.select_prev_section();
             }
         }
-        KeyCode::Left | KeyCode::Char('h') => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.collapse_selected_section();
-            }
-        }
-        KeyCode::Right | KeyCode::Char('l') => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.expand_selected_section();
-            }
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.scroll_up(1);
-            }
-        }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.scroll_down(1);
+                viewer.select_next_section();
+            }
+        }
+        KeyCode::Enter => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.toggle_selected_section();
             }
         }
         KeyCode::PageUp => {
@@ -1165,7 +1190,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
         KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
         KeyCode::Char('s') => app.queue_stale_active_cleanup(),
-        // Enter: drill batch row in Ops, otherwise open log viewer.
+        // Enter: drill batch row in Ops, otherwise open execution detail.
         KeyCode::Enter => {
             if app.active_tab == 0
                 && matches!(
@@ -1185,9 +1210,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
 fn draw(f: &mut Frame, app: &mut App) {
-    // When the log viewer is open, render it full-screen for maximum space.
+    // When the execution detail view is open, render it full-screen for
+    // maximum space.
     if let Some(ref mut viewer) = app.viewing_log {
-        render_log_viewer(f, viewer, f.area());
+        render_execution_detail(f, viewer, f.area());
         return;
     }
 
@@ -1221,15 +1247,18 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     let tabs = Tabs::new(tab_titles)
         .block(
-            Block::default().borders(Borders::ALL).title(Span::styled(
-                " aster-orch dashboard ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )),
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Black).fg(Color::White))
+                .title(Span::styled(
+                    " aster-orch dashboard ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )),
         )
         .select(app.active_tab)
-        .style(Style::default().fg(Color::White))
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .highlight_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -1253,7 +1282,12 @@ fn render_content(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 body,
                 Style::default().fg(Color::DarkGray),
             )))
-            .block(Block::default().borders(Borders::ALL));
+            .style(Style::default().bg(Color::Black).fg(Color::White))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .style(Style::default().bg(Color::Black)),
+            );
 
             f.render_widget(content, area);
         }
@@ -1261,7 +1295,10 @@ fn render_content(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 }
 
 fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let block = Block::default().borders(Borders::ALL).title(" Settings ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .title(" Settings ");
 
     let label = |s: &str| {
         Span::styled(
@@ -1303,7 +1340,9 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ]),
     ];
 
-    let p = Paragraph::new(lines).block(block);
+    let p = Paragraph::new(lines)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .block(block);
     f.render_widget(p, area);
 }
 
@@ -1375,7 +1414,10 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
     };
 
     let modal = centered_rect(74, 10, area);
-    let block = Block::default().borders(Borders::ALL).title(action.title());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .title(action.title());
     let inner = block.inner(modal);
     f.render_widget(block, modal);
 
@@ -1420,7 +1462,10 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
         ]),
     ];
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
+        inner,
+    );
 }
 
 fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -1431,6 +1476,7 @@ fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rec
     let modal = centered_rect(58, 8, area);
     let block = Block::default()
         .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(" Actions ")
         .title_bottom(Line::from(vec![
             Span::raw(" "),
@@ -1487,12 +1533,18 @@ fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rec
         ]));
     }
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
+        inner,
+    );
 }
 
 fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
     let modal = centered_rect(72, 14, area);
-    let block = Block::default().borders(Borders::ALL).title(" Help ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .title(" Help ");
     let inner = block.inner(modal);
     f.render_widget(block, modal);
 
@@ -1506,14 +1558,17 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("   Enter open log or drill batch"),
         Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
         Line::from("   Esc back from batch drill"),
-        Line::from(" Log Viewer"),
-        Line::from("   Tab section   <-/-> collapse/expand   g/G top/bottom"),
+        Line::from(" Execution Detail"),
+        Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
         Line::from("   Esc back   f follow   J JSON pretty"),
         Line::from(""),
         Line::from(" Press Esc, Enter, or ? to close this panel."),
     ];
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
+        inner,
+    );
 }
 
 fn action_name(kind: AdminActionKind) -> &'static str {

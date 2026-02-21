@@ -1,4 +1,4 @@
-//! Log viewer — full-screen execution log tail/scroll view with collapsible
+//! Execution detail view — full-screen execution output with collapsible
 //! Input/Output outline.
 //!
 //! For running executions the log file is polled for new content on each tick.
@@ -24,8 +24,8 @@ enum OutlineSection {
     Output,
 }
 
-/// All state needed to render and update the full-screen log viewer.
-pub struct LogViewerState {
+/// All state needed to render and update the full-screen execution detail view.
+pub struct ExecutionDetailState {
     /// Execution ID shown in the header (may be truncated during render).
     pub exec_id: String,
     /// Agent alias shown in the header.
@@ -56,8 +56,8 @@ pub struct LogViewerState {
     output_expanded: bool,
 }
 
-impl LogViewerState {
-    /// Create a new viewer from execution metadata.
+impl ExecutionDetailState {
+    /// Create a new detail view from execution metadata.
     pub fn new(
         exec_id: String,
         agent_alias: String,
@@ -80,9 +80,9 @@ impl LogViewerState {
             visible_rows: 20,
             pretty_json: true,
             input_payload,
-            section_selected: OutlineSection::Output,
+            section_selected: OutlineSection::Input,
             input_expanded: false,
-            output_expanded: true,
+            output_expanded: false,
         };
 
         if let Some(path) = log_path {
@@ -215,14 +215,21 @@ impl LogViewerState {
         }
     }
 
+    pub fn toggle_selected_section(&mut self) {
+        match self.section_selected {
+            OutlineSection::Input => self.input_expanded = !self.input_expanded,
+            OutlineSection::Output => self.output_expanded = !self.output_expanded,
+        }
+    }
+
     /// Returns `true` if the execution is still in a running state.
     pub fn is_running(&self) -> bool {
         matches!(self.status.as_str(), "executing" | "picked_up" | "queued")
     }
 }
 
-/// Render the full-screen log viewer into `area`.
-pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) {
+/// Render the full-screen execution detail view into `area`.
+pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, area: Rect) {
     let exec_short: String = if state.exec_id.len() > 18 {
         format!("{}…", &state.exec_id[..18])
     } else {
@@ -333,10 +340,10 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
         Span::raw(" "),
         key("Esc"),
         Span::raw(": back  "),
-        key("Tab"),
+        key("↑/↓"),
         Span::raw(": section  "),
-        key("<-/>"),
-        Span::raw(": collapse/expand  "),
+        key("Enter"),
+        Span::raw(": toggle  "),
         key("g/G"),
         Span::raw(": top/bottom  "),
         key("f"),
@@ -348,6 +355,7 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(Line::from(title_spans))
         .title_bottom(Line::from(footer_spans));
 
@@ -358,7 +366,9 @@ pub fn render_log_viewer(f: &mut Frame, state: &mut LogViewerState, area: Rect) 
         .map(|l| Line::from(Span::raw(format!(" {}", l))))
         .collect();
 
-    let paragraph = Paragraph::new(visible_lines).block(block);
+    let paragraph = Paragraph::new(visible_lines)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .block(block);
     f.render_widget(paragraph, area);
 }
 
@@ -377,8 +387,8 @@ fn split_lines(s: &str) -> Vec<String> {
 mod tests {
     use super::*;
 
-    fn make_state(status: &str, lines: Vec<&str>, follow: bool) -> LogViewerState {
-        let mut s = LogViewerState {
+    fn make_state(status: &str, lines: Vec<&str>, follow: bool) -> ExecutionDetailState {
+        let mut s = ExecutionDetailState {
             exec_id: "exec-001".to_string(),
             agent_alias: "focused".to_string(),
             status: status.to_string(),
@@ -391,9 +401,9 @@ mod tests {
             visible_rows: 10,
             pretty_json: false,
             input_payload: Some("{\"in\":1}".to_string()),
-            section_selected: OutlineSection::Output,
+            section_selected: OutlineSection::Input,
             input_expanded: false,
-            output_expanded: true,
+            output_expanded: false,
         };
         if follow {
             s.scroll_to_bottom();
@@ -450,5 +460,13 @@ mod tests {
     #[test]
     fn test_section_header_line_selected_expanded() {
         assert_eq!(section_header_line("Input", true, true), "* v Input");
+    }
+
+    #[test]
+    fn test_default_sections_collapsed_and_input_selected() {
+        let s = make_state("completed", vec!["a"], false);
+        assert_eq!(s.section_selected, OutlineSection::Input);
+        assert!(!s.input_expanded);
+        assert!(!s.output_expanded);
     }
 }

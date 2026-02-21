@@ -393,6 +393,7 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(Span::styled(
             " Ops ",
             Style::default()
@@ -409,6 +410,7 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
                 "  Fetching...",
                 Style::default().fg(Color::DarkGray),
             )))
+            .style(Style::default().bg(Color::Black).fg(Color::White))
             .block(block),
             area,
         );
@@ -627,10 +629,13 @@ fn render_ops_list(
         .take(visible_height.max(1))
         .collect();
 
-    f.render_widget(Paragraph::new(visible), list_area);
+    f.render_widget(
+        Paragraph::new(visible).style(Style::default().bg(Color::Black).fg(Color::White)),
+        list_area,
+    );
     f.render_widget(
         Paragraph::new(build_footer_line(data, now_unix, stale_after_secs))
-            .style(Style::default().fg(Color::DarkGray)),
+            .style(Style::default().bg(Color::Black).fg(Color::DarkGray)),
         footer_area,
     );
 }
@@ -643,7 +648,10 @@ fn render_context_panel(
     now_unix: i64,
     stale_after_secs: i64,
 ) {
-    let block = Block::default().borders(Borders::ALL).title(" Context ");
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Black).fg(Color::White))
+        .title(" Context ");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -799,7 +807,10 @@ fn render_context_panel(
         }
     }
 
-    f.render_widget(Paragraph::new(lines), inner);
+    f.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
+        inner,
+    );
 }
 
 fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> Line<'static> {
@@ -817,7 +828,7 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
     let bg = if is_selected {
         Color::DarkGray
     } else {
-        Color::Reset
+        Color::Black
     };
     let base_mod = if is_selected {
         Modifier::BOLD
@@ -889,7 +900,7 @@ fn make_batch_line(
     let bg = if is_selected {
         Color::DarkGray
     } else {
-        Color::Reset
+        Color::Black
     };
     let base_mod = if is_selected {
         Modifier::BOLD
@@ -928,7 +939,13 @@ fn make_batch_line(
                 "a:{} c:{} f:{}",
                 batch.active, batch.completed, batch.failed
             ),
-            Style::default().fg(Color::DarkGray).bg(bg),
+            Style::default()
+                .fg(if batch.failed > 0 {
+                    Color::Red
+                } else {
+                    Color::DarkGray
+                })
+                .bg(bg),
         ),
         Span::styled(
             format!("  age {}", age),
@@ -1001,7 +1018,9 @@ fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> L
 fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {
     let ts = t.thread_status.as_str();
     let es = t.execution_status.as_deref().unwrap_or("");
-    if matches!(es, "failed" | "crashed") {
+    if ts == "Failed" {
+        ("X", Color::Red)
+    } else if matches!(es, "failed" | "crashed") {
         ("X", Color::Red)
     } else if es == "timed_out" {
         ("T", Color::Red)
@@ -1015,6 +1034,15 @@ fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {
 }
 
 fn row_status_display(t: &ThreadStatusView) -> (String, Color) {
+    if t.thread_status == "Failed" {
+        if let Some(es) = &t.execution_status {
+            if matches!(es.as_str(), "executing" | "picked_up" | "queued") {
+                return ("Failed (running)".to_string(), Color::Red);
+            }
+        }
+        return ("Failed".to_string(), Color::Red);
+    }
+
     if let Some(es) = &t.execution_status {
         (humanize_exec_status(es).to_string(), exec_status_color(es))
     } else {
