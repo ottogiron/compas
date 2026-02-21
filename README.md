@@ -88,16 +88,19 @@ execution state — no separate job queue system.
 
 ```bash
 # Worker only (run in background terminal / RustRover)
-aster_orch worker --config .aster-orch/config.yaml
+aster_orch worker
 
 # MCP server only (started by MCP client config)
-aster_orch mcp-server --config .aster-orch/config.yaml
+aster_orch mcp-server
 
 # Dashboard only (reads SQLite directly)
-aster_orch dashboard --config .aster-orch/config.yaml
+aster_orch dashboard
 
 # Dashboard + embedded worker (convenience mode)
-aster_orch dashboard --config .aster-orch/config.yaml --with-worker
+aster_orch dashboard --with-worker
+
+# Optional override when config is not at the standard location
+aster_orch wait --config /path/to/config.yaml --thread-id <thread-id>
 ```
 
 `--with-worker` is intended for local convenience. For long-running or production
@@ -105,7 +108,7 @@ operation, prefer the standard two-process setup (`worker` + `mcp-server`).
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--config` | *(required)* | Path to config YAML |
+| `--config` | `.aster-orch/config.yaml` | Optional config path override |
 
 ## MCP Tools (18)
 

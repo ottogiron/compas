@@ -1,8 +1,8 @@
 //! aster-orch binary — two-process orchestrator.
 //!
 //! Usage:
-//!   aster_orch worker --config .aster-orch/config.yaml
-//!   aster_orch mcp-server --config .aster-orch/config.yaml
+//!   aster_orch worker
+//!   aster_orch mcp-server
 
 use aster_orch::backend::claude::ClaudeCodeBackend;
 use aster_orch::backend::codex::CodexBackend;
@@ -20,6 +20,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_CONFIG_PATH: &str = ".aster-orch/config.yaml";
+
 #[derive(Parser)]
 #[command(name = "aster-orch", about = "Agent orchestrator")]
 struct Cli {
@@ -33,19 +35,19 @@ enum Commands {
     Worker {
         /// Path to config YAML
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
     },
     /// Run the MCP server only (stdio transport)
     McpServer {
         /// Path to config YAML
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
     },
     /// Launch the TUI dashboard (reads SQLite directly, no MCP required)
     Dashboard {
         /// Path to config YAML
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         /// How often (in seconds) to re-query SQLite for fresh metrics
         #[arg(long, default_value = "2")]
         poll_interval: u64,
@@ -60,7 +62,7 @@ enum Commands {
     Wait {
         /// Path to config YAML
         #[arg(long)]
-        config: PathBuf,
+        config: Option<PathBuf>,
         /// Thread ID to wait on
         #[arg(long)]
         thread_id: String,
@@ -85,6 +87,7 @@ async fn main() -> ExitCode {
 
     match cli.command {
         Commands::Worker { config } => {
+            let config = effective_config_path(config);
             init_tracing();
             if let Err(e) = run_worker(config).await {
                 eprintln!("error: {}", e);
@@ -92,6 +95,7 @@ async fn main() -> ExitCode {
             }
         }
         Commands::McpServer { config } => {
+            let config = effective_config_path(config);
             // MCP server uses stdio — don't pollute stdout with tracing
             init_tracing_stderr();
             if let Err(e) = run_mcp_server(config).await {
@@ -104,6 +108,7 @@ async fn main() -> ExitCode {
             poll_interval,
             with_worker,
         } => {
+            let config = effective_config_path(config);
             // TUI dashboard — no tracing to stdout (would corrupt the TUI)
             if let Err(e) = run_dashboard(config, poll_interval, with_worker).await {
                 eprintln!("error: {}", e);
@@ -118,12 +123,17 @@ async fn main() -> ExitCode {
             strict_new,
             timeout,
         } => {
+            let config = effective_config_path(config);
             // Wait outputs key=value to stdout — no tracing there
             return run_wait(config, thread_id, intent, since, strict_new, timeout).await;
         }
     }
 
     ExitCode::SUCCESS
+}
+
+fn effective_config_path(config: Option<PathBuf>) -> PathBuf {
+    config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
 }
 
 fn init_tracing() {
@@ -408,31 +418,60 @@ async fn run_wait(
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands};
+    use super::{effective_config_path, Cli, Commands};
     use clap::Parser;
+    use std::path::PathBuf;
 
     #[test]
-    fn test_worker_requires_config_flag() {
+    fn test_worker_parses_without_config_flag() {
         let parsed = Cli::try_parse_from(["aster-orch", "worker"]);
-        assert!(parsed.is_err());
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Worker { config } = cli.command {
+                assert!(config.is_none());
+            } else {
+                panic!("expected Worker command");
+            }
+        }
     }
 
     #[test]
-    fn test_mcp_server_requires_config_flag() {
+    fn test_mcp_server_parses_without_config_flag() {
         let parsed = Cli::try_parse_from(["aster-orch", "mcp-server"]);
-        assert!(parsed.is_err());
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::McpServer { config } = cli.command {
+                assert!(config.is_none());
+            } else {
+                panic!("expected McpServer command");
+            }
+        }
     }
 
     #[test]
-    fn test_dashboard_requires_config_flag() {
+    fn test_dashboard_parses_without_config_flag() {
         let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]);
-        assert!(parsed.is_err());
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Dashboard { config, .. } = cli.command {
+                assert!(config.is_none());
+            } else {
+                panic!("expected Dashboard command");
+            }
+        }
     }
 
     #[test]
     fn test_dashboard_parses_with_config_flag() {
         let parsed = Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]);
         assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Dashboard { config, .. } = cli.command {
+                assert_eq!(config, Some(PathBuf::from("foo.yaml")));
+            } else {
+                panic!("expected Dashboard command");
+            }
+        }
     }
 
     #[test]
@@ -457,10 +496,15 @@ mod tests {
 
     #[test]
     fn test_dashboard_poll_interval_default() {
-        let parsed =
-            Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]).unwrap();
-        if let Commands::Dashboard { poll_interval, .. } = parsed.command {
+        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]).unwrap();
+        if let Commands::Dashboard {
+            poll_interval,
+            config,
+            ..
+        } = parsed.command
+        {
             assert_eq!(poll_interval, 2);
+            assert!(config.is_none());
         } else {
             panic!("expected Dashboard command");
         }
@@ -468,10 +512,15 @@ mod tests {
 
     #[test]
     fn test_dashboard_with_worker_default_false() {
-        let parsed =
-            Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]).unwrap();
-        if let Commands::Dashboard { with_worker, .. } = parsed.command {
+        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]).unwrap();
+        if let Commands::Dashboard {
+            with_worker,
+            config,
+            ..
+        } = parsed.command
+        {
             assert!(!with_worker);
+            assert!(config.is_none());
         } else {
             panic!("expected Dashboard command");
         }
@@ -505,31 +554,28 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_requires_config_and_thread_id() {
+    fn test_wait_requires_thread_id() {
         let parsed = Cli::try_parse_from(["aster-orch", "wait"]);
         assert!(parsed.is_err());
-        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--config", "foo.yaml"]);
+        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--timeout", "120"]);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn test_wait_parses_minimal() {
-        let parsed = Cli::try_parse_from([
-            "aster-orch",
-            "wait",
-            "--config",
-            "foo.yaml",
-            "--thread-id",
-            "t-123",
-        ]);
+        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--thread-id", "t-123"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Wait {
-                thread_id, timeout, ..
+                thread_id,
+                timeout,
+                config,
+                ..
             } = cli.command
             {
                 assert_eq!(thread_id, "t-123");
                 assert_eq!(timeout, 120); // default
+                assert!(config.is_none());
             } else {
                 panic!("expected Wait command");
             }
@@ -561,6 +607,7 @@ mod tests {
                 since,
                 strict_new,
                 timeout,
+                config,
                 ..
             } = cli.command
             {
@@ -569,9 +616,26 @@ mod tests {
                 assert_eq!(since, Some("db:42".to_string()));
                 assert!(strict_new);
                 assert_eq!(timeout, 300);
+                assert_eq!(config, Some(PathBuf::from("foo.yaml")));
             } else {
                 panic!("expected Wait command");
             }
         }
+    }
+
+    #[test]
+    fn test_effective_config_path_defaults_to_standard_location() {
+        assert_eq!(
+            effective_config_path(None),
+            PathBuf::from(".aster-orch/config.yaml")
+        );
+    }
+
+    #[test]
+    fn test_effective_config_path_honors_override() {
+        assert_eq!(
+            effective_config_path(Some(PathBuf::from("custom.yaml"))),
+            PathBuf::from("custom.yaml")
+        );
     }
 }
