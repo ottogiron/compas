@@ -15,7 +15,7 @@ use ratatui::{
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
-use crate::dashboard::views::payload::{format_log_line, format_payload_lines};
+use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
 use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +47,8 @@ pub struct ExecutionDetailState {
     /// Cached number of visible content rows from the last render pass.
     /// Used by the event loop to compute page-scroll distances.
     pub visible_rows: usize,
-    /// If true, JSON log lines are pretty-printed while rendering.
-    pub pretty_json: bool,
+    /// JSON rendering mode for payloads/log lines.
+    pub json_view_mode: JsonViewMode,
     /// Optional input payload shown under the outline.
     pub input_payload: Option<String>,
     /// True when input_payload is sourced from a strict execution-dispatch link.
@@ -81,7 +81,7 @@ impl ExecutionDetailState {
             log_path: None,
             file_pos: 0,
             visible_rows: 20,
-            pretty_json: true,
+            json_view_mode: JsonViewMode::Humanized,
             input_payload,
             input_linked,
             section_selected: OutlineSection::Input,
@@ -191,7 +191,10 @@ impl ExecutionDetailState {
 
     /// Toggle JSON pretty rendering mode.
     pub fn toggle_pretty_json(&mut self) {
-        self.pretty_json = !self.pretty_json;
+        self.json_view_mode = match self.json_view_mode {
+            JsonViewMode::Humanized => JsonViewMode::RawPretty,
+            JsonViewMode::RawPretty => JsonViewMode::Humanized,
+        };
     }
 
     pub fn select_next_section(&mut self) {
@@ -247,7 +250,10 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         .map(format_duration_ms)
         .unwrap_or_else(|| "-".to_string());
     let follow_indicator = if state.follow { "  [follow]" } else { "" };
-    let json_indicator = if state.pretty_json { "  [json]" } else { "" };
+    let json_indicator = match state.json_view_mode {
+        JsonViewMode::Humanized => "  [humanized]",
+        JsonViewMode::RawPretty => "  [raw-json]",
+    };
     let provenance_indicator = if state.input_linked {
         "  [linked]"
     } else {
@@ -304,7 +310,7 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
     let input_lines = state
         .input_payload
         .as_deref()
-        .map(|s| format_payload_lines(s, state.pretty_json, 24))
+        .map(|s| format_payload_lines(s, state.json_view_mode, 24))
         .unwrap_or_else(|| {
             if state.input_linked {
                 vec!["(no input)".to_string()]
@@ -319,7 +325,7 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         state
             .lines
             .iter()
-            .flat_map(|line| format_log_line(line, state.pretty_json))
+            .flat_map(|line| format_log_line(line, state.json_view_mode))
             .collect()
     };
 
@@ -374,7 +380,7 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         key("f"),
         Span::raw(": follow  "),
         key("J"),
-        Span::raw(": json"),
+        Span::raw(": view mode"),
         Span::styled(position_label, Style::default().fg(Color::DarkGray)),
     ];
 
@@ -424,7 +430,7 @@ mod tests {
             log_path: None,
             file_pos: 0,
             visible_rows: 10,
-            pretty_json: false,
+            json_view_mode: JsonViewMode::RawPretty,
             input_payload: Some("{\"in\":1}".to_string()),
             input_linked: true,
             section_selected: OutlineSection::Input,

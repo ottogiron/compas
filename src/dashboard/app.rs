@@ -23,7 +23,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Paragraph, Tabs},
     Frame, Terminal,
 };
 use std::{
@@ -1398,6 +1398,7 @@ fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Re
         .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(action.title());
     let inner = block.inner(modal);
+    f.render_widget(Clear, modal);
     f.render_widget(block, modal);
 
     let lines = vec![
@@ -1482,6 +1483,7 @@ fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rec
             Span::raw(": close "),
         ]));
     let inner = block.inner(modal);
+    f.render_widget(Clear, modal);
     f.render_widget(block, modal);
 
     let mut lines = vec![Line::from(vec![
@@ -1525,6 +1527,7 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         .style(Style::default().bg(Color::Black).fg(Color::White))
         .title(" Help ");
     let inner = block.inner(modal);
+    f.render_widget(Clear, modal);
     f.render_widget(block, modal);
 
     let lines = vec![
@@ -1539,7 +1542,7 @@ fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
         Line::from("   Esc back from batch drill"),
         Line::from(" Execution Detail"),
         Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
-        Line::from("   Esc back   f follow   J JSON pretty"),
+        Line::from("   Esc back   f follow   J view mode"),
         Line::from(""),
         Line::from(" Press Esc, Enter, or ? to close this panel."),
     ];
