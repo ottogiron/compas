@@ -17,8 +17,8 @@ Operator (MCP client)
     ▼
 ┌─────────────────────────────────────┐
 │  MCP Server  (stdio transport)      │
-│  18 tools: dispatch, status, wait,  │
-│  approve, reject, complete, ...     │
+│  16 tools: dispatch, status, wait,  │
+│  close, abandon, reopen, ...        │
 │                                     │
 │  ┌───────────┐   ┌───────────────┐  │
 │  │ messages   │   │ executions    │  │
@@ -76,7 +76,7 @@ Four tables in a single SQLite file with WAL mode:
 
 | Table | Purpose |
 |-------|---------|
-| `threads` | Thread lifecycle (Active, ReviewPending, Completed, Failed, Abandoned) |
+| `threads` | Thread lifecycle (Active, Completed, Failed, Abandoned) |
 | `messages` | Conversation ledger between operator and agents |
 | `executions` | Job queue AND execution lifecycle tracker (queued → picked_up → executing → completed/failed/timed_out/crashed/cancelled) |
 | `worker_heartbeats` | Worker liveness tracking |
@@ -132,15 +132,13 @@ Log viewer controls:
 |------|---------|-------------|
 | `--config` | `.aster-orch/config.yaml` | Optional config path override |
 
-## MCP Tools (18)
+## MCP Tools (16)
 
 ### Core Workflow
 | Tool | Description |
 |------|-------------|
 | `orch_dispatch` | Send a message to an agent. Creates or continues a thread. |
-| `orch_approve` | Approve a review, issuing a review token. |
-| `orch_reject` | Reject a review with feedback, re-triggers worker agents. |
-| `orch_complete` | Complete a thread using the review token. |
+| `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
 
 ### Query & Observability
 | Tool | Description |
@@ -161,6 +159,7 @@ Log viewer controls:
 ### Lifecycle
 | Tool | Description |
 |------|-------------|
+| `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
 | `orch_abandon` | Abandon a thread, cancel active executions. |
 | `orch_reopen` | Reopen a terminal thread (Completed/Failed/Abandoned) to Active. |
 | `orch_diagnose` | Thread diagnostics: status, blockers, suggested next actions. |
@@ -218,7 +217,7 @@ state_dir: ~/.aster/orch
 db_path: ~/.aster/orch/jobs.sqlite
 poll_interval_secs: 1
 orchestration:
-  trigger_intents: [dispatch, handoff, changes-requested]
+  trigger_intents: [dispatch, handoff]
   execution_timeout_secs: 300
   stale_active_secs: 3600
   max_concurrent_triggers: 10
@@ -268,7 +267,7 @@ Path resolution rules:
 | `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
 | `orchestration.execution_timeout_secs` | 30 | Per-trigger timeout |
 | `orchestration.stale_active_secs` | 3600 | Staleness threshold for non-running Active threads |
-| `orchestration.trigger_intents` | dispatch, handoff, changes-requested | Intents that trigger worker execution |
+| `orchestration.trigger_intents` | dispatch, handoff | Intents that trigger worker execution |
 | `orchestration.ping_timeout_secs` | 15 | Backend ping liveness timeout |
 
 ## MCP Client Configuration
@@ -350,7 +349,7 @@ target/release/aster_orch
 | Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
 | AgentRuntime state machine | Stateless worker (execution-per-trigger) |
 | Session namespace scoping | Scoping by DB file |
-| 24 MCP tools | 18 MCP tools |
+| 24 MCP tools | 16 MCP tools |
 | `daemon run` subcommand | `worker` + `mcp-server` subcommands only |
 
 ## Module Structure
@@ -372,13 +371,13 @@ src/
 │   ├── mod.rs           #   Config loading + normalization
 │   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
 │   └── validation.rs    #   Config validation
-├── mcp/                 # MCP server (18 tools)
+├── mcp/                 # MCP server (16 tools)
 │   ├── mod.rs           #   Module declarations
 │   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
 │   ├── params.rs        #   All parameter structs
 │   ├── dispatch.rs      #   orch_dispatch (message + execution insert)
 │   ├── query.rs         #   orch_status, transcript, read, metrics, poll, batch_status, tasks
-│   ├── lifecycle.rs     #   orch_approve, reject, complete, abandon, reopen
+│   ├── lifecycle.rs     #   orch_close, abandon, reopen
 │   ├── wait.rs          #   orch_wait (200ms DB poll loop)
 │   ├── session.rs       #   orch_session_info, orch_list_agents
 │   └── health.rs        #   orch_health, orch_diagnose

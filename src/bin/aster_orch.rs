@@ -66,7 +66,7 @@ enum Commands {
         /// Thread ID to wait on
         #[arg(long)]
         thread_id: String,
-        /// Wait for a specific intent (e.g. "review-request", "approved")
+        /// Wait for a specific intent (e.g. "status-update", "completion")
         #[arg(long)]
         intent: Option<String>,
         /// Message cursor — only consider messages newer than this (db:<id> or numeric)
@@ -592,7 +592,7 @@ mod tests {
             "--thread-id",
             "t-abc",
             "--intent",
-            "review-request",
+            "status-update",
             "--since",
             "db:42",
             "--strict-new",
@@ -612,7 +612,7 @@ mod tests {
             } = cli.command
             {
                 assert_eq!(thread_id, "t-abc");
-                assert_eq!(intent, Some("review-request".to_string()));
+                assert_eq!(intent, Some("status-update".to_string()));
                 assert_eq!(since, Some("db:42".to_string()));
                 assert!(strict_new);
                 assert_eq!(timeout, 300);

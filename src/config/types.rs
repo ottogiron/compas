@@ -145,11 +145,7 @@ impl Default for OrchestrationConfig {
 }
 
 fn default_trigger_intents() -> Vec<String> {
-    vec![
-        "dispatch".to_string(),
-        "handoff".to_string(),
-        "changes-requested".to_string(),
-    ]
+    vec!["dispatch".to_string(), "handoff".to_string()]
 }
 
 fn default_task_history_retention() -> usize {

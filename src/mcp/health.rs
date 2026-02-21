@@ -163,7 +163,7 @@ impl OrchestratorMcpServer {
                                     exec.error_detail.as_deref().unwrap_or("(no detail)")
                                 ));
                                 suggestions
-                                    .push("review error and re-dispatch or abandon".to_string());
+                                    .push("inspect error and re-dispatch or abandon".to_string());
                             }
                             _ => {}
                         }
@@ -182,11 +182,8 @@ impl OrchestratorMcpServer {
                 ThreadStatus::Failed => {
                     blockers.push("thread is in failed state".to_string());
                     suggestions.push(
-                        "review last execution error, then reopen and re-dispatch".to_string(),
+                        "inspect last execution error, then reopen and re-dispatch".to_string(),
                     );
-                }
-                ThreadStatus::ReviewPending => {
-                    suggestions.push("waiting for review — approve or reject".to_string());
                 }
             }
         }

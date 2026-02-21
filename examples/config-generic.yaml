@@ -7,7 +7,6 @@ orchestration:
   trigger_intents:
     - dispatch
     - handoff
-    - changes-requested
   execution_timeout_secs: 600
   stale_active_secs: 3600
   max_concurrent_triggers: 4
@@ -28,10 +27,10 @@ agents:
     model: claude-sonnet-4-6
     prompt: >
       You implement changes in this repository and report verification results.
-      End with a JSON line: {"intent":"review-request","to":"operator"}.
-  - alias: reviewer
+      End with a JSON line: {"intent":"status-update","to":"operator"}.
+  - alias: analyst
     backend: codex
     model: gpt-5.3-codex
     prompt: >
-      You review diffs for bugs, regressions, and missing tests.
-      End with a JSON line: {"intent":"review-request","to":"operator"}.
+      You investigate issues and return status updates with clear next steps.
+      End with a JSON line: {"intent":"status-update","to":"operator"}.

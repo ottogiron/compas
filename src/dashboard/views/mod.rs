@@ -14,10 +14,7 @@ use ratatui::style::Color;
 /// already-readable values (Active, Completed, Failed, Abandoned) pass through
 /// unchanged.
 pub fn humanize_thread_status(raw: &str) -> &str {
-    match raw {
-        "ReviewPending" | "review_pending" => "Review Pending",
-        other => other,
-    }
+    raw
 }
 
 /// Convert a raw execution-status string to a human-readable label.
@@ -87,7 +84,6 @@ pub fn format_duration_ms(ms: i64) -> String {
 pub fn thread_status_color(status: &str) -> Color {
     match status {
         "Active" | "active" => Color::Yellow,
-        "ReviewPending" | "review_pending" => Color::Blue,
         "Completed" | "completed" => Color::Green,
         "Failed" | "failed" => Color::Red,
         "Abandoned" | "abandoned" => Color::DarkGray,
@@ -114,16 +110,6 @@ mod tests {
     use super::*;
 
     // humanize_thread_status
-
-    #[test]
-    fn test_humanize_thread_status_review_pending_pascal() {
-        assert_eq!(humanize_thread_status("ReviewPending"), "Review Pending");
-    }
-
-    #[test]
-    fn test_humanize_thread_status_review_pending_snake() {
-        assert_eq!(humanize_thread_status("review_pending"), "Review Pending");
-    }
 
     #[test]
     fn test_humanize_thread_status_passthrough_active() {
@@ -274,12 +260,6 @@ mod tests {
     fn test_thread_status_color_active() {
         assert_eq!(thread_status_color("Active"), Color::Yellow);
         assert_eq!(thread_status_color("active"), Color::Yellow);
-    }
-
-    #[test]
-    fn test_thread_status_color_review_pending() {
-        assert_eq!(thread_status_color("ReviewPending"), Color::Blue);
-        assert_eq!(thread_status_color("review_pending"), Color::Blue);
     }
 
     #[test]

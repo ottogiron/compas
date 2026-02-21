@@ -373,11 +373,11 @@ mod tests {
     fn test_parse_claude_json_auto_reply() {
         // Agent embeds JSON auto-reply in the result field
         let out = test_output(
-            r#"{"type":"result","subtype":"success","result":"{\"intent\":\"review-request\",\"to\":\"lead\",\"body\":\"Task done\"}","session_id":"s1"}"#,
+            r#"{"type":"result","subtype":"success","result":"{\"intent\":\"status-update\",\"to\":\"lead\",\"body\":\"Task done\"}","session_id":"s1"}"#,
         );
         let val = parse_json_output(&out).unwrap();
         let result_str = val["result"].as_str().unwrap();
-        assert!(result_str.contains("review-request"));
+        assert!(result_str.contains("status-update"));
         assert!(result_str.contains("Task done"));
     }
 

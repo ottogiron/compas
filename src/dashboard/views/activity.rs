@@ -34,7 +34,6 @@ struct BatchProgress {
     completed: usize,
     total: usize,
     active: usize,
-    review: usize,
     failed: usize,
     oldest_active_updated_at: Option<i64>,
     latest_updated_at: i64,
@@ -148,7 +147,6 @@ fn batch_progress(
         completed: usize,
         total: usize,
         active: usize,
-        review: usize,
         failed: usize,
         oldest_active_updated_at: Option<i64>,
         latest_updated_at: i64,
@@ -172,9 +170,6 @@ fn batch_progress(
         if r.thread_status == "Completed" || es == "completed" {
             agg.completed += 1;
         }
-        if r.thread_status == "ReviewPending" {
-            agg.review += 1;
-        }
         if r.thread_status == "Failed" || matches!(es, "failed" | "timed_out" | "crashed") {
             agg.failed += 1;
         }
@@ -194,7 +189,6 @@ fn batch_progress(
             completed: agg.completed,
             total: agg.total,
             active: agg.active,
-            review: agg.review,
             failed: agg.failed,
             oldest_active_updated_at: agg.oldest_active_updated_at,
             latest_updated_at: agg.latest_updated_at,
@@ -333,7 +327,7 @@ fn footer_counts(
     data: &ActivityData,
     now_unix: i64,
     stale_after_secs: i64,
-) -> (i64, i64, i64, i64, i64) {
+) -> (i64, i64, i64, i64) {
     let active = data
         .rows
         .iter()
@@ -345,23 +339,20 @@ fn footer_counts(
         .filter(|r| is_stale_active(r, now_unix, stale_after_secs))
         .count() as i64;
 
-    let mut review = 0i64;
     let mut failed = 0i64;
     let mut completed = 0i64;
     for (status, count) in &data.thread_counts {
         match status.as_str() {
-            "ReviewPending" | "review_pending" => review += count,
             "Failed" | "failed" => failed += count,
             "Completed" | "completed" => completed += count,
             _ => {}
         }
     }
-    (active, review, failed, completed, stale)
+    (active, failed, completed, stale)
 }
 
 fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) -> Line<'static> {
-    let (active, review, failed, completed, stale) =
-        footer_counts(data, now_unix, stale_after_secs);
+    let (active, failed, completed, stale) = footer_counts(data, now_unix, stale_after_secs);
 
     let label = |s: &str, color: Color| -> Span<'static> {
         Span::styled(s.to_string(), Style::default().fg(color))
@@ -376,8 +367,6 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
         val(active),
         label("Stale: ", Color::DarkGray),
         val(stale),
-        label("Review: ", Color::Blue),
-        val(review),
         label("Failed: ", Color::Red),
         val(failed),
         label("Completed: ", Color::Green),
@@ -738,7 +727,6 @@ fn render_context_panel(
         }
         Some(OpsSelectable::Batch(batch_id)) => {
             let mut active = 0usize;
-            let mut review = 0usize;
             let mut failed = 0usize;
             let mut completed = 0usize;
             let mut total = 0usize;
@@ -747,9 +735,6 @@ fn render_context_panel(
                     continue;
                 }
                 total += 1;
-                if row.thread_status == "ReviewPending" {
-                    review += 1;
-                }
                 if row.thread_status == "Completed" {
                     completed += 1;
                 }
@@ -764,7 +749,6 @@ fn render_context_panel(
             lines.push(kv_line("Batch", &batch_id));
             lines.push(kv_line("Total Threads", &total.to_string()));
             lines.push(kv_line("Active", &active.to_string()));
-            lines.push(kv_line("Review", &review.to_string()));
             lines.push(kv_line("Failed", &failed.to_string()));
             lines.push(kv_line("Completed", &completed.to_string()));
             lines.push(Line::from(Span::raw("")));
@@ -940,7 +924,10 @@ fn make_batch_line(
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("a:{} r:{} f:{}", batch.active, batch.review, batch.failed),
+            format!(
+                "a:{} c:{} f:{}",
+                batch.active, batch.completed, batch.failed
+            ),
             Style::default().fg(Color::DarkGray).bg(bg),
         ),
         Span::styled(
@@ -1014,9 +1001,7 @@ fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> L
 fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {
     let ts = t.thread_status.as_str();
     let es = t.execution_status.as_deref().unwrap_or("");
-    if ts == "ReviewPending" {
-        ("!", Color::Blue)
-    } else if matches!(es, "failed" | "crashed") {
+    if matches!(es, "failed" | "crashed") {
         ("X", Color::Red)
     } else if es == "timed_out" {
         ("T", Color::Red)
@@ -1129,7 +1114,7 @@ mod tests {
     fn test_ops_selectable_targets_includes_batches() {
         let rows = vec![
             make_row("t1", Some("b1"), "Active", Some("executing"), 1),
-            make_row("t2", Some("b1"), "ReviewPending", Some("queued"), 2),
+            make_row("t2", Some("b1"), "Failed", Some("failed"), 2),
             make_row("t3", Some("b2"), "Completed", Some("completed"), 3),
         ];
 
@@ -1153,7 +1138,7 @@ mod tests {
     fn test_batch_progress_counts() {
         let rows = vec![
             make_row("t1", Some("b1"), "Active", Some("executing"), 1),
-            make_row("t2", Some("b1"), "ReviewPending", Some("queued"), 2),
+            make_row("t2", Some("b1"), "Failed", Some("failed"), 2),
             make_row("t3", Some("b1"), "Completed", Some("completed"), 3),
         ];
 
@@ -1161,7 +1146,7 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].total, 3);
         assert_eq!(batches[0].completed, 1);
-        assert_eq!(batches[0].review, 1);
+        assert_eq!(batches[0].failed, 1);
     }
 
     #[test]
@@ -1203,7 +1188,6 @@ mod tests {
             ],
             thread_counts: vec![
                 ("Active".to_string(), 3),
-                ("ReviewPending".to_string(), 0),
                 ("Failed".to_string(), 0),
                 ("Completed".to_string(), 0),
             ],
@@ -1212,9 +1196,8 @@ mod tests {
             fetched_at: std::time::Instant::now(),
         };
 
-        let (active, review, failed, completed, stale) = footer_counts(&data, 1000, 300);
+        let (active, failed, completed, stale) = footer_counts(&data, 1000, 300);
         assert_eq!(active, 2);
-        assert_eq!(review, 0);
         assert_eq!(failed, 0);
         assert_eq!(completed, 0);
         assert_eq!(stale, 1);

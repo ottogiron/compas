@@ -105,36 +105,14 @@ impl OrchestratorMcpServer {
     }
 
     #[tool(
-        name = "orch_approve",
-        description = "Approve a review, issuing a review token for the thread."
+        name = "orch_close",
+        description = "Close a thread with a terminal status (completed or failed)."
     )]
-    async fn orch_approve(
+    async fn orch_close(
         &self,
-        #[tool(aggr)] params: ApproveParams,
+        #[tool(aggr)] params: CloseParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        self.approve_impl(params).await
-    }
-
-    #[tool(
-        name = "orch_reject",
-        description = "Reject a review with feedback, requesting changes."
-    )]
-    async fn orch_reject(
-        &self,
-        #[tool(aggr)] params: RejectParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        self.reject_impl(params).await
-    }
-
-    #[tool(
-        name = "orch_complete",
-        description = "Complete a thread using the review token from approval."
-    )]
-    async fn orch_complete(
-        &self,
-        #[tool(aggr)] params: CompleteParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        self.complete_impl(params).await
+        self.close_impl(params).await
     }
 
     #[tool(
@@ -161,7 +139,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_wait",
-        description = "Poll for a message on a thread, optionally filtering by intent. Blocks up to timeout_secs. When neither intent nor since_reference is provided, trigger intents (dispatch, handoff, changes-requested) are auto-excluded so the result is the agent's response."
+        description = "Poll for a message on a thread, optionally filtering by intent. Blocks up to timeout_secs. When neither intent nor since_reference is provided, trigger intents are auto-excluded so the result is the agent's response."
     )]
     async fn orch_wait(
         &self,
@@ -271,7 +249,7 @@ impl ServerHandler for OrchestratorMcpServer {
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
             instructions: Some(
-                "Aster orchestrator MCP server. Exposes dispatch, status, review, \
+                "Aster orchestrator MCP server. Exposes dispatch, status, \
                  metrics, and diagnostic tools for multi-agent coordination."
                     .into(),
             ),

@@ -47,7 +47,7 @@ impl GeminiBackend {
         args.push("--output-format".to_string());
         args.push("json".to_string());
 
-        // YOLO mode (auto-approve tools)
+        // YOLO mode (automatic tool flow)
         args.push("--yolo".to_string());
 
         // Disable MCP servers — prevents the CLI from hanging in non-interactive mode

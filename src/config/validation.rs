@@ -194,26 +194,38 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         }
     }
 
-    let valid_intents = HashSet::from([
-        "dispatch",
-        "handoff",
-        "review-request",
-        "approved",
-        "changes-requested",
-        "completion",
-        "status-update",
-        "decision-needed",
-    ]);
     for intent in &config.orchestration.trigger_intents {
-        if !valid_intents.contains(intent.as_str()) {
+        if !is_valid_intent_slug(intent) {
             return Err(OrchestratorError::Config(format!(
-                "unknown trigger intent '{}'",
+                "invalid trigger intent '{}': expected lowercase slug format",
                 intent
             )));
         }
     }
 
     Ok(())
+}
+
+fn is_valid_intent_slug(intent: &str) -> bool {
+    if intent.is_empty() || intent.starts_with('-') || intent.ends_with('-') {
+        return false;
+    }
+    let mut prev_dash = false;
+    for ch in intent.chars() {
+        let ok = ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-';
+        if !ok {
+            return false;
+        }
+        if ch == '-' {
+            if prev_dash {
+                return false;
+            }
+            prev_dash = true;
+        } else {
+            prev_dash = false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -402,9 +414,9 @@ agents:
     #[test]
     fn test_config_validation_invalid_trigger_intent() {
         let mut config = minimal_config();
-        config.orchestration.trigger_intents = vec!["invalid-intent".into()];
+        config.orchestration.trigger_intents = vec!["Invalid Intent".into()];
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("unknown trigger intent"));
+        assert!(err.to_string().contains("invalid trigger intent"));
     }
 
     #[test]

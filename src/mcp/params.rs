@@ -15,7 +15,7 @@ pub struct DispatchParams {
     pub body: String,
     /// Optional batch/ticket ID
     pub batch: Option<String>,
-    /// Intent: dispatch, handoff, review-request, status-update, decision-needed
+    /// Intent label (e.g. dispatch, handoff, status-update)
     pub intent: String,
     /// Optional thread ID (auto-generated if omitted)
     pub thread_id: Option<String>,
@@ -42,35 +42,22 @@ pub struct TimelineParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct ApproveParams {
-    /// Thread ID to approve
+pub struct CloseParams {
+    /// Thread ID to close
     pub thread_id: String,
-    /// Reviewer alias
+    /// Agent alias closing the thread
     pub from: String,
-    /// Author alias
-    pub to: String,
+    /// Final status for the thread
+    pub status: CloseStatus,
+    /// Optional close note
+    pub note: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct RejectParams {
-    /// Thread ID to reject
-    pub thread_id: String,
-    /// Reviewer alias
-    pub from: String,
-    /// Author alias
-    pub to: String,
-    /// Feedback for the rejection
-    pub feedback: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct CompleteParams {
-    /// Thread ID to complete
-    pub thread_id: String,
-    /// Agent alias completing the thread
-    pub from: String,
-    /// Review token issued during approval
-    pub token: String,
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum CloseStatus {
+    Completed,
+    Failed,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -119,7 +106,7 @@ pub struct DiagnoseParams {
 pub struct WaitParams {
     /// Thread ID to poll
     pub thread_id: String,
-    /// Optional intent to wait for (e.g. "approved", "completion")
+    /// Optional intent to wait for (e.g. "status-update", "completion")
     pub intent: Option<String>,
     /// Optional message cursor (`db:<id>` or numeric ID). Only newer messages are considered.
     pub since_reference: Option<String>,
@@ -133,7 +120,7 @@ pub struct WaitParams {
 pub struct PollParams {
     /// Thread ID to check
     pub thread_id: String,
-    /// Optional intent to look for (e.g. "review-request", "completion")
+    /// Optional intent to look for (e.g. "status-update", "completion")
     pub intent: Option<String>,
     /// Optional message cursor (`db:<id>` or numeric ID). Only newer messages are considered.
     pub since_reference: Option<String>,

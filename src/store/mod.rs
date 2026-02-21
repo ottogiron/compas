@@ -14,7 +14,6 @@ use sqlx::SqlitePool;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThreadStatus {
     Active,
-    ReviewPending,
     Completed,
     Failed,
     Abandoned,
@@ -24,7 +23,6 @@ impl ThreadStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "Active",
-            Self::ReviewPending => "ReviewPending",
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::Abandoned => "Abandoned",
@@ -47,7 +45,6 @@ impl std::str::FromStr for ThreadStatus {
     fn from_str(s: &str) -> Result<Self, String> {
         match s {
             "Active" => Ok(Self::Active),
-            "ReviewPending" => Ok(Self::ReviewPending),
             "Completed" => Ok(Self::Completed),
             "Failed" => Ok(Self::Failed),
             "Abandoned" => Ok(Self::Abandoned),
@@ -269,6 +266,15 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // Legacy compatibility: fold old review workflow status into Active.
+        sqlx::query(
+            "UPDATE threads
+             SET status = 'Active', updated_at = strftime('%s','now')
+             WHERE status IN ('ReviewPending', 'review_pending')",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -308,6 +314,19 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Mark a thread as failed only when it is currently Active.
+    pub async fn mark_thread_failed_if_active(&self, thread_id: &str) -> Result<bool, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE threads
+             SET status = 'Failed', updated_at = strftime('%s','now')
+             WHERE thread_id = ? AND status = 'Active'",
+        )
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn get_thread_status(&self, thread_id: &str) -> Result<Option<String>, sqlx::Error> {
@@ -1106,7 +1125,7 @@ mod tests {
                 &exec_id,
                 Some(0),
                 Some("output"),
-                Some("review-request"),
+                Some("status-update"),
                 5000,
             )
             .await
@@ -1115,7 +1134,7 @@ mod tests {
         let exec = store.latest_execution("t-1").await.unwrap().unwrap();
         assert_eq!(exec.status, "completed");
         assert_eq!(exec.exit_code, Some(0));
-        assert_eq!(exec.parsed_intent.as_deref(), Some("review-request"));
+        assert_eq!(exec.parsed_intent.as_deref(), Some("status-update"));
     }
 
     #[tokio::test]

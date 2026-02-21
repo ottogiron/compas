@@ -320,13 +320,13 @@ mod tests {
         let out = test_output(
             r#"{"type":"thread.started","thread_id":"019c5d27"}
 {"type":"item.completed","item":{"id":"item_1","type":"command_execution","aggregated_output":"function() {\n  return { x: 1 };\n}\n","exit_code":0}}
-{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"intent\":\"review-request\",\"to\":\"lead\",\"body\":\"Done\"}"}}"#,
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"{\"intent\":\"status-update\",\"to\":\"lead\",\"body\":\"Done\"}"}}"#,
         );
         let text = extract_output_text(&out);
         // Should get the last item.completed text (the agent message), not the code
         assert_eq!(
             text,
-            r#"{"intent":"review-request","to":"lead","body":"Done"}"#
+            r#"{"intent":"status-update","to":"lead","body":"Done"}"#
         );
     }
 }

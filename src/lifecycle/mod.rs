@@ -4,12 +4,10 @@
 //! surfaces (for example, dashboard actions) can share exactly the same
 //! transition behavior and error contracts.
 
-use std::collections::HashMap;
-
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::config::types::{AgentConfig, AgentRole};
+use crate::config::types::AgentConfig;
 use crate::store::{Store, ThreadStatus};
 
 #[derive(Debug, Error)]
@@ -28,23 +26,16 @@ pub enum LifecycleError {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ApproveOutcome {
+pub struct CloseOutcome {
     pub thread_id: String,
-    pub token: String,
     pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct RejectOutcome {
-    pub thread_id: String,
-    pub re_triggered: bool,
-    pub execution_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CompleteOutcome {
-    pub thread_id: String,
-    pub status: String,
+#[serde(rename_all = "snake_case")]
+pub enum CloseStatus {
+    Completed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,137 +55,52 @@ pub struct ReopenOutcome {
 #[derive(Clone, Debug)]
 pub struct LifecycleService {
     store: Store,
-    agent_roles: HashMap<String, AgentRole>,
 }
 
 impl LifecycleService {
-    pub fn new(store: Store, agents: &[AgentConfig]) -> Self {
-        let agent_roles = agents
-            .iter()
-            .map(|a| (a.alias.clone(), a.role.clone()))
-            .collect();
-        Self { store, agent_roles }
+    pub fn new(store: Store, _agents: &[AgentConfig]) -> Self {
+        Self { store }
     }
 
-    pub async fn approve(
+    pub async fn close(
         &self,
         thread_id: &str,
         from: &str,
-        to: &str,
-    ) -> Result<ApproveOutcome, LifecycleError> {
-        let thread = self.ensure_thread(thread_id).await?;
-
-        let token = ulid::Ulid::new().to_string();
-        self.store
-            .insert_message(
-                thread_id,
-                from,
-                to,
-                "approved",
-                &format!("Approved. Review token: {}", token),
-                None,
-            )
-            .await
-            .map_err(|e| LifecycleError::StorageFailure {
-                context: "failed to insert approval",
-                message: e.to_string(),
-            })?;
-
-        Ok(ApproveOutcome {
-            thread_id: thread_id.to_string(),
-            token,
-            status: thread.status,
-        })
-    }
-
-    pub async fn reject(
-        &self,
-        thread_id: &str,
-        from: &str,
-        to: &str,
-        feedback: &str,
-    ) -> Result<RejectOutcome, LifecycleError> {
+        status: CloseStatus,
+        note: Option<&str>,
+    ) -> Result<CloseOutcome, LifecycleError> {
         self.ensure_thread(thread_id).await?;
 
-        self.store
-            .insert_message(thread_id, from, to, "changes-requested", feedback, None)
-            .await
-            .map_err(|e| LifecycleError::StorageFailure {
-                context: "failed to insert rejection",
-                message: e.to_string(),
-            })?;
-
-        // Preserve current behavior: log status-update failures but do not fail
-        // the reject operation if the rejection message was persisted.
-        if let Err(e) = self
-            .store
-            .update_thread_status(thread_id, ThreadStatus::Active)
-            .await
-        {
-            tracing::error!(error = %e, "failed to update thread status on reject");
-        }
-
-        let target_is_worker = self
-            .agent_roles
-            .get(to)
-            .map(|r| r == &AgentRole::Worker)
-            .unwrap_or(false);
-
-        let execution_id = if target_is_worker {
-            match self.store.insert_execution(thread_id, to).await {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to queue re-trigger on reject");
-                    None
-                }
-            }
-        } else {
-            None
+        let (thread_status, intent, fallback_note) = match status {
+            CloseStatus::Completed => (
+                ThreadStatus::Completed,
+                "completion",
+                "thread closed as completed",
+            ),
+            CloseStatus::Failed => (ThreadStatus::Failed, "failure", "thread closed as failed"),
         };
 
-        Ok(RejectOutcome {
-            thread_id: thread_id.to_string(),
-            re_triggered: execution_id.is_some(),
-            execution_id,
-        })
-    }
-
-    pub async fn complete(
-        &self,
-        thread_id: &str,
-        from: &str,
-        token: &str,
-    ) -> Result<CompleteOutcome, LifecycleError> {
-        self.ensure_thread(thread_id).await?;
-
         self.store
-            .update_thread_status(thread_id, ThreadStatus::Completed)
+            .update_thread_status(thread_id, thread_status.clone())
             .await
             .map_err(|e| LifecycleError::StorageFailure {
-                context: "failed to complete thread",
+                context: "failed to close thread",
                 message: e.to_string(),
             })?;
 
-        // Preserve current behavior: completion status is primary; message write
-        // failure is logged but does not fail completion.
+        let body = note.unwrap_or(fallback_note);
+
         if let Err(e) = self
             .store
-            .insert_message(
-                thread_id,
-                from,
-                "operator",
-                "completion",
-                &format!("Thread completed with token: {}", token),
-                None,
-            )
+            .insert_message(thread_id, from, "operator", intent, body, None)
             .await
         {
-            tracing::error!(error = %e, "failed to insert completion message");
+            tracing::error!(error = %e, "failed to insert close message");
         }
 
-        Ok(CompleteOutcome {
+        Ok(CloseOutcome {
             thread_id: thread_id.to_string(),
-            status: "Completed".to_string(),
+            status: thread_status.as_str().to_string(),
         })
     }
 
@@ -274,6 +180,7 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
+    use crate::config::types::AgentRole;
 
     fn test_agents() -> Vec<AgentConfig> {
         vec![
@@ -314,20 +221,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_service_reject_worker_retriggers_execution() {
+    async fn test_service_close_completed_sets_terminal() {
         let store = test_store().await;
         store.ensure_thread("t-1", None).await.unwrap();
         let svc = LifecycleService::new(store.clone(), &test_agents());
 
         let out = svc
-            .reject("t-1", "operator", "focused", "please revise")
+            .close("t-1", "operator", CloseStatus::Completed, Some("done"))
             .await
             .unwrap();
-        assert!(out.re_triggered);
-        assert!(out.execution_id.is_some());
+        assert_eq!(out.status, "Completed");
 
         let status = store.get_thread_status("t-1").await.unwrap().unwrap();
-        assert_eq!(status, "Active");
+        assert_eq!(status, "Completed");
     }
 
     #[tokio::test]
@@ -358,12 +264,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_service_approve_nonexistent_thread_errors() {
+    async fn test_service_close_nonexistent_thread_errors() {
         let store = test_store().await;
         let svc = LifecycleService::new(store, &test_agents());
 
         let err = svc
-            .approve("missing", "operator", "focused")
+            .close("missing", "operator", CloseStatus::Failed, None)
             .await
             .unwrap_err();
         assert!(matches!(err, LifecycleError::ThreadNotFound { .. }));

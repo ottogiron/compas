@@ -34,9 +34,10 @@ Primary local modules:
 - Use MCP tools (`orch_*`) for instant operations.
 - Use CLI wait for blocking waits:
   - `aster_orch wait --config .aster-orch/config.yaml ...`
-- Keep rejection/approval/completion lifecycle coherent:
-  - reject should re-trigger worker execution where applicable
-  - completion must only finalize thread state through valid review flow
+- Keep lifecycle transitions coherent:
+  - close should finalize threads with explicit terminal status
+  - abandon should cancel queued/running executions
+  - reopen should only apply to terminal threads
 
 ## Verification for Orchestrator Changes
 

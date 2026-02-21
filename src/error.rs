@@ -38,9 +38,6 @@ pub enum OrchestratorError {
     #[error("invalid intent transition: {from} -> {to}")]
     InvalidTransition { from: String, to: String },
 
-    #[error("invalid review token: {0}")]
-    InvalidReviewToken(String),
-
     #[error("daemon lock held by another process")]
     DaemonLockHeld,
 

@@ -72,6 +72,7 @@ pub async fn execute_trigger(
             let _ = store
                 .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
                 .await;
+            let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -94,6 +95,7 @@ pub async fn execute_trigger(
             let _ = store
                 .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
                 .await;
+            let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -173,6 +175,7 @@ pub async fn execute_trigger(
                         ExecutionStatus::Failed,
                     )
                     .await;
+                let _ = store.mark_thread_failed_if_active(&thread_id).await;
             }
 
             TriggerOutput {
@@ -195,6 +198,7 @@ pub async fn execute_trigger(
             let _ = store
                 .fail_execution(&exec_id, &err, None, duration_ms, status)
                 .await;
+            let _ = store.mark_thread_failed_if_active(&thread_id).await;
             TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -211,7 +215,7 @@ pub async fn execute_trigger(
 
 /// Try to parse structured intent from agent output.
 ///
-/// Agents can embed JSON like `{"intent": "review-request", "to": "operator", "body": "..."}`
+/// Agents can embed JSON like `{"intent": "status-update", "to": "operator", "body": "..."}`
 /// in their output text. We look for this pattern.
 fn parse_intent_from_output(text: &str) -> Option<String> {
     // Try parsing the entire text as JSON
@@ -248,10 +252,10 @@ mod tests {
 
     #[test]
     fn test_parse_intent_json() {
-        let text = r#"{"intent": "review-request", "to": "operator", "body": "Done"}"#;
+        let text = r#"{"intent": "status-update", "to": "operator", "body": "Done"}"#;
         assert_eq!(
             parse_intent_from_output(text),
-            Some("review-request".to_string())
+            Some("status-update".to_string())
         );
     }
 

@@ -241,14 +241,7 @@ mod store_tests {
             .await
             .unwrap();
         let _id3 = store
-            .insert_message(
-                "t-1",
-                "focused",
-                "operator",
-                "review-request",
-                "msg 3",
-                None,
-            )
+            .insert_message("t-1", "focused", "operator", "status-update", "msg 3", None)
             .await
             .unwrap();
 
@@ -260,7 +253,7 @@ mod store_tests {
         // Messages since id2 should only include id3
         let since2 = store.get_messages_since("t-1", id2).await.unwrap();
         assert_eq!(since2.len(), 1);
-        assert_eq!(since2[0].intent, "review-request");
+        assert_eq!(since2[0].intent, "status-update");
     }
 
     #[tokio::test]
@@ -523,7 +516,6 @@ mod store_tests {
         assert!(ThreadStatus::Completed.is_terminal());
         assert!(ThreadStatus::Failed.is_terminal());
         assert!(ThreadStatus::Abandoned.is_terminal());
-        assert!(!ThreadStatus::ReviewPending.is_terminal());
 
         assert_eq!(
             "Completed".parse::<ThreadStatus>().unwrap(),
@@ -842,7 +834,7 @@ mod dispatch_tests {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MCP Tool Integration Tests — Lifecycle (approve, reject, complete, abandon, reopen)
+// MCP Tool Integration Tests — Lifecycle (close, abandon, reopen)
 // ═══════════════════════════════════════════════════════════════════════════
 
 mod lifecycle_tests {
@@ -864,137 +856,60 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn test_approve_issues_token() {
+    async fn test_close_marks_thread_completed() {
         let server = test_server().await;
-        setup_thread(&server, "t-approve").await;
+        setup_thread(&server, "t-close-ok").await;
 
         let result = server
-            .approve_impl(ApproveParams {
-                thread_id: "t-approve".to_string(),
+            .close_impl(CloseParams {
+                thread_id: "t-close-ok".to_string(),
                 from: "operator".to_string(),
-                to: "focused".to_string(),
+                status: CloseStatus::Completed,
+                note: Some("done".to_string()),
             })
             .await
             .unwrap();
 
         assert!(!is_error(&result));
         let json = extract_json(&result);
-        assert_eq!(json["thread_id"], "t-approve");
-        let token = json["token"].as_str().unwrap();
-        assert!(!token.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_approve_nonexistent_thread() {
-        let server = test_server().await;
-
-        let result = server
-            .approve_impl(ApproveParams {
-                thread_id: "nonexistent".to_string(),
-                from: "operator".to_string(),
-                to: "focused".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert!(is_error(&result));
-    }
-
-    #[tokio::test]
-    async fn test_reject_sets_active_and_retriggers() {
-        let server = test_server().await;
-        setup_thread(&server, "t-reject").await;
-
-        // Set to ReviewPending first
-        server
-            .store
-            .update_thread_status("t-reject", ThreadStatus::ReviewPending)
-            .await
-            .unwrap();
-
-        let result = server
-            .reject_impl(RejectParams {
-                thread_id: "t-reject".to_string(),
-                from: "operator".to_string(),
-                to: "focused".to_string(),
-                feedback: "Please fix the tests".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert!(!is_error(&result));
-        let json = extract_json(&result);
-        assert_eq!(json["thread_id"], "t-reject");
-        assert_eq!(json["re_triggered"], true);
-        assert!(json["execution_id"].as_str().is_some());
-
-        // Thread should be back to Active
-        let status = server
-            .store
-            .get_thread_status("t-reject")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(status, "Active");
-
-        // Should have a changes-requested message
-        let msgs = server.store.get_thread_messages("t-reject").await.unwrap();
-        assert!(msgs.iter().any(|m| m.intent == "changes-requested"));
-    }
-
-    #[tokio::test]
-    async fn test_reject_nonexistent_thread() {
-        let server = test_server().await;
-
-        let result = server
-            .reject_impl(RejectParams {
-                thread_id: "nonexistent".to_string(),
-                from: "operator".to_string(),
-                to: "focused".to_string(),
-                feedback: "Fix it".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert!(is_error(&result));
-    }
-
-    #[tokio::test]
-    async fn test_complete_marks_thread_completed() {
-        let server = test_server().await;
-        setup_thread(&server, "t-complete").await;
-
-        let result = server
-            .complete_impl(CompleteParams {
-                thread_id: "t-complete".to_string(),
-                from: "operator".to_string(),
-                token: "test-token-123".to_string(),
-            })
-            .await
-            .unwrap();
-
-        assert!(!is_error(&result));
-        let json = extract_json(&result);
+        assert_eq!(json["thread_id"], "t-close-ok");
         assert_eq!(json["status"], "Completed");
-
-        let status = server
-            .store
-            .get_thread_status("t-complete")
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(status, "Completed");
     }
 
     #[tokio::test]
-    async fn test_complete_nonexistent_thread() {
+    async fn test_close_marks_thread_failed() {
         let server = test_server().await;
+        setup_thread(&server, "t-close-failed").await;
 
         let result = server
-            .complete_impl(CompleteParams {
+            .close_impl(CloseParams {
+                thread_id: "t-close-failed".to_string(),
+                from: "operator".to_string(),
+                status: CloseStatus::Failed,
+                note: Some("failed by operator".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let status = server
+            .store
+            .get_thread_status("t-close-failed")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Failed");
+    }
+
+    #[tokio::test]
+    async fn test_close_nonexistent_thread() {
+        let server = test_server().await;
+        let result = server
+            .close_impl(CloseParams {
                 thread_id: "nonexistent".to_string(),
                 from: "operator".to_string(),
-                token: "token".to_string(),
+                status: CloseStatus::Completed,
+                note: None,
             })
             .await
             .unwrap();
@@ -1098,7 +1013,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn test_full_lifecycle_dispatch_approve_complete() {
+    async fn test_full_lifecycle_dispatch_close_completed() {
         let server = test_server().await;
 
         // 1. Dispatch
@@ -1123,36 +1038,25 @@ mod lifecycle_tests {
                 "t-full-lifecycle",
                 "focused",
                 "operator",
-                "review-request",
-                "Done, please review",
+                "status-update",
+                "Done",
                 None,
             )
             .await
             .unwrap();
 
-        // 3. Approve
-        let approve_result = server
-            .approve_impl(ApproveParams {
+        // 3. Close
+        let close_result = server
+            .close_impl(CloseParams {
                 thread_id: "t-full-lifecycle".to_string(),
                 from: "operator".to_string(),
-                to: "focused".to_string(),
+                status: CloseStatus::Completed,
+                note: Some("accepted".to_string()),
             })
             .await
             .unwrap();
-        let approve_json = extract_json(&approve_result);
-        let token = approve_json["token"].as_str().unwrap().to_string();
-
-        // 4. Complete
-        let complete_result = server
-            .complete_impl(CompleteParams {
-                thread_id: "t-full-lifecycle".to_string(),
-                from: "operator".to_string(),
-                token,
-            })
-            .await
-            .unwrap();
-        let complete_json = extract_json(&complete_result);
-        assert_eq!(complete_json["status"], "Completed");
+        let close_json = extract_json(&close_result);
+        assert_eq!(close_json["status"], "Completed");
 
         // Verify final state
         let status = server
@@ -1168,12 +1072,12 @@ mod lifecycle_tests {
             .get_thread_messages("t-full-lifecycle")
             .await
             .unwrap();
-        // dispatch + review-request + approved + completion = 4 messages
-        assert_eq!(msgs.len(), 4);
+        // dispatch + status-update + completion = 3 messages
+        assert_eq!(msgs.len(), 3);
     }
 
     #[tokio::test]
-    async fn test_full_lifecycle_dispatch_reject_approve_complete() {
+    async fn test_full_lifecycle_dispatch_close_failed() {
         let server = test_server().await;
 
         // 1. Dispatch
@@ -1184,83 +1088,45 @@ mod lifecycle_tests {
                 body: "Implement feature Y".to_string(),
                 batch: None,
                 intent: "dispatch".to_string(),
-                thread_id: Some("t-reject-cycle".to_string()),
+                thread_id: Some("t-close-failed-cycle".to_string()),
             })
             .await
             .unwrap();
 
-        // 2. Agent sends review-request
+        // 2. Agent sends status update
         server
             .store
             .insert_message(
-                "t-reject-cycle",
+                "t-close-failed-cycle",
                 "focused",
                 "operator",
-                "review-request",
-                "Please review v1",
+                "status-update",
+                "cannot finish task",
                 None,
             )
             .await
             .unwrap();
 
-        // 3. Reject
-        let reject_result = server
-            .reject_impl(RejectParams {
-                thread_id: "t-reject-cycle".to_string(),
+        // 3. Close as failed
+        let close_result = server
+            .close_impl(CloseParams {
+                thread_id: "t-close-failed-cycle".to_string(),
                 from: "operator".to_string(),
-                to: "focused".to_string(),
-                feedback: "Tests are failing".to_string(),
+                status: CloseStatus::Failed,
+                note: Some("operator marked failed".to_string()),
             })
             .await
             .unwrap();
-        let reject_json = extract_json(&reject_result);
-        assert_eq!(reject_json["re_triggered"], true);
-
-        // 4. Agent sends new review-request
-        server
-            .store
-            .insert_message(
-                "t-reject-cycle",
-                "focused",
-                "operator",
-                "review-request",
-                "Please review v2 — tests fixed",
-                None,
-            )
-            .await
-            .unwrap();
-
-        // 5. Approve
-        let approve_result = server
-            .approve_impl(ApproveParams {
-                thread_id: "t-reject-cycle".to_string(),
-                from: "operator".to_string(),
-                to: "focused".to_string(),
-            })
-            .await
-            .unwrap();
-        let token = extract_json(&approve_result)["token"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        // 6. Complete
-        server
-            .complete_impl(CompleteParams {
-                thread_id: "t-reject-cycle".to_string(),
-                from: "operator".to_string(),
-                token,
-            })
-            .await
-            .unwrap();
+        let close_json = extract_json(&close_result);
+        assert_eq!(close_json["status"], "Failed");
 
         let msgs = server
             .store
-            .get_thread_messages("t-reject-cycle")
+            .get_thread_messages("t-close-failed-cycle")
             .await
             .unwrap();
-        // dispatch + review-request + changes-requested + review-request + approved + completion = 6
-        assert_eq!(msgs.len(), 6);
+        // dispatch + status-update + failure = 3
+        assert_eq!(msgs.len(), 3);
     }
 }
 
@@ -1365,7 +1231,7 @@ mod query_tests {
                 "t-q-1",
                 "focused",
                 "operator",
-                "review-request",
+                "status-update",
                 "Done",
                 None,
             )
@@ -1613,14 +1479,14 @@ mod poll_tests {
                 "t-poll-resp",
                 "focused",
                 "operator",
-                "review-request",
+                "status-update",
                 "Done!",
                 None,
             )
             .await
             .unwrap();
 
-        // Poll without filters — should return the review-request but not the dispatch
+        // Poll without filters — should return the status-update but not the dispatch
         let result = server
             .poll_impl(PollParams {
                 thread_id: "t-poll-resp".to_string(),
@@ -1632,7 +1498,7 @@ mod poll_tests {
 
         let json = extract_json(&result);
         assert_eq!(json["matched_messages"], 1);
-        assert_eq!(json["latest_intent"], "review-request");
+        assert_eq!(json["latest_intent"], "status-update");
     }
 
     #[tokio::test]
@@ -1646,26 +1512,19 @@ mod poll_tests {
             .unwrap();
         server
             .store
-            .insert_message(
-                "t-poll-f",
-                "focused",
-                "op",
-                "status-update",
-                "progress",
-                None,
-            )
+            .insert_message("t-poll-f", "focused", "op", "progress", "progress", None)
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-poll-f", "focused", "op", "review-request", "done", None)
+            .insert_message("t-poll-f", "focused", "op", "status-update", "done", None)
             .await
             .unwrap();
 
         let result = server
             .poll_impl(PollParams {
                 thread_id: "t-poll-f".to_string(),
-                intent: Some("review-request".to_string()),
+                intent: Some("status-update".to_string()),
                 since_reference: None,
             })
             .await
@@ -1673,7 +1532,7 @@ mod poll_tests {
 
         let json = extract_json(&result);
         assert_eq!(json["matched_messages"], 1);
-        assert_eq!(json["latest_intent"], "review-request");
+        assert_eq!(json["latest_intent"], "status-update");
     }
 
     #[tokio::test]
@@ -1742,7 +1601,7 @@ mod wait_tests {
                 "t-wait-1",
                 "focused",
                 "operator",
-                "review-request",
+                "status-update",
                 "Done",
                 None,
             )
@@ -1762,7 +1621,7 @@ mod wait_tests {
 
         let json = extract_json(&result);
         assert_eq!(json["found"], true);
-        assert_eq!(json["intent"], "review-request");
+        assert_eq!(json["intent"], "status-update");
         assert_eq!(json["body"], "Done");
     }
 
@@ -1817,14 +1676,14 @@ mod wait_tests {
             .unwrap();
         server
             .store
-            .insert_message("t-wait-i", "focused", "op", "review-request", "ready", None)
+            .insert_message("t-wait-i", "focused", "op", "status-update", "ready", None)
             .await
             .unwrap();
 
         let result = server
             .wait_impl(WaitParams {
                 thread_id: "t-wait-i".to_string(),
-                intent: Some("review-request".to_string()),
+                intent: Some("status-update".to_string()),
                 since_reference: None,
                 strict_new: None,
                 timeout_secs: Some(1),
@@ -1834,7 +1693,7 @@ mod wait_tests {
 
         let json = extract_json(&result);
         assert_eq!(json["found"], true);
-        assert_eq!(json["intent"], "review-request");
+        assert_eq!(json["intent"], "status-update");
     }
 
     #[tokio::test]
@@ -1852,7 +1711,7 @@ mod wait_tests {
         let result = server
             .wait_impl(WaitParams {
                 thread_id: "t-wait-to".to_string(),
-                intent: Some("review-request".to_string()),
+                intent: Some("status-update".to_string()),
                 since_reference: None,
                 strict_new: None,
                 timeout_secs: Some(1),
@@ -1879,7 +1738,7 @@ mod wait_tests {
             .unwrap();
         server
             .store
-            .insert_message("t-wait-sr", "focused", "op", "review-request", "done", None)
+            .insert_message("t-wait-sr", "focused", "op", "status-update", "done", None)
             .await
             .unwrap();
 
@@ -1897,7 +1756,7 @@ mod wait_tests {
         let json = extract_json(&result);
         assert_eq!(json["found"], true);
         // Since reference provided → all messages after id1 included (no auto-exclude)
-        assert_eq!(json["intent"], "review-request");
+        assert_eq!(json["intent"], "status-update");
     }
 
     #[tokio::test]
@@ -1920,7 +1779,7 @@ mod wait_tests {
                     "t-wait-conc",
                     "focused",
                     "operator",
-                    "review-request",
+                    "status-update",
                     "Completed",
                     None,
                 )
@@ -1932,7 +1791,7 @@ mod wait_tests {
         let result = server
             .wait_impl(WaitParams {
                 thread_id: "t-wait-conc".to_string(),
-                intent: Some("review-request".to_string()),
+                intent: Some("status-update".to_string()),
                 since_reference: None,
                 strict_new: None,
                 timeout_secs: Some(5),
@@ -1944,7 +1803,7 @@ mod wait_tests {
 
         let json = extract_json(&result);
         assert_eq!(json["found"], true);
-        assert_eq!(json["intent"], "review-request");
+        assert_eq!(json["intent"], "status-update");
     }
 }
 
