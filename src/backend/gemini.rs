@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::Utc;
+use std::path::PathBuf;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -18,12 +19,18 @@ use crate::model::session::{Session, SessionStatus, TriggerResult};
 #[derive(Debug)]
 pub struct GeminiBackend {
     tracker: ProcessTracker,
+    workdir: Option<PathBuf>,
 }
 
 impl GeminiBackend {
     pub fn new() -> Self {
+        Self::with_workdir(None)
+    }
+
+    pub fn with_workdir(workdir: Option<PathBuf>) -> Self {
         Self {
             tracker: ProcessTracker::new(),
+            workdir,
         }
     }
 
@@ -107,7 +114,12 @@ impl Backend for GeminiBackend {
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(300));
 
-        let child = spawn_cli("gemini", &arg_refs, agent.env.as_ref(), None)?;
+        let child = spawn_cli(
+            "gemini",
+            &arg_refs,
+            agent.env.as_ref(),
+            self.workdir.as_deref(),
+        )?;
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
@@ -161,7 +173,12 @@ impl Backend for GeminiBackend {
             "Reply with: ok".to_string(),
         ];
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        match spawn_cli("gemini", &arg_refs, agent.env.as_ref(), None) {
+        match spawn_cli(
+            "gemini",
+            &arg_refs,
+            agent.env.as_ref(),
+            self.workdir.as_deref(),
+        ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
                 match wait_with_timeout(child, Some(timeout), None) {

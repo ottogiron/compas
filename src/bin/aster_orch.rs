@@ -155,30 +155,8 @@ async fn connect_db(
     Ok(pool)
 }
 
-fn resolve_db_path(
-    config_path: &PathBuf,
-    config: &aster_orch::config::types::OrchestratorConfig,
-) -> PathBuf {
-    let raw = &config.db_path;
-    if raw.is_absolute() {
-        return raw.clone();
-    }
-    if let Some(as_str) = raw.to_str() {
-        if as_str == "~" {
-            if let Ok(home) = std::env::var("HOME") {
-                return PathBuf::from(home);
-            }
-        }
-        if let Some(rest) = as_str.strip_prefix("~/") {
-            if let Ok(home) = std::env::var("HOME") {
-                return PathBuf::from(home).join(rest);
-            }
-        }
-    }
-    let base = config_path
-        .parent()
-        .unwrap_or_else(|| std::path::Path::new("."));
-    base.join(raw)
+fn resolve_db_path(config: &aster_orch::config::types::OrchestratorConfig) -> PathBuf {
+    config.db_path.clone()
 }
 
 fn resolve_config_path(config_path: &PathBuf) -> PathBuf {
@@ -190,14 +168,26 @@ fn build_backend_registry(
 ) -> BackendRegistry {
     let mut registry = BackendRegistry::new();
 
-    // Determine workdir from config state_dir
-    let workdir = Some(config.state_dir.clone());
+    let workdir = Some(config.project_root.clone());
 
     // Register all known backends
-    registry.register("claude", Arc::new(ClaudeCodeBackend::new()));
+    registry.register(
+        "claude",
+        Arc::new(ClaudeCodeBackend::with_workdir(workdir.clone())),
+    );
     registry.register("codex", Arc::new(CodexBackend::new(workdir)));
-    registry.register("opencode", Arc::new(OpenCodeBackend::new()));
-    registry.register("gemini", Arc::new(GeminiBackend::new()));
+    registry.register(
+        "opencode",
+        Arc::new(OpenCodeBackend::with_workdir(Some(
+            config.project_root.clone(),
+        ))),
+    );
+    registry.register(
+        "gemini",
+        Arc::new(GeminiBackend::with_workdir(Some(
+            config.project_root.clone(),
+        ))),
+    );
 
     registry
 }
@@ -209,7 +199,7 @@ fn build_backend_registry(
 async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config_path = resolve_config_path(&config_path);
     let config = aster_orch::config::load_config(&config_path)?;
-    let db_path = resolve_db_path(&config_path, &config);
+    let db_path = resolve_db_path(&config);
     tracing::info!(
         agents = config.agents.len(),
         config = %resolved_config_path.display(),
@@ -239,7 +229,7 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
 async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config_path = resolve_config_path(&config_path);
     let config = aster_orch::config::load_config(&config_path)?;
-    let db_path = resolve_db_path(&config_path, &config);
+    let db_path = resolve_db_path(&config);
     tracing::info!(
         agents = config.agents.len(),
         config = %resolved_config_path.display(),
@@ -269,7 +259,7 @@ async fn run_dashboard(
     poll_interval: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = aster_orch::config::load_config(&config_path)?;
-    let db_path = resolve_db_path(&config_path, &config);
+    let db_path = resolve_db_path(&config);
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
 
@@ -315,7 +305,7 @@ async fn run_wait(
             return ExitCode::from(2);
         }
     };
-    let db_path = resolve_db_path(&config_path, &config);
+    let db_path = resolve_db_path(&config);
     let pool = match connect_db(&db_path, &config).await {
         Ok(p) => p,
         Err(e) => {

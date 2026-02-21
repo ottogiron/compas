@@ -585,6 +585,17 @@ mod tests {
     }
 
     #[test]
+    fn test_spawn_cli_respects_workdir() {
+        let dir = tempfile::tempdir().unwrap();
+        let child = spawn_cli("pwd", &[], None, Some(dir.path())).unwrap();
+        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None).unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let cwd = std::fs::canonicalize(stdout.trim()).unwrap();
+        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(cwd, expected);
+    }
+
+    #[test]
     fn test_wait_with_timeout_expires() {
         let child = spawn_cli("sleep", &["60"], None, None).unwrap();
         let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None);

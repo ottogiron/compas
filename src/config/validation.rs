@@ -9,6 +9,23 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "at least one agent must be configured".into(),
         ));
     }
+    if config.project_root.as_os_str().is_empty() {
+        return Err(OrchestratorError::Config(
+            "project_root must not be empty".into(),
+        ));
+    }
+    if !config.project_root.exists() {
+        return Err(OrchestratorError::Config(format!(
+            "project_root does not exist: {}",
+            config.project_root.display()
+        )));
+    }
+    if !config.project_root.is_dir() {
+        return Err(OrchestratorError::Config(format!(
+            "project_root must be a directory: {}",
+            config.project_root.display()
+        )));
+    }
 
     let mut aliases = HashSet::new();
     for agent in &config.agents {
@@ -206,6 +223,7 @@ mod tests {
 
     fn minimal_config() -> OrchestratorConfig {
         OrchestratorConfig {
+            project_root: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/test-mail"),
             db_path: PathBuf::from(".aster-orch/jobs.sqlite"),
             poll_interval_secs: 5,
@@ -244,6 +262,22 @@ mod tests {
         config.agents.clear();
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("at least one agent"));
+    }
+
+    #[test]
+    fn test_config_validation_missing_project_root() {
+        let mut config = minimal_config();
+        config.project_root = PathBuf::new();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("project_root must not be empty"));
+    }
+
+    #[test]
+    fn test_config_validation_nonexistent_project_root() {
+        let mut config = minimal_config();
+        config.project_root = PathBuf::from("/definitely/nonexistent/project-root");
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("project_root does not exist"));
     }
 
     #[test]
@@ -303,6 +337,7 @@ mod tests {
     #[test]
     fn test_config_yaml_deserialization() {
         let yaml = r#"
+project_root: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 10
 agents:
@@ -355,6 +390,7 @@ agents:
     #[test]
     fn test_config_yaml_with_new_fields() {
         let yaml = r#"
+project_root: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 5
 agents:
@@ -682,6 +718,7 @@ agents:
     #[test]
     fn test_normalization_legacy_models_to_global() {
         let yaml = r#"
+project_root: /tmp
 state_dir: /tmp/test
 agents:
   - alias: a1
@@ -708,6 +745,7 @@ agents:
     #[test]
     fn test_normalization_model_only_to_preferred() {
         let yaml = r#"
+project_root: /tmp
 state_dir: /tmp/test
 agents:
   - alias: a1
@@ -723,6 +761,7 @@ agents:
     #[test]
     fn test_global_models_config_roundtrip() {
         let yaml = r#"
+project_root: /tmp
 state_dir: /tmp/test
 models:
   - id: opus

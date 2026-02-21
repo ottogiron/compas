@@ -113,7 +113,12 @@ impl Backend for CodexBackend {
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(300));
 
-        let child = spawn_cli("codex", &arg_refs, agent.env.as_ref(), None)?;
+        let child = spawn_cli(
+            "codex",
+            &arg_refs,
+            agent.env.as_ref(),
+            self.workdir.as_deref(),
+        )?;
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
@@ -143,7 +148,12 @@ impl Backend for CodexBackend {
             "Reply with: ok".to_string(),
         ];
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        match spawn_cli("codex", &arg_refs, agent.env.as_ref(), None) {
+        match spawn_cli(
+            "codex",
+            &arg_refs,
+            agent.env.as_ref(),
+            self.workdir.as_deref(),
+        ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
                 match wait_with_timeout(child, Some(timeout), None) {

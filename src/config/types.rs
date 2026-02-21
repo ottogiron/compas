@@ -5,7 +5,9 @@ use std::path::PathBuf;
 /// Top-level orchestrator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorConfig {
-    #[serde(alias = "mailbox_root")]
+    /// Root directory of the target project where agent backends execute.
+    pub project_root: PathBuf,
+    /// Orchestrator-owned runtime directory (SQLite DB, logs, and state).
     pub state_dir: PathBuf,
     /// SQLite database file used by MCP + worker.
     #[serde(default = "default_db_path")]

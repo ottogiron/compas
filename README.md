@@ -1,8 +1,11 @@
 # aster-orch
 
-Agent orchestrator for the Aster project. Coordinates multiple AI coding agents
-(Claude, Codex, Gemini, OpenCode) through an MCP server interface with a custom
-poll-loop background worker for trigger execution.
+Agent orchestrator for multi-agent engineering workflows. Coordinates AI coding
+agents (Claude, Codex, Gemini, OpenCode) through an MCP server interface with a
+custom poll-loop background worker for trigger execution.
+
+`aster-orch` is project-agnostic: Aster uses it, but it can orchestrate agents
+for any repository by pointing `project_root` at that repo.
 
 Replaces the deprecated `aster-orchestrator` crate.
 
@@ -56,6 +59,16 @@ concurrent read/write without SQLITE_BUSY errors.
   `status='queued'` rows, claims work atomically with per-agent concurrency
   enforcement, runs backend triggers via `tokio::task::spawn_blocking`, and
   writes reply messages back.
+
+## Project/State Paths
+
+`aster-orch` uses two distinct filesystem roots:
+
+- `project_root`: the target repository where backend CLIs run commands/tasks.
+- `state_dir`: orchestrator-owned runtime state (DB/logs/heartbeats).
+
+This separation allows one shared orchestrator binary/config model to work
+across unrelated repositories.
 
 ## Database Schema
 
@@ -163,7 +176,10 @@ queued → picked_up → executing → completed
 
 Config file: `.aster-orch/config.yaml`
 
+Generic template: `crates/aster-orch/examples/config-generic.yaml`
+
 ```yaml
+project_root: /path/to/target-repo
 state_dir: ~/.aster/orch
 db_path: ~/.aster/orch/jobs.sqlite
 poll_interval_secs: 1
@@ -185,13 +201,20 @@ agents:
     identity: Claude
     backend: claude
     model: claude-sonnet-4-6
-    prompt: "You are Focused, Compiler Core Engineer..."
+    prompt: "You are focused on backend implementation and tests."
   - alias: chill
     identity: Claude
     backend: claude
     model: claude-sonnet-4-6
-    prompt: "You are Chill, Tooling Engineer..."
+    prompt: "You are focused on docs and release quality."
 ```
+
+Path resolution rules:
+
+- absolute paths are used as-is
+- `~/...` expands to `$HOME/...`
+- relative paths resolve against the directory containing the config file
+  (`project_root`, `state_dir`, `db_path`, and agent `prompt_file`)
 
 ### Agent Roles
 
@@ -203,6 +226,8 @@ agents:
 
 | Field | Default | Description |
 |-------|---------|-------------|
+| `project_root` | *(required)* | Target repository root where all backend CLIs execute |
+| `state_dir` | *(required)* | Orchestrator runtime directory (logs/state files) |
 | `poll_interval_secs` | 1 | Worker poll interval for queued executions |
 | `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
 | `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
