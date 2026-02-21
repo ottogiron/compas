@@ -69,7 +69,11 @@ impl OrchestratorMcpServer {
                 .any(|i| i == &params.intent);
 
         let execution_id = if should_trigger {
-            match self.store.insert_execution(&thread_id, &params.to).await {
+            match self
+                .store
+                .insert_execution_with_dispatch(&thread_id, &params.to, Some(message_id))
+                .await
+            {
                 Ok(id) => Some(id),
                 Err(e) => {
                     tracing::error!(error = %e, "failed to insert execution");

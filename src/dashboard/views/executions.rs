@@ -97,6 +97,11 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        Cell::from("Prov").style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
         Cell::from("Duration").style(
             Style::default()
                 .fg(Color::Cyan)
@@ -143,6 +148,11 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 .duration_ms
                 .map(format_duration_ms)
                 .unwrap_or_else(|| "-".to_string());
+            let provenance = if e.dispatch_message_id.is_some() {
+                Span::styled("L", Style::default().fg(Color::Green))
+            } else {
+                Span::styled("U", Style::default().fg(Color::Red))
+            };
 
             // Exit code — dash if absent.
             let exit_code = e
@@ -169,6 +179,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 Cell::from(agent),
                 Cell::from(thread_id),
                 status_cell,
+                Cell::from(provenance),
                 Cell::from(duration),
                 Cell::from(exit_code),
                 Cell::from(error_preview),
@@ -181,6 +192,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(14), // Agent (flexible alias)
         Constraint::Length(15), // Thread ID (12 chars + ellipsis + padding)
         Constraint::Length(13), // Status
+        Constraint::Length(6),  // Provenance (L/U)
         Constraint::Length(10), // Duration
         Constraint::Length(6),  // Exit code
         Constraint::Min(10),    // Error preview (fills remaining width)

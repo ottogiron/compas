@@ -95,6 +95,7 @@ impl OrchestratorMcpServer {
         struct TranscriptExecution {
             id: String,
             agent: String,
+            dispatch_message_id: Option<i64>,
             status: String,
             queued_at: i64,
             started_at: Option<i64>,
@@ -134,6 +135,7 @@ impl OrchestratorMcpServer {
                 .map(|e| TranscriptExecution {
                     id: e.id,
                     agent: e.agent_alias,
+                    dispatch_message_id: e.dispatch_message_id,
                     status: e.status,
                     queued_at: e.queued_at,
                     started_at: e.started_at,

@@ -135,6 +135,7 @@ pub struct ExecutionRow {
     pub id: String,
     pub thread_id: String,
     pub agent_alias: String,
+    pub dispatch_message_id: Option<i64>,
     pub status: String,
     pub queued_at: i64,
     pub picked_up_at: Option<i64>,
@@ -228,6 +229,7 @@ impl Store {
                 id             TEXT PRIMARY KEY,
                 thread_id      TEXT NOT NULL,
                 agent_alias    TEXT NOT NULL,
+                dispatch_message_id INTEGER,
                 status         TEXT NOT NULL DEFAULT 'queued',
                 queued_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
                 picked_up_at   INTEGER,
@@ -251,6 +253,23 @@ impl Store {
             .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_exec_agent_status ON executions(agent_alias, status)",
+        )
+        .execute(&self.pool)
+        .await?;
+        // Forward-compatible migration for existing DBs created before
+        // dispatch_message_id existed.
+        let columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(executions)")
+                .fetch_all(&self.pool)
+                .await?;
+        let has_dispatch_message_id = columns.iter().any(|c| c.1 == "dispatch_message_id");
+        if !has_dispatch_message_id {
+            sqlx::query("ALTER TABLE executions ADD COLUMN dispatch_message_id INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_exec_dispatch_msg ON executions(dispatch_message_id)",
         )
         .execute(&self.pool)
         .await?;
@@ -510,14 +529,26 @@ impl Store {
         thread_id: &str,
         agent_alias: &str,
     ) -> Result<String, sqlx::Error> {
+        self.insert_execution_with_dispatch(thread_id, agent_alias, None)
+            .await
+    }
+
+    /// Insert a new queued execution with optional strict dispatch linkage.
+    pub async fn insert_execution_with_dispatch(
+        &self,
+        thread_id: &str,
+        agent_alias: &str,
+        dispatch_message_id: Option<i64>,
+    ) -> Result<String, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
         sqlx::query(
-            "INSERT INTO executions (id, thread_id, agent_alias, status)
-             VALUES (?, ?, ?, 'queued')",
+            "INSERT INTO executions (id, thread_id, agent_alias, dispatch_message_id, status)
+             VALUES (?, ?, ?, ?, 'queued')",
         )
         .bind(&id)
         .bind(thread_id)
         .bind(agent_alias)
+        .bind(dispatch_message_id)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -568,6 +599,7 @@ impl Store {
             String,
             String,
             String,
+            Option<i64>,
             String,
             i64,
             Option<i64>,
@@ -579,7 +611,7 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, status, queued_at,
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
              FROM executions WHERE id = ?",
@@ -700,6 +732,7 @@ impl Store {
             String,
             String,
             String,
+            Option<i64>,
             String,
             i64,
             Option<i64>,
@@ -711,7 +744,7 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, status, queued_at,
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
              FROM executions WHERE thread_id = ? ORDER BY queued_at ASC",
@@ -731,6 +764,7 @@ impl Store {
             String,
             String,
             String,
+            Option<i64>,
             String,
             i64,
             Option<i64>,
@@ -742,7 +776,7 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, status, queued_at,
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
              FROM executions WHERE thread_id = ? ORDER BY queued_at DESC LIMIT 1",
@@ -771,6 +805,7 @@ impl Store {
             String,
             String,
             String,
+            Option<i64>,
             String,
             i64,
             Option<i64>,
@@ -782,7 +817,7 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, status, queued_at,
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
              FROM executions WHERE agent_alias = ? ORDER BY queued_at DESC LIMIT ?",
@@ -800,6 +835,7 @@ impl Store {
             String,
             String,
             String,
+            Option<i64>,
             String,
             i64,
             Option<i64>,
@@ -811,7 +847,7 @@ impl Store {
             Option<String>,
             Option<String>,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, agent_alias, status, queued_at,
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent
              FROM executions ORDER BY queued_at DESC LIMIT ?",
@@ -958,6 +994,34 @@ impl Store {
             .await?;
         Ok(row.0)
     }
+
+    pub async fn get_execution(&self, id: &str) -> Result<Option<ExecutionRow>, sqlx::Error> {
+        let row: Option<(
+            String,
+            String,
+            String,
+            Option<i64>,
+            String,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i64>,
+            Option<i32>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, thread_id, agent_alias, dispatch_message_id, status, queued_at,
+                    picked_up_at, started_at, finished_at, duration_ms,
+                    exit_code, output_preview, error_detail, parsed_intent
+             FROM executions WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(row_to_execution))
+    }
 }
 
 /// Combined thread + execution view.
@@ -1010,6 +1074,7 @@ fn row_to_execution(
         String,
         String,
         String,
+        Option<i64>,
         String,
         i64,
         Option<i64>,
@@ -1026,16 +1091,17 @@ fn row_to_execution(
         id: r.0,
         thread_id: r.1,
         agent_alias: r.2,
-        status: r.3,
-        queued_at: r.4,
-        picked_up_at: r.5,
-        started_at: r.6,
-        finished_at: r.7,
-        duration_ms: r.8,
-        exit_code: r.9,
-        output_preview: r.10,
-        error_detail: r.11,
-        parsed_intent: r.12,
+        dispatch_message_id: r.3,
+        status: r.4,
+        queued_at: r.5,
+        picked_up_at: r.6,
+        started_at: r.7,
+        finished_at: r.8,
+        duration_ms: r.9,
+        exit_code: r.10,
+        output_preview: r.11,
+        error_detail: r.12,
+        parsed_intent: r.13,
     }
 }
 
@@ -1135,6 +1201,30 @@ mod tests {
         assert_eq!(exec.status, "completed");
         assert_eq!(exec.exit_code, Some(0));
         assert_eq!(exec.parsed_intent.as_deref(), Some("status-update"));
+    }
+
+    #[tokio::test]
+    async fn test_execution_dispatch_linkage_roundtrip() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+        let dispatch_id = store
+            .insert_message(
+                "t-1",
+                "operator",
+                "focused",
+                "dispatch",
+                "linked input",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let exec_id = store
+            .insert_execution_with_dispatch("t-1", "focused", Some(dispatch_id))
+            .await
+            .unwrap();
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.dispatch_message_id, Some(dispatch_id));
     }
 
     #[tokio::test]

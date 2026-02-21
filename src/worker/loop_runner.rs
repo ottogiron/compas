@@ -136,20 +136,39 @@ impl WorkerRunner {
                     tokio::spawn(async move {
                         let _permit = permit; // held until task completes
 
-                        // Fetch instruction from the latest message on the thread
-                        let instruction = match store.get_thread_messages(&thread_id).await {
-                            Ok(msgs) => msgs
-                                .last()
-                                .map(|m| m.body.clone())
-                                .unwrap_or_else(|| "Process pending tasks.".to_string()),
-                            Err(e) => {
-                                tracing::error!(
-                                    thread_id = %thread_id,
-                                    error = %e,
-                                    "failed to fetch thread messages for instruction"
-                                );
-                                "Process pending tasks.".to_string()
+                        // Strict provenance: execute only from the dispatch message
+                        // linked to this execution. Legacy/unlinked rows fall back to
+                        // an explicit placeholder instruction.
+                        let instruction = if let Some(dispatch_id) = execution.dispatch_message_id {
+                            match store.get_message(dispatch_id).await {
+                                Ok(Some(msg)) => msg.body,
+                                Ok(None) => {
+                                    tracing::warn!(
+                                        exec_id = %execution.id,
+                                        thread_id = %thread_id,
+                                        dispatch_message_id = dispatch_id,
+                                        "execution dispatch message not found; using placeholder instruction"
+                                    );
+                                    "Dispatch message unavailable for this execution.".to_string()
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        exec_id = %execution.id,
+                                        thread_id = %thread_id,
+                                        dispatch_message_id = dispatch_id,
+                                        error = %e,
+                                        "failed to fetch linked dispatch message; using placeholder instruction"
+                                    );
+                                    "Dispatch message unavailable for this execution.".to_string()
+                                }
                             }
+                        } else {
+                            tracing::warn!(
+                                exec_id = %execution.id,
+                                thread_id = %thread_id,
+                                "execution has no dispatch linkage; using placeholder instruction"
+                            );
+                            "Dispatch message unavailable for this execution.".to_string()
                         };
 
                         let output = execute_trigger(

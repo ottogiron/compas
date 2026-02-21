@@ -449,32 +449,34 @@ impl App {
         let Some(row) = data.rows.get(src_idx) else {
             return;
         };
+        let Some(exec_id) = row.execution_id.clone() else {
+            self.admin_notice =
+                Some("Selected thread has no execution to inspect yet.".to_string());
+            return;
+        };
 
-        let agent_alias = row.agent_alias.clone().unwrap_or_else(|| "-".to_string());
-        let status = row
-            .execution_status
-            .clone()
-            .unwrap_or_else(|| row.thread_status.to_lowercase());
-        let duration_ms = row.duration_ms;
-        let thread_id = row.thread_id.clone();
-        let (input_payload, output_payload) =
-            self.resolve_detail_payloads(&thread_id, Some(agent_alias.as_str()));
-        let log_path = row
-            .execution_id
-            .as_ref()
-            .map(|id| self.log_dir.join(format!("{}.log", id)));
-        let view_id = row
-            .execution_id
-            .clone()
-            .unwrap_or_else(|| thread_id.clone());
+        let execution = self
+            .handle
+            .block_on(async { self.store.get_execution(&exec_id).await.ok().flatten() });
+        let Some(execution) = execution else {
+            self.admin_notice = Some(format!("Execution {} was not found.", exec_id));
+            return;
+        };
+
+        let agent_alias = execution.agent_alias.clone();
+        let status = execution.status.clone();
+        let duration_ms = execution.duration_ms;
+        let (input_payload, input_linked) = self.resolve_input_payload_for_execution(&execution);
+        let log_path = Some(self.log_dir.join(format!("{}.log", execution.id)));
         self.viewing_log = Some(ExecutionDetailState::new(
-            view_id,
+            execution.id,
             agent_alias,
             status,
             duration_ms,
             log_path,
             input_payload,
-            output_payload,
+            input_linked,
+            execution.output_preview.clone(),
         ));
     }
 
@@ -490,11 +492,7 @@ impl App {
         let agent_alias = row.agent_alias.clone();
         let status = row.status.clone();
         let duration_ms = row.duration_ms;
-        let output_preview = row.output_preview.clone();
-        let thread_id = row.thread_id.clone();
-
-        let (input_payload, output_payload) =
-            self.resolve_detail_payloads(&thread_id, Some(agent_alias.as_str()));
+        let (input_payload, input_linked) = self.resolve_input_payload_for_execution(row);
 
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
         self.viewing_log = Some(ExecutionDetailState::new(
@@ -504,57 +502,38 @@ impl App {
             duration_ms,
             Some(log_path),
             input_payload,
-            output_payload.or(output_preview),
+            input_linked,
+            row.output_preview.clone(),
         ));
     }
 
-    /// Resolve detail-view payloads from thread messages.
+    /// Resolve strict input payload from execution provenance.
     ///
-    /// Input: latest trigger-intent message to the agent, fallback to latest
-    /// operator->agent message.
-    /// Output: latest agent->operator reply after that input, fallback to latest
-    /// agent->operator message.
-    fn resolve_detail_payloads(
+    /// Input is available only when the execution is linked to a dispatch
+    /// message that belongs to the same thread and target agent.
+    fn resolve_input_payload_for_execution(
         &self,
-        thread_id: &str,
-        agent_alias: Option<&str>,
-    ) -> (Option<String>, Option<String>) {
+        execution: &ExecutionRow,
+    ) -> (Option<String>, bool) {
+        let Some(dispatch_id) = execution.dispatch_message_id else {
+            return (None, false);
+        };
+
         let store = &self.store;
         let handle = &self.handle;
-        let tid = thread_id.to_string();
+        let execution_thread_id = execution.thread_id.clone();
+        let execution_agent_alias = execution.agent_alias.clone();
         handle.block_on(async {
-            let messages = store.get_thread_messages(&tid).await.unwrap_or_default();
-            let target_agent = agent_alias.unwrap_or_default();
-            let trigger_intents = &self.config.orchestration.trigger_intents;
-
-            let input_msg = messages.iter().rev().find(|m| {
-                !target_agent.is_empty()
-                    && m.to_alias == target_agent
-                    && trigger_intents.contains(&m.intent)
-            });
-
-            let input_msg = input_msg.or_else(|| {
-                messages.iter().rev().find(|m| {
-                    m.from_alias == "operator"
-                        && m.to_alias != "operator"
-                        && (target_agent.is_empty() || m.to_alias == target_agent)
-                })
-            });
-
-            let input_payload = input_msg.map(|m| m.body.clone());
-            let input_id = input_msg.map(|m| m.id).unwrap_or(0);
-
-            let output_msg = messages.iter().rev().find(|m| {
-                m.id > input_id && m.from_alias != "operator" && m.to_alias == "operator"
-            });
-            let output_msg = output_msg.or_else(|| {
-                messages
-                    .iter()
-                    .rev()
-                    .find(|m| m.from_alias != "operator" && m.to_alias == "operator")
-            });
-
-            (input_payload, output_msg.map(|m| m.body.clone()))
+            let Some(msg) = store.get_message(dispatch_id).await.unwrap_or(None) else {
+                return (None, false);
+            };
+            let linked =
+                msg.thread_id == execution_thread_id && msg.to_alias == execution_agent_alias;
+            if linked {
+                (Some(msg.body), true)
+            } else {
+                (None, false)
+            }
         })
     }
 

@@ -51,6 +51,8 @@ pub struct ExecutionDetailState {
     pub pretty_json: bool,
     /// Optional input payload shown under the outline.
     pub input_payload: Option<String>,
+    /// True when input_payload is sourced from a strict execution-dispatch link.
+    pub input_linked: bool,
     section_selected: OutlineSection,
     input_expanded: bool,
     output_expanded: bool,
@@ -65,6 +67,7 @@ impl ExecutionDetailState {
         duration_ms: Option<i64>,
         log_path: Option<PathBuf>,
         input_payload: Option<String>,
+        input_linked: bool,
         output_fallback: Option<String>,
     ) -> Self {
         let mut state = Self {
@@ -80,6 +83,7 @@ impl ExecutionDetailState {
             visible_rows: 20,
             pretty_json: true,
             input_payload,
+            input_linked,
             section_selected: OutlineSection::Input,
             input_expanded: false,
             output_expanded: false,
@@ -244,6 +248,11 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         .unwrap_or_else(|| "-".to_string());
     let follow_indicator = if state.follow { "  [follow]" } else { "" };
     let json_indicator = if state.pretty_json { "  [json]" } else { "" };
+    let provenance_indicator = if state.input_linked {
+        "  [linked]"
+    } else {
+        "  [unlinked]"
+    };
 
     let title_spans: Vec<Span> = vec![
         Span::raw(" "),
@@ -276,6 +285,16 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
+        Span::styled(
+            provenance_indicator,
+            Style::default()
+                .fg(if state.input_linked {
+                    Color::Green
+                } else {
+                    Color::Red
+                })
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw(" "),
     ];
 
@@ -286,7 +305,13 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         .input_payload
         .as_deref()
         .map(|s| format_payload_lines(s, state.pretty_json, 24))
-        .unwrap_or_else(|| vec!["(no input)".to_string()]);
+        .unwrap_or_else(|| {
+            if state.input_linked {
+                vec!["(no input)".to_string()]
+            } else {
+                vec!["(input unavailable: execution not linked to dispatch message)".to_string()]
+            }
+        });
 
     let output_lines: Vec<String> = if state.lines.is_empty() {
         vec!["(no output)".to_string()]
@@ -401,6 +426,7 @@ mod tests {
             visible_rows: 10,
             pretty_json: false,
             input_payload: Some("{\"in\":1}".to_string()),
+            input_linked: true,
             section_selected: OutlineSection::Input,
             input_expanded: false,
             output_expanded: false,

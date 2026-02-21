@@ -685,9 +685,18 @@ mod dispatch_tests {
         assert!(!is_error(&result));
         let json = extract_json(&result);
         assert_eq!(json["thread_id"], "t-dispatch-1");
-        assert!(json["message_id"].as_i64().unwrap() > 0);
+        let message_id = json["message_id"].as_i64().unwrap();
+        assert!(message_id > 0);
         assert_eq!(json["triggered"], true);
-        assert!(json["execution_id"].as_str().is_some());
+        let execution_id = json["execution_id"].as_str().unwrap();
+
+        let execution = server
+            .store
+            .get_execution(execution_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(execution.dispatch_message_id, Some(message_id));
     }
 
     #[tokio::test]
