@@ -1,6 +1,8 @@
 use async_trait::async_trait;
 use chrono::Utc;
-use std::path::PathBuf;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -86,6 +88,67 @@ impl OpenCodeBackend {
         args.push("Reply with: ok".to_string());
         args
     }
+
+    /// Extract the OpenCode session ID from JSONL output.
+    ///
+    /// Every event line from `opencode run --format json` contains a top-level
+    /// `"sessionID"` field. We scan for the first occurrence.
+    fn extract_session_id_from_output(stdout: &[u8]) -> Option<String> {
+        let text = String::from_utf8_lossy(stdout);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(line) {
+                if let Some(sid) = val.get("sessionID").and_then(|v| v.as_str()) {
+                    if !sid.is_empty() {
+                        return Some(sid.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Best-effort cleanup: delete the OpenCode session created by a trigger/ping.
+    ///
+    /// Runs `opencode session delete <session_id>` as a fire-and-forget subprocess.
+    /// Failures are logged but never propagated — session cleanup is non-critical.
+    fn cleanup_session(session_id: &str, workdir: Option<&Path>) {
+        let mut cmd = Command::new("opencode");
+        cmd.args(["session", "delete", session_id])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        if let Some(dir) = workdir {
+            cmd.current_dir(dir);
+        }
+        match cmd.output() {
+            Ok(out) if out.status.success() => {
+                tracing::debug!(
+                    opencode_session = %session_id,
+                    "cleaned up opencode session"
+                );
+            }
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                tracing::warn!(
+                    opencode_session = %session_id,
+                    exit_code = out.status.code().unwrap_or(-1),
+                    stderr = %stderr.trim(),
+                    "opencode session cleanup returned non-zero"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    opencode_session = %session_id,
+                    error = %e,
+                    "failed to spawn opencode session cleanup"
+                );
+            }
+        }
+    }
 }
 
 impl Default for OpenCodeBackend {
@@ -140,6 +203,11 @@ impl Backend for OpenCodeBackend {
 
         match output {
             Ok(out) => {
+                // Clean up the OpenCode-side session to prevent accumulation.
+                if let Some(oc_sid) = Self::extract_session_id_from_output(&out.stdout) {
+                    Self::cleanup_session(&oc_sid, self.workdir.as_deref());
+                }
+
                 let output_text = extract_output_text(&out);
 
                 Ok(TriggerResult {
@@ -166,6 +234,11 @@ impl Backend for OpenCodeBackend {
                 let timeout = Duration::from_secs(timeout_secs);
                 match wait_with_timeout(child, Some(timeout), None) {
                     Ok(out) => {
+                        // Clean up the throwaway ping session.
+                        if let Some(oc_sid) = Self::extract_session_id_from_output(&out.stdout) {
+                            Self::cleanup_session(&oc_sid, self.workdir.as_deref());
+                        }
+
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {
                             alive: out.status.success(),
@@ -369,5 +442,70 @@ mod tests {
         let out = test_output(" \n\t", " \n");
         let text = extract_output_text(&out);
         assert!(text.is_empty());
+    }
+
+    // -- extract_session_id_from_output tests --
+
+    #[test]
+    fn test_extract_session_id_from_real_jsonl() {
+        let stdout = br#"{"type":"step_start","timestamp":1771873095732,"sessionID":"ses_374224a2cffeGrPrAe417w2LKA","part":{"id":"prt_1"}}
+{"type":"text","timestamp":1771873095788,"sessionID":"ses_374224a2cffeGrPrAe417w2LKA","part":{"id":"prt_2","text":"pong"}}
+{"type":"step_finish","timestamp":1771873095880,"sessionID":"ses_374224a2cffeGrPrAe417w2LKA","part":{"id":"prt_3"}}"#;
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(stdout),
+            Some("ses_374224a2cffeGrPrAe417w2LKA".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_single_event() {
+        let stdout = br#"{"type":"step_start","sessionID":"ses_abc123"}"#;
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(stdout),
+            Some("ses_abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_no_session_field() {
+        let stdout = br#"{"type":"step_start","timestamp":123}
+{"type":"text","part":{"text":"hello"}}"#;
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(stdout),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_empty_output() {
+        assert_eq!(OpenCodeBackend::extract_session_id_from_output(b""), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_non_json_output() {
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(b"plain text output"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_empty_string_skipped() {
+        let stdout = br#"{"type":"event","sessionID":""}"#;
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(stdout),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_mixed_lines() {
+        // Non-JSON lines interspersed (e.g. from stderr bleeding into stdout)
+        let stdout =
+            b"some garbage\n{\"type\":\"start\",\"sessionID\":\"ses_found\"}\nmore garbage";
+        assert_eq!(
+            OpenCodeBackend::extract_session_id_from_output(stdout),
+            Some("ses_found".to_string())
+        );
     }
 }
