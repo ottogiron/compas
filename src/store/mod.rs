@@ -275,6 +275,47 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // Partial UNIQUE index: prevents double-enqueue for the same dispatch
+        // message (race safety when multiple workers scan concurrently).
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_exec_dispatch_msg_unique
+             ON executions(dispatch_message_id) WHERE dispatch_message_id IS NOT NULL",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Backfill migration: link old executions (dispatch_message_id = NULL)
+        // to their originating dispatch/handoff message so
+        // find_untriggered_messages won't re-trigger them.
+        //
+        // Only update the most-recent unlinked execution per (thread, agent)
+        // and only if the target message isn't already claimed by another
+        // execution.  The thread-status filter in find_untriggered_messages
+        // handles any remaining unlinked rows.
+        sqlx::query(
+            "UPDATE executions
+             SET dispatch_message_id = (
+                 SELECT m.id FROM messages m
+                 WHERE m.thread_id = executions.thread_id
+                   AND m.to_alias = executions.agent_alias
+                   AND m.intent IN ('dispatch', 'handoff')
+                   AND NOT EXISTS (
+                       SELECT 1 FROM executions e2
+                       WHERE e2.dispatch_message_id = m.id
+                   )
+                 ORDER BY m.created_at DESC
+                 LIMIT 1
+             )
+             WHERE dispatch_message_id IS NULL
+               AND rowid IN (
+                   SELECT MAX(rowid) FROM executions
+                   WHERE dispatch_message_id IS NULL
+                   GROUP BY thread_id, agent_alias
+               )",
+        )
+        .execute(&self.pool)
+        .await?;
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS worker_heartbeats (
                 worker_id    TEXT PRIMARY KEY,
@@ -525,6 +566,8 @@ impl Store {
     // ── Execution operations ─────────────────────────────────────────────
 
     /// Insert a new queued execution. Returns the execution ID.
+    ///
+    /// Calls without `dispatch_message_id` always insert (no dedup applies).
     pub async fn insert_execution(
         &self,
         thread_id: &str,
@@ -532,18 +575,24 @@ impl Store {
     ) -> Result<String, sqlx::Error> {
         self.insert_execution_with_dispatch(thread_id, agent_alias, None)
             .await
+            .map(|opt| opt.expect("insert without dispatch_message_id should always succeed"))
     }
 
     /// Insert a new queued execution with optional strict dispatch linkage.
+    ///
+    /// Uses `INSERT OR IGNORE` so that duplicate enqueues for the same
+    /// `dispatch_message_id` (guarded by a partial UNIQUE index) silently
+    /// succeed. Returns `Some(id)` on insert, `None` if the message was
+    /// already enqueued.
     pub async fn insert_execution_with_dispatch(
         &self,
         thread_id: &str,
         agent_alias: &str,
         dispatch_message_id: Option<i64>,
-    ) -> Result<String, sqlx::Error> {
+    ) -> Result<Option<String>, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
-        sqlx::query(
-            "INSERT INTO executions (id, thread_id, agent_alias, dispatch_message_id, status)
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO executions (id, thread_id, agent_alias, dispatch_message_id, status)
              VALUES (?, ?, ?, ?, 'queued')",
         )
         .bind(&id)
@@ -552,7 +601,60 @@ impl Store {
         .bind(dispatch_message_id)
         .execute(&self.pool)
         .await?;
-        Ok(id)
+        if result.rows_affected() == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(id))
+        }
+    }
+
+    /// Find messages that should trigger an execution but haven't yet.
+    ///
+    /// A message is "untriggered" when:
+    /// - its `intent` is in `trigger_intents`
+    /// - its `to_alias` is in `worker_aliases`
+    /// - the thread is still `Active` (terminal threads are never re-triggered)
+    /// - no execution row has `dispatch_message_id = message.id`
+    ///
+    /// Returns `(message_id, thread_id, to_alias)` tuples ordered by creation time.
+    pub async fn find_untriggered_messages(
+        &self,
+        trigger_intents: &[String],
+        worker_aliases: &[String],
+    ) -> Result<Vec<(i64, String, String)>, sqlx::Error> {
+        if trigger_intents.is_empty() || worker_aliases.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // Build dynamic IN-clause placeholders.
+        let intent_placeholders: Vec<&str> = trigger_intents.iter().map(|_| "?").collect();
+        let alias_placeholders: Vec<&str> = worker_aliases.iter().map(|_| "?").collect();
+
+        let sql = format!(
+            "SELECT m.id, m.thread_id, m.to_alias
+             FROM messages m
+             JOIN threads t ON t.thread_id = m.thread_id
+             WHERE m.intent IN ({intents})
+               AND m.to_alias IN ({aliases})
+               AND t.status = 'Active'
+               AND NOT EXISTS (
+                   SELECT 1 FROM executions e
+                   WHERE e.dispatch_message_id = m.id
+               )
+             ORDER BY m.created_at ASC",
+            intents = intent_placeholders.join(","),
+            aliases = alias_placeholders.join(","),
+        );
+
+        let mut query = sqlx::query_as::<_, (i64, String, String)>(&sql);
+        for intent in trigger_intents {
+            query = query.bind(intent);
+        }
+        for alias in worker_aliases {
+            query = query.bind(alias);
+        }
+
+        query.fetch_all(&self.pool).await
     }
 
     /// Atomically claim the next queued execution, respecting per-agent concurrency.
@@ -1246,7 +1348,8 @@ mod tests {
         let exec_id = store
             .insert_execution_with_dispatch("t-1", "focused", Some(dispatch_id))
             .await
-            .unwrap();
+            .unwrap()
+            .expect("first insert should succeed");
         let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
         assert_eq!(exec.dispatch_message_id, Some(dispatch_id));
     }

@@ -7,7 +7,6 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::config::types::AgentConfig;
 use crate::store::{Store, ThreadStatus};
 
 #[derive(Debug, Error)]
@@ -58,7 +57,7 @@ pub struct LifecycleService {
 }
 
 impl LifecycleService {
-    pub fn new(store: Store, _agents: &[AgentConfig]) -> Self {
+    pub fn new(store: Store) -> Self {
         Self { store }
     }
 
@@ -180,38 +179,6 @@ mod tests {
     use sqlx::SqlitePool;
 
     use super::*;
-    use crate::config::types::AgentRole;
-
-    fn test_agents() -> Vec<AgentConfig> {
-        vec![
-            AgentConfig {
-                alias: "focused".to_string(),
-                backend: "stub".to_string(),
-                role: AgentRole::Worker,
-                model: None,
-                models: None,
-                preferred_models: None,
-                prompt: None,
-                prompt_file: None,
-                timeout_secs: None,
-                backend_args: None,
-                env: None,
-            },
-            AgentConfig {
-                alias: "operator".to_string(),
-                backend: "stub".to_string(),
-                role: AgentRole::Operator,
-                model: None,
-                models: None,
-                preferred_models: None,
-                prompt: None,
-                prompt_file: None,
-                timeout_secs: None,
-                backend_args: None,
-                env: None,
-            },
-        ]
-    }
 
     async fn test_store() -> Store {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
@@ -224,7 +191,7 @@ mod tests {
     async fn test_service_close_completed_sets_terminal() {
         let store = test_store().await;
         store.ensure_thread("t-1", None).await.unwrap();
-        let svc = LifecycleService::new(store.clone(), &test_agents());
+        let svc = LifecycleService::new(store.clone());
 
         let out = svc
             .close("t-1", "operator", CloseStatus::Completed, Some("done"))
@@ -241,7 +208,7 @@ mod tests {
         let store = test_store().await;
         store.ensure_thread("t-1", None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
-        let svc = LifecycleService::new(store.clone(), &test_agents());
+        let svc = LifecycleService::new(store.clone());
 
         let out = svc.abandon("t-1").await.unwrap();
         assert_eq!(out.status, "Abandoned");
@@ -255,7 +222,7 @@ mod tests {
     async fn test_service_reopen_non_terminal_errors() {
         let store = test_store().await;
         store.ensure_thread("t-1", None).await.unwrap();
-        let svc = LifecycleService::new(store, &test_agents());
+        let svc = LifecycleService::new(store);
 
         let err = svc.reopen("t-1").await.unwrap_err();
         assert!(err
@@ -266,7 +233,7 @@ mod tests {
     #[tokio::test]
     async fn test_service_close_nonexistent_thread_errors() {
         let store = test_store().await;
-        let svc = LifecycleService::new(store, &test_agents());
+        let svc = LifecycleService::new(store);
 
         let err = svc
             .close("missing", "operator", CloseStatus::Failed, None)

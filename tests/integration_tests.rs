@@ -121,7 +121,6 @@ fn test_config() -> OrchestratorConfig {
         ],
         orchestration: OrchestrationConfig::default(),
         database: DatabaseConfig::default(),
-        telegram: None,
     }
 }
 
@@ -586,6 +585,225 @@ mod store_tests {
         let hb = store.latest_heartbeat().await.unwrap().unwrap();
         assert_eq!(hb.3.as_deref(), Some("0.2.0"));
     }
+
+    // ── find_untriggered_messages tests ──────────────────────────────────
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_basic() {
+        let store = test_store().await;
+        let msg_id = store
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+
+        let trigger_intents = vec!["dispatch".to_string(), "handoff".to_string()];
+        let worker_aliases = vec!["focused".to_string(), "spark".to_string()];
+
+        let untriggered = store
+            .find_untriggered_messages(&trigger_intents, &worker_aliases)
+            .await
+            .unwrap();
+
+        assert_eq!(untriggered.len(), 1);
+        assert_eq!(untriggered[0].0, msg_id);
+        assert_eq!(untriggered[0].1, "t-1");
+        assert_eq!(untriggered[0].2, "focused");
+    }
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_skips_already_triggered() {
+        let store = test_store().await;
+        let msg_id = store
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+
+        // Create execution linked to this message — marks it as triggered.
+        store
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .await
+            .unwrap();
+
+        let trigger_intents = vec!["dispatch".to_string()];
+        let worker_aliases = vec!["focused".to_string()];
+
+        let untriggered = store
+            .find_untriggered_messages(&trigger_intents, &worker_aliases)
+            .await
+            .unwrap();
+
+        assert!(untriggered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_skips_non_trigger_intents() {
+        let store = test_store().await;
+        // status-update is not a trigger intent
+        store
+            .insert_message("t-1", "focused", "operator", "status-update", "done", None)
+            .await
+            .unwrap();
+
+        let trigger_intents = vec!["dispatch".to_string(), "handoff".to_string()];
+        let worker_aliases = vec!["focused".to_string()];
+
+        let untriggered = store
+            .find_untriggered_messages(&trigger_intents, &worker_aliases)
+            .await
+            .unwrap();
+
+        assert!(untriggered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_skips_non_worker_aliases() {
+        let store = test_store().await;
+        // Message addressed to "reviewer" who is not in worker_aliases
+        store
+            .insert_message("t-1", "operator", "reviewer", "dispatch", "review", None)
+            .await
+            .unwrap();
+
+        let trigger_intents = vec!["dispatch".to_string()];
+        let worker_aliases = vec!["focused".to_string(), "spark".to_string()];
+
+        let untriggered = store
+            .find_untriggered_messages(&trigger_intents, &worker_aliases)
+            .await
+            .unwrap();
+
+        assert!(untriggered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_empty_inputs() {
+        let store = test_store().await;
+        store
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+
+        // Empty trigger_intents → no results
+        let empty: Vec<String> = vec![];
+        let aliases = vec!["focused".to_string()];
+        let result = store
+            .find_untriggered_messages(&empty, &aliases)
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+
+        // Empty worker_aliases → no results
+        let intents = vec!["dispatch".to_string()];
+        let result = store
+            .find_untriggered_messages(&intents, &empty)
+            .await
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_insert_execution_dedup_on_dispatch_message_id() {
+        let store = test_store().await;
+        let msg_id = store
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+
+        // First insert succeeds
+        let first = store
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .await
+            .unwrap();
+        assert!(first.is_some());
+
+        // Second insert with same dispatch_message_id is silently ignored
+        let second = store
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .await
+            .unwrap();
+        assert!(second.is_none());
+
+        // Verify only one execution exists
+        let execs = store.get_thread_executions("t-1").await.unwrap();
+        assert_eq!(execs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_insert_execution_without_dispatch_id_no_dedup() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // Multiple inserts without dispatch_message_id all succeed (no dedup).
+        let first = store.insert_execution("t-1", "focused").await.unwrap();
+        let second = store.insert_execution("t-1", "focused").await.unwrap();
+        assert_ne!(first, second);
+
+        let execs = store.get_thread_executions("t-1").await.unwrap();
+        assert_eq!(execs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_find_untriggered_messages_skips_terminal_threads() {
+        let store = test_store().await;
+
+        // Insert dispatch messages on threads with different statuses.
+        store
+            .insert_message("t-active", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+        store
+            .insert_message(
+                "t-completed",
+                "operator",
+                "focused",
+                "dispatch",
+                "work",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_message("t-failed", "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+        store
+            .insert_message(
+                "t-abandoned",
+                "operator",
+                "focused",
+                "dispatch",
+                "work",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Move threads to terminal states.
+        store
+            .update_thread_status("t-completed", ThreadStatus::Completed)
+            .await
+            .unwrap();
+        store
+            .update_thread_status("t-failed", ThreadStatus::Failed)
+            .await
+            .unwrap();
+        store
+            .update_thread_status("t-abandoned", ThreadStatus::Abandoned)
+            .await
+            .unwrap();
+
+        let trigger_intents = vec!["dispatch".to_string()];
+        let worker_aliases = vec!["focused".to_string()];
+
+        let untriggered = store
+            .find_untriggered_messages(&trigger_intents, &worker_aliases)
+            .await
+            .unwrap();
+
+        // Only the Active thread's message should be returned.
+        assert_eq!(untriggered.len(), 1);
+        assert_eq!(untriggered[0].1, "t-active");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -688,16 +906,16 @@ mod dispatch_tests {
         assert_eq!(json["thread_id"], "t-dispatch-1");
         let message_id = json["message_id"].as_i64().unwrap();
         assert!(message_id > 0);
-        assert_eq!(json["triggered"], true);
-        let execution_id = json["execution_id"].as_str().unwrap();
 
-        let execution = server
-            .store
-            .get_execution(execution_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(execution.dispatch_message_id, Some(message_id));
+        // Dispatch is now insert-only; no triggered/execution_id in response.
+        assert!(json.get("triggered").is_none());
+        assert!(json.get("execution_id").is_none());
+
+        // Verify the message was stored correctly.
+        let msg = server.store.get_message(message_id).await.unwrap().unwrap();
+        assert_eq!(msg.from_alias, "operator");
+        assert_eq!(msg.to_alias, "focused");
+        assert_eq!(msg.intent, "dispatch");
     }
 
     #[tokio::test]
@@ -754,8 +972,10 @@ mod dispatch_tests {
             .unwrap();
 
         let json = extract_json(&result);
-        assert_eq!(json["triggered"], false);
-        assert!(json["execution_id"].is_null());
+        // Dispatch is insert-only; no triggered/execution_id regardless of intent.
+        assert!(json.get("triggered").is_none());
+        assert!(json.get("execution_id").is_none());
+        assert!(json["message_id"].as_i64().unwrap() > 0);
     }
 
     #[tokio::test]
@@ -797,7 +1017,9 @@ mod dispatch_tests {
             .unwrap();
 
         let json = extract_json(&result);
-        assert_eq!(json["triggered"], true);
+        // Dispatch is insert-only; trigger eligibility is determined by the worker.
+        assert!(json.get("triggered").is_none());
+        assert!(json["message_id"].as_i64().unwrap() > 0);
     }
 
     #[tokio::test]
@@ -932,6 +1154,19 @@ mod lifecycle_tests {
         let server = test_server().await;
         setup_thread(&server, "t-abandon").await;
 
+        // Manually create execution (dispatch is now insert-only).
+        let msg_id = server
+            .store
+            .latest_message_id("t-abandon")
+            .await
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-abandon", "focused", Some(msg_id))
+            .await
+            .unwrap();
+
         let result = server
             .abandon_impl(AbandonParams {
                 thread_id: "t-abandon".to_string(),
@@ -1039,7 +1274,14 @@ mod lifecycle_tests {
             .await
             .unwrap();
         let dispatch_json = extract_json(&dispatch_result);
-        assert_eq!(dispatch_json["triggered"], true);
+        let dispatch_msg_id = dispatch_json["message_id"].as_i64().unwrap();
+
+        // Manually create execution (dispatch is now insert-only).
+        server
+            .store
+            .insert_execution_with_dispatch("t-full-lifecycle", "focused", Some(dispatch_msg_id))
+            .await
+            .unwrap();
 
         // 2. Simulate agent response (insert message as if agent replied)
         server
@@ -1169,6 +1411,30 @@ mod query_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-q-2".to_string()),
             })
+            .await
+            .unwrap();
+
+        // Manually create executions (dispatch is now insert-only).
+        let msg1 = server
+            .store
+            .latest_message_id("t-q-1")
+            .await
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-q-1", "focused", Some(msg1))
+            .await
+            .unwrap();
+        let msg2 = server
+            .store
+            .latest_message_id("t-q-2")
+            .await
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-q-2", "spark", Some(msg2))
             .await
             .unwrap();
     }
@@ -1963,6 +2229,19 @@ mod diagnose_tests {
             .await
             .unwrap();
 
+        // Manually create execution (dispatch is now insert-only).
+        let msg_id = server
+            .store
+            .latest_message_id("t-diag-q")
+            .await
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-diag-q", "focused", Some(msg_id))
+            .await
+            .unwrap();
+
         let result = server
             .diagnose_impl(DiagnoseParams {
                 thread_id: "t-diag-q".to_string(),
@@ -1995,6 +2274,19 @@ mod diagnose_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-diag-hb".to_string()),
             })
+            .await
+            .unwrap();
+
+        // Manually create execution (dispatch is now insert-only).
+        let msg_id = server
+            .store
+            .latest_message_id("t-diag-hb")
+            .await
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-diag-hb", "focused", Some(msg_id))
             .await
             .unwrap();
 

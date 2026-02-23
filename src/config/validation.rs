@@ -125,12 +125,6 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         ));
     }
 
-    // ORCHV3-15: validate max_output_capture_bytes
-    if config.orchestration.max_output_capture_bytes < 1 {
-        return Err(OrchestratorError::Config(
-            "orchestration.max_output_capture_bytes must be >= 1".into(),
-        ));
-    }
     if config.orchestration.stale_active_secs < 60
         || config.orchestration.stale_active_secs > 604_800
     {
@@ -258,7 +252,6 @@ mod tests {
             }],
             orchestration: Default::default(),
             database: Default::default(),
-            telegram: None,
         }
     }
 
@@ -434,14 +427,6 @@ agents:
         assert!(validate_config(&config).is_ok());
         config.poll_interval_secs = 3600;
         assert!(validate_config(&config).is_ok());
-    }
-
-    #[test]
-    fn test_config_validation_max_output_capture_zero() {
-        let mut config = minimal_config();
-        config.orchestration.max_output_capture_bytes = 0;
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("max_output_capture_bytes"));
     }
 
     #[test]

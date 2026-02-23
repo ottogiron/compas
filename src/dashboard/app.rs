@@ -833,8 +833,7 @@ impl App {
             return;
         };
 
-        let cfg = self.config.load();
-        let svc = LifecycleService::new(self.store.clone(), cfg.agents.as_slice());
+        let svc = LifecycleService::new(self.store.clone());
         match action.kind {
             AdminActionKind::Abandon => {
                 let thread_id = action.thread_ids.first().cloned().unwrap_or_default();

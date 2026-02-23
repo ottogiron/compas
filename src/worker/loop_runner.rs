@@ -5,10 +5,11 @@
 //! 2. Writes initial heartbeat
 //!
 //! Main loop:
-//! 1. Polls `executions` table for queued work via `claim_next_execution`
-//! 2. For each claimed execution, spawns a task to run the backend trigger
-//! 3. Writes periodic heartbeats
-//! 4. Inserts reply messages from completed triggers
+//! 1. Scans for untriggered messages and enqueues executions
+//! 2. Polls `executions` table for queued work via `claim_next_execution`
+//! 3. For each claimed execution, spawns a task to run the backend trigger
+//! 4. Writes periodic heartbeats
+//! 5. Inserts reply messages from completed triggers
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,6 +18,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::backend::registry::BackendRegistry;
+use crate::config::types::AgentRole;
 use crate::config::ConfigHandle;
 use crate::store::Store;
 
@@ -101,6 +103,9 @@ impl WorkerRunner {
         // Read live-reloadable config values each poll cycle.
         let config = self.config.load();
         let max_per_agent = config.orchestration.max_triggers_per_agent;
+
+        // Scan for untriggered messages and enqueue executions before claiming.
+        self.scan_and_enqueue_triggers(&config).await;
 
         // Try to claim work. We loop to drain all available queued items.
         loop {
@@ -194,6 +199,64 @@ impl WorkerRunner {
                 Err(e) => {
                     tracing::error!(error = %e, "failed to claim execution");
                     return;
+                }
+            }
+        }
+    }
+
+    /// Scan for messages that should trigger an execution but haven't yet.
+    ///
+    /// For each untriggered message (matching `trigger_intents` and addressed to
+    /// a worker alias), enqueue a new execution linked to that message. The
+    /// partial UNIQUE index on `dispatch_message_id` prevents double-enqueue
+    /// across concurrent workers.
+    async fn scan_and_enqueue_triggers(&self, config: &crate::config::types::OrchestratorConfig) {
+        let trigger_intents = &config.orchestration.trigger_intents;
+        let worker_aliases: Vec<String> = config
+            .agents
+            .iter()
+            .filter(|a| a.role == AgentRole::Worker)
+            .map(|a| a.alias.clone())
+            .collect();
+
+        let untriggered = match self
+            .store
+            .find_untriggered_messages(trigger_intents, &worker_aliases)
+            .await
+        {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to scan untriggered messages");
+                return;
+            }
+        };
+
+        for (message_id, thread_id, agent_alias) in untriggered {
+            match self
+                .store
+                .insert_execution_with_dispatch(&thread_id, &agent_alias, Some(message_id))
+                .await
+            {
+                Ok(Some(exec_id)) => {
+                    tracing::info!(
+                        exec_id = %exec_id,
+                        thread_id = %thread_id,
+                        agent = %agent_alias,
+                        dispatch_message_id = message_id,
+                        "enqueued trigger from untriggered message"
+                    );
+                }
+                Ok(None) => {
+                    // Duplicate — already enqueued by another worker, skip.
+                }
+                Err(e) => {
+                    tracing::error!(
+                        thread_id = %thread_id,
+                        agent = %agent_alias,
+                        dispatch_message_id = message_id,
+                        error = %e,
+                        "failed to enqueue trigger"
+                    );
                 }
             }
         }

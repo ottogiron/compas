@@ -1,18 +1,20 @@
 //! orch_dispatch implementation.
+//!
+//! Dispatch is a pure message-insertion operation. It validates the target
+//! agent alias and inserts the message into the store. Trigger eligibility
+//! (whether the message should spawn an execution) is determined by the
+//! worker poll loop, not here.
 
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
 use super::params::DispatchParams;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
-use crate::config::types::AgentRole;
 
 #[derive(Serialize)]
 struct DispatchResult {
     thread_id: String,
     message_id: i64,
-    execution_id: Option<String>,
-    triggered: bool,
 }
 
 impl OrchestratorMcpServer {
@@ -20,32 +22,29 @@ impl OrchestratorMcpServer {
         &self,
         params: DispatchParams,
     ) -> Result<CallToolResult, rmcp::Error> {
-        // Snapshot live config for this request.
+        // Snapshot live config for alias validation.
         let config = self.config.load();
 
         // Validate target agent exists
-        let target = match config.agents.iter().find(|a| a.alias == params.to) {
-            Some(a) => a,
-            None => {
-                return Ok(err_text(format!(
-                    "unknown agent alias: '{}'. available: {}",
-                    params.to,
-                    config
-                        .agents
-                        .iter()
-                        .map(|a| a.alias.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )));
-            }
-        };
+        if !config.agents.iter().any(|a| a.alias == params.to) {
+            return Ok(err_text(format!(
+                "unknown agent alias: '{}'. available: {}",
+                params.to,
+                config
+                    .agents
+                    .iter()
+                    .map(|a| a.alias.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
 
         // Generate thread_id if not provided
         let thread_id = params
             .thread_id
             .unwrap_or_else(|| ulid::Ulid::new().to_string());
 
-        // Insert message
+        // Insert message — trigger eligibility is determined by the worker.
         let message_id = match self
             .store
             .insert_message(
@@ -62,36 +61,9 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("failed to insert message: {}", e))),
         };
 
-        // Check if we should trigger the agent (worker role + matching intent)
-        let should_trigger = target.role == AgentRole::Worker
-            && config
-                .orchestration
-                .trigger_intents
-                .iter()
-                .any(|i| i == &params.intent);
-
-        let execution_id = if should_trigger {
-            match self
-                .store
-                .insert_execution_with_dispatch(&thread_id, &params.to, Some(message_id))
-                .await
-            {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    tracing::error!(error = %e, "failed to insert execution");
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        let triggered = execution_id.is_some();
         Ok(json_text(&DispatchResult {
             thread_id,
             message_id,
-            execution_id,
-            triggered,
         }))
     }
 }

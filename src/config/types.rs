@@ -23,9 +23,6 @@ pub struct OrchestratorConfig {
     /// SQLite connection pool settings for MCP + worker.
     #[serde(default, alias = "apalis")]
     pub database: DatabaseConfig,
-    /// Telegram notification settings (flattened from NotificationConfig).
-    #[serde(default)]
-    pub telegram: Option<TelegramConfig>,
 }
 
 impl OrchestratorConfig {
@@ -96,25 +93,18 @@ fn default_db_acquire_timeout_ms() -> u64 {
 pub struct OrchestrationConfig {
     #[serde(default = "default_trigger_intents")]
     pub trigger_intents: Vec<String>,
-    #[serde(default = "default_max_output_capture_bytes")]
-    pub max_output_capture_bytes: usize,
     #[serde(
         default = "default_execution_timeout_secs",
         alias = "trigger_timeout_secs",
         alias = "default_timeout_secs"
     )]
     pub execution_timeout_secs: u64,
-    #[serde(default = "default_max_message_body_bytes")]
-    pub max_message_body_bytes: usize,
     /// Maximum number of concurrent agent triggers. Defaults to worker agent count.
     #[serde(default)]
     pub max_concurrent_triggers: Option<usize>,
     /// Maximum concurrent triggers per individual agent. Defaults to 1.
     #[serde(default = "default_max_triggers_per_agent")]
     pub max_triggers_per_agent: usize,
-    /// Maximum trigger execution history records to retain (default 1000).
-    #[serde(default = "default_task_history_retention")]
-    pub task_history_retention: usize,
     /// Timeout in seconds for backend ping liveness probes (default 15).
     #[serde(default = "default_ping_timeout_secs")]
     pub ping_timeout_secs: u64,
@@ -131,12 +121,9 @@ impl Default for OrchestrationConfig {
     fn default() -> Self {
         Self {
             trigger_intents: default_trigger_intents(),
-            max_output_capture_bytes: default_max_output_capture_bytes(),
             execution_timeout_secs: default_execution_timeout_secs(),
-            max_message_body_bytes: default_max_message_body_bytes(),
             max_concurrent_triggers: None,
             max_triggers_per_agent: default_max_triggers_per_agent(),
-            task_history_retention: default_task_history_retention(),
             ping_timeout_secs: default_ping_timeout_secs(),
             log_retention_count: default_log_retention_count(),
             stale_active_secs: default_stale_active_secs(),
@@ -146,10 +133,6 @@ impl Default for OrchestrationConfig {
 
 fn default_trigger_intents() -> Vec<String> {
     vec!["dispatch".to_string(), "handoff".to_string()]
-}
-
-fn default_task_history_retention() -> usize {
-    1000
 }
 
 fn default_max_triggers_per_agent() -> usize {
@@ -166,10 +149,6 @@ fn default_log_retention_count() -> usize {
 
 fn default_stale_active_secs() -> u64 {
     3600
-}
-
-fn default_max_output_capture_bytes() -> usize {
-    32768 // 32KB
 }
 
 fn default_execution_timeout_secs() -> u64 {
@@ -293,15 +272,4 @@ impl AgentConfig {
             vec![]
         }
     }
-}
-
-fn default_max_message_body_bytes() -> usize {
-    1_048_576 // 1MB
-}
-
-/// Telegram notification configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TelegramConfig {
-    pub bot_token: String,
-    pub chat_ids: Vec<String>,
 }

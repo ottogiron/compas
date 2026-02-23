@@ -8,8 +8,7 @@ use crate::lifecycle::LifecycleService;
 
 impl OrchestratorMcpServer {
     fn lifecycle_service(&self) -> LifecycleService {
-        let config = self.config.load();
-        LifecycleService::new(self.store.clone(), config.agents.as_slice())
+        LifecycleService::new(self.store.clone())
     }
 
     // ── orch_close ───────────────────────────────────────────────────────
