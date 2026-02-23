@@ -189,10 +189,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_metrics ─────────────────────────────────────────────────────
 
-    pub async fn metrics_impl(
-        &self,
-        _params: MetricsParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn metrics_impl(&self) -> Result<CallToolResult, rmcp::Error> {
         #[derive(Serialize)]
         struct Metrics {
             thread_counts: Vec<(String, i64)>,

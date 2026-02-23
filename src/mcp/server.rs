@@ -126,11 +126,8 @@ impl OrchestratorMcpServer {
         name = "orch_metrics",
         description = "Get aggregate orchestrator metrics (active/blocked/completed threads, queue depth)."
     )]
-    async fn orch_metrics(
-        &self,
-        #[tool(aggr)] params: MetricsParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        self.metrics_impl(params).await
+    async fn orch_metrics(&self) -> Result<CallToolResult, rmcp::Error> {
+        self.metrics_impl().await
     }
 
     #[tool(

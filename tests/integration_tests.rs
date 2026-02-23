@@ -1601,10 +1601,7 @@ mod query_tests {
         let server = test_server().await;
         setup_data(&server).await;
 
-        let result = server
-            .metrics_impl(MetricsParams { window: None })
-            .await
-            .unwrap();
+        let result = server.metrics_impl().await.unwrap();
 
         assert!(!is_error(&result));
         let json = extract_json(&result);

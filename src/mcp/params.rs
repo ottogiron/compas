@@ -36,12 +36,6 @@ pub struct TranscriptParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct TimelineParams {
-    /// Thread ID for state-machine timeline
-    pub thread_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct CloseParams {
     /// Thread ID to close
     pub thread_id: String,
@@ -64,20 +58,6 @@ pub enum CloseStatus {
 pub struct ReadParams {
     /// Message reference (db:<id> or numeric ID)
     pub reference: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct LogParams {
-    /// Number of recent events to return (default 20)
-    pub n: Option<usize>,
-    /// Filter by thread ID
-    pub thread_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct MetricsParams {
-    /// Time window: "last_1h" or "last_24h" (default)
-    pub window: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -142,20 +122,4 @@ pub struct AbandonParams {
 pub struct ReopenParams {
     /// Thread ID to reopen
     pub thread_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct BindSessionParams {
-    pub session_namespace_id: String,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-pub struct SwapModelParams {
-    /// Agent alias
-    pub alias: String,
-    /// Model ID to activate
-    pub model_id: String,
-    /// If true, inject model into pool even if not already present
-    #[serde(default)]
-    pub force: Option<bool>,
 }

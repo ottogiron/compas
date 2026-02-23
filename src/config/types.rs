@@ -227,6 +227,7 @@ impl<'de> serde::Deserialize<'de> for ModelEntry {
 
 /// Configuration for a single agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub alias: String,
     pub backend: String,

@@ -574,7 +574,7 @@ agents:
     }
 
     #[test]
-    fn test_legacy_agent_model_fields_are_ignored() {
+    fn test_legacy_agent_model_fields_are_rejected() {
         let yaml = r#"
 project_root: /tmp
 state_dir: /tmp/test
@@ -592,12 +592,8 @@ agents:
     models:
       - id: sonnet
 "#;
-        let config = crate::config::load_config_from_str(yaml).unwrap();
-        let global = config.models.as_ref().unwrap();
-        assert_eq!(global.len(), 2);
-        assert_eq!(global[0].backend.as_deref(), Some("claude"));
-        assert_eq!(global[1].backend.as_deref(), Some("opencode"));
-        // Unknown agent fields are ignored by serde; model remains authoritative.
-        assert_eq!(config.agents[0].model.as_deref(), Some("opus"));
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("preferred_models"));
     }
 }
