@@ -33,7 +33,7 @@ fn load_config_from_str_with_base(yaml: &str, base_dir: &Path) -> Result<Orchest
 fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
     let base = absolutize_base(base_dir);
 
-    config.project_root = resolve_path(&base, &config.project_root);
+    config.target_repo_root = resolve_path(&base, &config.target_repo_root);
     config.state_dir = resolve_path(&base, &config.state_dir);
 
     for agent in &mut config.agents {
@@ -89,7 +89,7 @@ mod tests {
     #[test]
     fn test_load_config_from_str() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test-mail
 agents:
   - alias: focused
@@ -105,7 +105,7 @@ agents:
     #[test]
     fn test_load_config_from_str_invalid() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test-mail
 agents: []
 "#;
@@ -116,8 +116,8 @@ agents: []
     #[test]
     fn test_load_config_from_file() {
         let dir = tempfile::tempdir().unwrap();
-        let project_root = dir.path().join("repo");
-        std::fs::create_dir_all(&project_root).unwrap();
+        let target_repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&target_repo_root).unwrap();
         let prompt_file = dir.path().join("prompts").join("focused.txt");
         std::fs::create_dir_all(prompt_file.parent().unwrap()).unwrap();
         std::fs::write(&prompt_file, "You are focused.").unwrap();
@@ -125,7 +125,7 @@ agents: []
         std::fs::write(
             &path,
             r#"
-project_root: ./repo
+target_repo_root: ./repo
 state_dir: ./.aster-orch/state
 agents:
   - alias: focused
@@ -136,7 +136,7 @@ agents:
         .unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(config.agents.len(), 1);
-        assert_eq!(config.project_root, project_root);
+        assert_eq!(config.target_repo_root, target_repo_root);
         assert_eq!(
             config.state_dir,
             dir.path().join(".aster-orch").join("state")

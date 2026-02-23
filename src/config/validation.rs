@@ -9,21 +9,21 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "at least one agent must be configured".into(),
         ));
     }
-    if config.project_root.as_os_str().is_empty() {
+    if config.target_repo_root.as_os_str().is_empty() {
         return Err(OrchestratorError::Config(
-            "project_root must not be empty".into(),
+            "target_repo_root must not be empty".into(),
         ));
     }
-    if !config.project_root.exists() {
+    if !config.target_repo_root.exists() {
         return Err(OrchestratorError::Config(format!(
-            "project_root does not exist: {}",
-            config.project_root.display()
+            "target_repo_root does not exist: {}",
+            config.target_repo_root.display()
         )));
     }
-    if !config.project_root.is_dir() {
+    if !config.target_repo_root.is_dir() {
         return Err(OrchestratorError::Config(format!(
-            "project_root must be a directory: {}",
-            config.project_root.display()
+            "target_repo_root must be a directory: {}",
+            config.target_repo_root.display()
         )));
     }
 
@@ -191,7 +191,7 @@ mod tests {
 
     fn minimal_config() -> OrchestratorConfig {
         OrchestratorConfig {
-            project_root: PathBuf::from("/tmp"),
+            target_repo_root: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/test-mail"),
             poll_interval_secs: 5,
             models: None,
@@ -237,19 +237,21 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_missing_project_root() {
+    fn test_config_validation_missing_target_repo_root() {
         let mut config = minimal_config();
-        config.project_root = PathBuf::new();
+        config.target_repo_root = PathBuf::new();
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("project_root must not be empty"));
+        assert!(err
+            .to_string()
+            .contains("target_repo_root must not be empty"));
     }
 
     #[test]
-    fn test_config_validation_nonexistent_project_root() {
+    fn test_config_validation_nonexistent_target_repo_root() {
         let mut config = minimal_config();
-        config.project_root = PathBuf::from("/definitely/nonexistent/project-root");
+        config.target_repo_root = PathBuf::from("/definitely/nonexistent/project-root");
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("project_root does not exist"));
+        assert!(err.to_string().contains("target_repo_root does not exist"));
     }
 
     #[test]
@@ -298,7 +300,7 @@ mod tests {
     #[test]
     fn test_config_yaml_deserialization() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 10
 agents:
@@ -349,7 +351,7 @@ agents:
     #[test]
     fn test_config_yaml_with_new_fields() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 5
 agents:
@@ -553,7 +555,7 @@ agents:
     #[test]
     fn test_global_models_catalog_roundtrip() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test
 models:
   - id: opus
@@ -579,7 +581,7 @@ agents:
     #[test]
     fn test_legacy_agent_model_fields_are_rejected() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test
 models:
   - id: opus
@@ -603,7 +605,7 @@ agents:
     #[test]
     fn test_legacy_db_path_field_is_rejected() {
         let yaml = r#"
-project_root: /tmp
+target_repo_root: /tmp
 state_dir: /tmp/test
 db_path: /tmp/custom.sqlite
 agents:
@@ -613,5 +615,19 @@ agents:
         let err = crate::config::load_config_from_str(yaml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
         assert!(err.to_string().contains("db_path"));
+    }
+
+    #[test]
+    fn test_legacy_project_root_field_is_rejected() {
+        let yaml = r#"
+project_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: claude
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("project_root"));
     }
 }

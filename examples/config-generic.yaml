@@ -1,4 +1,4 @@
-project_root: /path/to/your-repo
+target_repo_root: /path/to/your-repo
 state_dir: ~/.aster/orch
 poll_interval_secs: 1
 

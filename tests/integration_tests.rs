@@ -86,7 +86,7 @@ impl Backend for StubBackend {
 /// Create a minimal valid `OrchestratorConfig` with two worker agents.
 fn test_config() -> OrchestratorConfig {
     OrchestratorConfig {
-        project_root: PathBuf::from("/tmp"),
+        target_repo_root: PathBuf::from("/tmp"),
         state_dir: PathBuf::from("/tmp/aster-orch-test"),
         poll_interval_secs: 1,
         models: None,

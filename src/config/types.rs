@@ -6,8 +6,8 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
-    /// Root directory of the target project where agent backends execute.
-    pub project_root: PathBuf,
+    /// Root directory of the target repository where agent backends execute.
+    pub target_repo_root: PathBuf,
     /// Orchestrator-owned runtime directory (SQLite DB, logs, and state).
     pub state_dir: PathBuf,
     #[serde(default = "default_poll_interval_secs")]

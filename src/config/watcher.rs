@@ -152,11 +152,11 @@ pub fn start_watching(
 /// These fields are consumed at startup (DB pool, backend workdir, semaphore)
 /// and require a process restart to take effect.
 fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig) {
-    if old.project_root != new.project_root {
+    if old.target_repo_root != new.target_repo_root {
         tracing::warn!(
-            old = %old.project_root.display(),
-            new = %new.project_root.display(),
-            "project_root changed — requires restart to take effect"
+            old = %old.target_repo_root.display(),
+            new = %new.target_repo_root.display(),
+            "target_repo_root changed — requires restart to take effect"
         );
     }
     if old.state_dir != new.state_dir {
@@ -185,17 +185,17 @@ fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig)
 mod tests {
     use super::*;
 
-    fn minimal_config(project_root: &Path) -> OrchestratorConfig {
+    fn minimal_config(target_repo_root: &Path) -> OrchestratorConfig {
         use crate::config::load_config_from_str;
         load_config_from_str(&format!(
             r#"
-project_root: {}
+target_repo_root: {}
 state_dir: /tmp/aster-test-state
 agents:
   - alias: test-agent
     backend: stub
 "#,
-            project_root.display()
+            target_repo_root.display()
         ))
         .unwrap()
     }
@@ -255,20 +255,20 @@ agents:
     #[test]
     fn test_start_watching_with_valid_config() {
         let dir = tempfile::tempdir().unwrap();
-        let project_root = dir.path().join("repo");
-        std::fs::create_dir_all(&project_root).unwrap();
+        let target_repo_root = dir.path().join("repo");
+        std::fs::create_dir_all(&target_repo_root).unwrap();
         let config_path = dir.path().join("config.yaml");
         std::fs::write(
             &config_path,
             format!(
                 r#"
-project_root: {}
+target_repo_root: {}
 state_dir: /tmp/aster-watcher-test
 agents:
   - alias: watched
     backend: stub
 "#,
-                project_root.display()
+                target_repo_root.display()
             ),
         )
         .unwrap();

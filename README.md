@@ -5,7 +5,7 @@ agents (Claude, Codex, Gemini, OpenCode) through an MCP server interface with a
 custom poll-loop background worker for trigger execution.
 
 `aster-orch` is project-agnostic: Aster uses it, but it can orchestrate agents
-for any repository by pointing `project_root` at that repo.
+for any repository by pointing `target_repo_root` at that repo.
 
 Replaces the deprecated `aster-orchestrator` crate.
 
@@ -64,7 +64,7 @@ concurrent read/write without SQLITE_BUSY errors.
 
 `aster-orch` uses two distinct filesystem roots:
 
-- `project_root`: the target repository where backend CLIs run commands/tasks.
+- `target_repo_root`: the target repository where backend CLIs run commands/tasks.
 - `state_dir`: orchestrator-owned runtime state (DB/logs/heartbeats).
 
 This separation allows one shared orchestrator binary/config model to work
@@ -212,7 +212,7 @@ Config file: `.aster-orch/config.yaml`
 Generic template: `crates/aster-orch/examples/config-generic.yaml`
 
 ```yaml
-project_root: /path/to/target-repo
+target_repo_root: /path/to/target-repo
 state_dir: ~/.aster/orch
 poll_interval_secs: 1
 orchestration:
@@ -249,7 +249,7 @@ Path resolution rules:
 - absolute paths are used as-is
 - `~/...` expands to `$HOME/...`
 - relative paths resolve against the directory containing the config file
-  (`project_root`, `state_dir`, and agent `prompt_file`)
+  (`target_repo_root`, `state_dir`, and agent `prompt_file`)
 
 ### Agent Roles
 
@@ -261,7 +261,7 @@ Path resolution rules:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `project_root` | *(required)* | Target repository root where all backend CLIs execute |
+| `target_repo_root` | *(required)* | Target repository root where all backend CLIs execute |
 | `state_dir` | *(required)* | Orchestrator runtime directory (logs/state files) |
 | `poll_interval_secs` | 1 | Worker poll interval for queued executions |
 | `models` | *(optional)* | Informational model catalog (metadata only) |

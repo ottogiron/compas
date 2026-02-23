@@ -182,7 +182,7 @@ fn build_backend_registry(
 ) -> BackendRegistry {
     let mut registry = BackendRegistry::new();
 
-    let workdir = Some(config.project_root.clone());
+    let workdir = Some(config.target_repo_root.clone());
 
     // Register all known backends
     registry.register(
@@ -193,13 +193,13 @@ fn build_backend_registry(
     registry.register(
         "opencode",
         Arc::new(OpenCodeBackend::with_workdir(Some(
-            config.project_root.clone(),
+            config.target_repo_root.clone(),
         ))),
     );
     registry.register(
         "gemini",
         Arc::new(GeminiBackend::with_workdir(Some(
-            config.project_root.clone(),
+            config.target_repo_root.clone(),
         ))),
     );
 
