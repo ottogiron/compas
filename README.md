@@ -243,6 +243,8 @@ agents:
     prompt: "You are focused on docs and release quality."
 ```
 
+`models` is optional and informational. Runtime selection uses `agents[].model`.
+
 Path resolution rules:
 
 - absolute paths are used as-is
@@ -263,6 +265,7 @@ Path resolution rules:
 | `project_root` | *(required)* | Target repository root where all backend CLIs execute |
 | `state_dir` | *(required)* | Orchestrator runtime directory (logs/state files) |
 | `poll_interval_secs` | 1 | Worker poll interval for queued executions |
+| `models` | *(optional)* | Informational model catalog (metadata only) |
 | `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
 | `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
 | `orchestration.execution_timeout_secs` | 30 | Per-trigger timeout |

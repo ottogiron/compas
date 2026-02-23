@@ -77,40 +77,6 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 )));
             }
         }
-        // ORCH-MODELS-1: validate model pool
-        if agent.model.is_some() && agent.models.is_some() {
-            tracing::warn!(
-                "agent '{}': both model and models set; models takes precedence",
-                agent.alias
-            );
-        }
-        if let Some(ref models) = agent.models {
-            if models.is_empty() {
-                return Err(OrchestratorError::Config(format!(
-                    "agent '{}' models list must not be empty when set",
-                    agent.alias
-                )));
-            }
-        }
-        // ORCH-MODELS-2b: validate preferred_models against global registry
-        if let Some(ref preferred) = agent.preferred_models {
-            if preferred.is_empty() {
-                return Err(OrchestratorError::Config(format!(
-                    "agent '{}' preferred_models list must not be empty when set",
-                    agent.alias
-                )));
-            }
-            if let Some(ref global) = config.models {
-                for model_id in preferred {
-                    if !global.iter().any(|m| m.id == *model_id) {
-                        return Err(OrchestratorError::Config(format!(
-                            "agent '{}' preferred_models references unknown model '{}'",
-                            agent.alias, model_id
-                        )));
-                    }
-                }
-            }
-        }
     }
 
     // ORCHV3-15: validate poll_interval bounds
@@ -241,8 +207,6 @@ mod tests {
                 backend: "stub".into(),
 
                 model: None,
-                models: None,
-                preferred_models: None,
                 prompt: None,
                 prompt_file: None,
                 timeout_secs: None,
@@ -309,8 +273,6 @@ mod tests {
             backend: "stub".into(),
             role: AgentRole::Worker,
             model: None,
-            models: None,
-            preferred_models: None,
             prompt: None,
             prompt_file: None,
             timeout_secs: None,
@@ -489,8 +451,6 @@ agents:
             backend: "stub".into(),
             role: AgentRole::Worker,
             model: None,
-            models: None,
-            preferred_models: None,
             prompt: None,
             prompt_file: None,
             timeout_secs: None,
@@ -506,8 +466,6 @@ agents:
             backend: "stub".into(),
             role: AgentRole::Operator,
             model: None,
-            models: None,
-            preferred_models: None,
             prompt: None,
             prompt_file: None,
             timeout_secs: None,
@@ -531,79 +489,10 @@ agents:
     }
 
     #[test]
-    fn test_model_pool_from_model_only() {
-        use crate::config::types::ModelEntry;
+    fn test_agent_model_field_is_allowed() {
         let mut config = minimal_config();
         config.agents[0].model = Some("claude-opus-4-6".into());
-        config.agents[0].models = None;
-        let pool = config.agents[0].model_pool(&[]);
-        assert_eq!(
-            pool,
-            vec![ModelEntry {
-                id: "claude-opus-4-6".into(),
-                backend: None,
-                description: None,
-                timeout_secs: None
-            }]
-        );
-    }
-
-    #[test]
-    fn test_model_pool_from_models_only() {
-        use crate::config::types::ModelEntry;
-        let mut config = minimal_config();
-        config.agents[0].model = None;
-        config.agents[0].models = Some(vec![
-            ModelEntry {
-                id: "opus".into(),
-                backend: None,
-                description: Some("fast".into()),
-                timeout_secs: None,
-            },
-            ModelEntry {
-                id: "sonnet".into(),
-                backend: None,
-                description: None,
-                timeout_secs: None,
-            },
-        ]);
-        let pool = config.agents[0].model_pool(&[]);
-        assert_eq!(pool.len(), 2);
-        assert_eq!(pool[0].id, "opus");
-        assert_eq!(pool[0].description.as_deref(), Some("fast"));
-        assert_eq!(pool[1].id, "sonnet");
-    }
-
-    #[test]
-    fn test_model_pool_models_takes_precedence() {
-        use crate::config::types::ModelEntry;
-        let mut config = minimal_config();
-        config.agents[0].model = Some("old-model".into());
-        config.agents[0].models = Some(vec![ModelEntry {
-            id: "new-model".into(),
-            backend: None,
-            description: None,
-            timeout_secs: None,
-        }]);
-        let pool = config.agents[0].model_pool(&[]);
-        assert_eq!(pool.len(), 1);
-        assert_eq!(pool[0].id, "new-model");
-    }
-
-    #[test]
-    fn test_model_pool_empty_when_neither_set() {
-        let mut config = minimal_config();
-        config.agents[0].model = None;
-        config.agents[0].models = None;
-        assert!(config.agents[0].model_pool(&[]).is_empty());
-    }
-
-    #[test]
-    fn test_config_validation_empty_models_rejected() {
-        let mut config = minimal_config();
-        config.agents[0].models = Some(vec![]);
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("models list must not be empty"));
+        assert!(validate_config(&config).is_ok());
     }
 
     #[test]
@@ -659,107 +548,7 @@ agents:
     }
 
     #[test]
-    fn test_model_pool_from_preferred_models() {
-        use crate::config::types::ModelEntry;
-        let mut config = minimal_config();
-        config.models = Some(vec![
-            ModelEntry {
-                id: "opus".into(),
-                backend: Some("claude".into()),
-                description: None,
-                timeout_secs: None,
-            },
-            ModelEntry {
-                id: "sonnet".into(),
-                backend: Some("claude".into()),
-                description: None,
-                timeout_secs: None,
-            },
-            ModelEntry {
-                id: "glm-5".into(),
-                backend: Some("opencode".into()),
-                description: None,
-                timeout_secs: None,
-            },
-        ]);
-        config.agents[0].preferred_models = Some(vec!["opus".into(), "glm-5".into()]);
-        let global = config.models.as_deref().unwrap();
-        let pool = config.agents[0].model_pool(global);
-        assert_eq!(pool.len(), 2);
-        assert_eq!(pool[0].id, "opus");
-        assert_eq!(pool[0].backend.as_deref(), Some("claude"));
-        assert_eq!(pool[1].id, "glm-5");
-        assert_eq!(pool[1].backend.as_deref(), Some("opencode"));
-    }
-
-    #[test]
-    fn test_preferred_models_unknown_id_rejected() {
-        use crate::config::types::ModelEntry;
-        let mut config = minimal_config();
-        config.models = Some(vec![ModelEntry {
-            id: "opus".into(),
-            backend: Some("claude".into()),
-            description: None,
-            timeout_secs: None,
-        }]);
-        config.agents[0].preferred_models = Some(vec!["nonexistent".into()]);
-        let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("unknown model 'nonexistent'"));
-    }
-
-    #[test]
-    fn test_preferred_models_empty_rejected() {
-        let mut config = minimal_config();
-        config.agents[0].preferred_models = Some(vec![]);
-        let err = validate_config(&config).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("preferred_models list must not be empty"));
-    }
-
-    #[test]
-    fn test_normalization_legacy_models_to_global() {
-        let yaml = r#"
-project_root: /tmp
-state_dir: /tmp/test
-agents:
-  - alias: a1
-    backend: claude
-    models:
-      - id: opus
-        description: "Best"
-      - id: sonnet
-"#;
-        let config = crate::config::load_config_from_str(yaml).unwrap();
-        // Global registry should be synthesized
-        let global = config.models.unwrap();
-        assert_eq!(global.len(), 2);
-        assert_eq!(global[0].id, "opus");
-        assert_eq!(global[0].backend.as_deref(), Some("claude"));
-        assert_eq!(global[1].id, "sonnet");
-        assert_eq!(global[1].backend.as_deref(), Some("claude"));
-        // preferred_models should be populated
-        let preferred = config.agents[0].preferred_models.as_ref().unwrap();
-        assert_eq!(preferred, &vec!["opus".to_string(), "sonnet".to_string()]);
-    }
-
-    #[test]
-    fn test_normalization_model_only_to_preferred() {
-        let yaml = r#"
-project_root: /tmp
-state_dir: /tmp/test
-agents:
-  - alias: a1
-    backend: claude
-    model: opus
-"#;
-        let config = crate::config::load_config_from_str(yaml).unwrap();
-        let preferred = config.agents[0].preferred_models.as_ref().unwrap();
-        assert_eq!(preferred, &vec!["opus".to_string()]);
-    }
-
-    #[test]
-    fn test_global_models_config_roundtrip() {
+    fn test_global_models_catalog_roundtrip() {
         let yaml = r#"
 project_root: /tmp
 state_dir: /tmp/test
@@ -772,20 +561,43 @@ models:
 agents:
   - alias: a1
     backend: claude
-    preferred_models:
-      - opus
-      - glm-5
+    model: opus
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let global = config.models.unwrap();
+        assert_eq!(global.len(), 2);
+        assert_eq!(global[0].id, "opus");
+        assert_eq!(global[0].backend.as_deref(), Some("claude"));
+        assert_eq!(global[1].id, "glm-5");
+        assert_eq!(global[1].backend.as_deref(), Some("opencode"));
+        assert_eq!(config.agents[0].model.as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn test_legacy_agent_model_fields_are_ignored() {
+        let yaml = r#"
+project_root: /tmp
+state_dir: /tmp/test
+models:
+  - id: opus
+    backend: claude
+    description: "Deep reasoning"
+  - id: glm-5
+    backend: opencode
+agents:
+  - alias: a1
+    backend: claude
+    model: opus
+    preferred_models: [opus, glm-5]
+    models:
+      - id: sonnet
 "#;
         let config = crate::config::load_config_from_str(yaml).unwrap();
         let global = config.models.as_ref().unwrap();
         assert_eq!(global.len(), 2);
         assert_eq!(global[0].backend.as_deref(), Some("claude"));
         assert_eq!(global[1].backend.as_deref(), Some("opencode"));
-        let pool = config.agents[0].model_pool(global);
-        assert_eq!(pool.len(), 2);
-        assert_eq!(pool[0].id, "opus");
-        assert_eq!(pool[0].backend.as_deref(), Some("claude"));
-        assert_eq!(pool[1].id, "glm-5");
-        assert_eq!(pool[1].backend.as_deref(), Some("opencode"));
+        // Unknown agent fields are ignored by serde; model remains authoritative.
+        assert_eq!(config.agents[0].model.as_deref(), Some("opus"));
     }
 }

@@ -14,7 +14,10 @@ pub struct OrchestratorConfig {
     pub db_path: PathBuf,
     #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
-    /// Global model registry. Each model declares its backend and description.
+    /// Optional model catalog for operator reference.
+    ///
+    /// This registry is informational only. Runtime model selection uses each
+    /// agent's `model` field directly.
     #[serde(default)]
     pub models: Option<Vec<ModelEntry>>,
     pub agents: Vec<AgentConfig>,
@@ -171,7 +174,8 @@ impl Default for AgentRole {
     }
 }
 
-/// A model entry in the model pool. Accepts either a plain string or an object with description/backend.
+/// A model entry in the optional model catalog.
+/// Accepts either a plain string or an object with backend/description metadata.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ModelEntry {
     pub id: String,
@@ -230,13 +234,6 @@ pub struct AgentConfig {
     pub role: AgentRole,
     #[serde(default)]
     pub model: Option<String>,
-    /// Model pool: first is primary, rest are fallbacks. Accepts plain strings or objects.
-    /// Legacy: use `preferred_models` with a global `models` registry instead.
-    #[serde(default)]
-    pub models: Option<Vec<ModelEntry>>,
-    /// Preferred model IDs referencing the global `models` registry.
-    #[serde(default)]
-    pub preferred_models: Option<Vec<String>>,
     #[serde(default)]
     pub prompt: Option<String>,
     #[serde(default)]
@@ -248,28 +245,4 @@ pub struct AgentConfig {
     pub backend_args: Option<Vec<String>>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
-}
-
-impl AgentConfig {
-    /// Effective model pool resolved against the global model registry.
-    /// Priority: `preferred_models` (global lookup) > `models` (legacy) > `model` (single).
-    pub fn model_pool(&self, global_models: &[ModelEntry]) -> Vec<ModelEntry> {
-        if let Some(ref preferred) = self.preferred_models {
-            preferred
-                .iter()
-                .filter_map(|id| global_models.iter().find(|m| m.id == *id).cloned())
-                .collect()
-        } else if let Some(ref models) = self.models {
-            models.clone()
-        } else if let Some(ref model) = self.model {
-            vec![ModelEntry {
-                id: model.clone(),
-                backend: None,
-                description: None,
-                timeout_secs: None,
-            }]
-        } else {
-            vec![]
-        }
-    }
 }

@@ -25,56 +25,9 @@ pub fn load_config_from_str(yaml: &str) -> Result<OrchestratorConfig> {
 /// Load config from YAML and resolve relative paths against a base directory.
 fn load_config_from_str_with_base(yaml: &str, base_dir: &Path) -> Result<OrchestratorConfig> {
     let mut config: OrchestratorConfig = serde_yaml::from_str(yaml)?;
-    normalize_config(&mut config);
     resolve_paths(&mut config, base_dir);
     validation::validate_config(&config)?;
     Ok(config)
-}
-
-/// Normalize legacy per-agent model lists into the global model registry.
-///
-/// Backward compatibility: if agents use `models:` (per-agent) without a global
-/// `models:` section, synthesize global entries. If agents lack `preferred_models:`,
-/// populate from their `models:` or `model:` fields.
-fn normalize_config(config: &mut OrchestratorConfig) {
-    use types::ModelEntry;
-
-    // Phase 1: Synthesize global registry from per-agent models if needed.
-    if config.models.is_none() {
-        let mut global = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for agent in &config.agents {
-            if let Some(ref models) = agent.models {
-                for entry in models {
-                    if seen.insert(entry.id.clone()) {
-                        global.push(ModelEntry {
-                            id: entry.id.clone(),
-                            backend: entry
-                                .backend
-                                .clone()
-                                .or_else(|| Some(agent.backend.clone())),
-                            description: entry.description.clone(),
-                            timeout_secs: entry.timeout_secs,
-                        });
-                    }
-                }
-            }
-        }
-        if !global.is_empty() {
-            config.models = Some(global);
-        }
-    }
-
-    // Phase 2: Populate preferred_models from legacy fields.
-    for agent in &mut config.agents {
-        if agent.preferred_models.is_none() {
-            if let Some(ref models) = agent.models {
-                agent.preferred_models = Some(models.iter().map(|e| e.id.clone()).collect());
-            } else if let Some(ref model) = agent.model {
-                agent.preferred_models = Some(vec![model.clone()]);
-            }
-        }
-    }
 }
 
 fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
