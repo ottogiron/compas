@@ -152,13 +152,6 @@ pub fn start_watching(
 /// These fields are consumed at startup (DB pool, backend workdir, semaphore)
 /// and require a process restart to take effect.
 fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig) {
-    if old.db_path != new.db_path {
-        tracing::warn!(
-            old = %old.db_path.display(),
-            new = %new.db_path.display(),
-            "db_path changed — requires restart to take effect"
-        );
-    }
     if old.project_root != new.project_root {
         tracing::warn!(
             old = %old.project_root.display(),
@@ -198,7 +191,6 @@ mod tests {
             r#"
 project_root: {}
 state_dir: /tmp/aster-test-state
-db_path: /tmp/aster-test.sqlite
 agents:
   - alias: test-agent
     backend: stub
@@ -261,16 +253,6 @@ agents:
     }
 
     #[test]
-    fn test_warn_restart_only_changes_detects_db_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let old = minimal_config(dir.path());
-        let mut new = old.clone();
-        new.db_path = PathBuf::from("/tmp/different.sqlite");
-        // Should not panic; just logs
-        warn_restart_only_changes(&old, &new);
-    }
-
-    #[test]
     fn test_start_watching_with_valid_config() {
         let dir = tempfile::tempdir().unwrap();
         let project_root = dir.path().join("repo");
@@ -282,7 +264,6 @@ agents:
                 r#"
 project_root: {}
 state_dir: /tmp/aster-watcher-test
-db_path: /tmp/aster-watcher-test.sqlite
 agents:
   - alias: watched
     backend: stub

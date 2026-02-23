@@ -154,7 +154,7 @@ fn init_tracing_stderr() {
 }
 
 async fn connect_db(
-    db_path: &PathBuf,
+    db_path: &std::path::Path,
     config: &aster_orch::config::types::OrchestratorConfig,
 ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
@@ -170,7 +170,7 @@ async fn connect_db(
 }
 
 fn resolve_db_path(config: &aster_orch::config::types::OrchestratorConfig) -> PathBuf {
-    config.db_path.clone()
+    config.db_path()
 }
 
 fn resolve_config_path(config_path: &PathBuf) -> PathBuf {

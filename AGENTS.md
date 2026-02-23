@@ -25,7 +25,7 @@ Primary local modules:
 - Two-process model is required:
   - MCP server process (`mcp-server`)
   - worker process (`worker`)
-- Both processes use the same SQLite database configured via `db_path`.
+- Both processes use the same SQLite database at `{state_dir}/jobs.sqlite`.
 - WAL mode and safe concurrent read/write behavior must be preserved.
 - Thread, message, and execution lifecycle consistency is required for all MCP workflows.
 
@@ -72,7 +72,7 @@ When orchestrator behavior changes, update impacted docs in the same change set:
   - `orch_health`
 - Stale state reset procedure:
   - stop worker/MCP processes
-  - remove configured SQLite DB files (`~/.aster/orch/jobs.sqlite*` in this repo config)
+  - remove SQLite DB files under state dir (`<state_dir>/jobs.sqlite*`)
   - restart worker and MCP server
 
 ## Design Bias

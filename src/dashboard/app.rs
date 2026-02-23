@@ -1388,7 +1388,7 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::raw("  "),
             label("DB:           "),
-            value(cfg.db_path.display().to_string()),
+            value(cfg.db_path().display().to_string()),
         ]),
         Line::from(vec![
             Span::raw("  "),

@@ -24,7 +24,7 @@ impl OrchestratorMcpServer {
             server: "aster-orch".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             agent_count: config.agents.len(),
-            db_path: config.db_path.display().to_string(),
+            db_path: config.db_path().display().to_string(),
         }))
     }
 

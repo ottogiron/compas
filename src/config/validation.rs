@@ -85,11 +85,6 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "poll_interval_secs must be 1..3600".into(),
         ));
     }
-    if config.db_path.as_os_str().is_empty() {
-        return Err(OrchestratorError::Config(
-            "db_path must not be empty".into(),
-        ));
-    }
 
     if config.orchestration.stale_active_secs < 60
         || config.orchestration.stale_active_secs > 604_800
@@ -198,7 +193,6 @@ mod tests {
         OrchestratorConfig {
             project_root: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/test-mail"),
-            db_path: PathBuf::from(".aster-orch/jobs.sqlite"),
             poll_interval_secs: 5,
             models: None,
             agents: vec![AgentConfig {
@@ -217,6 +211,15 @@ mod tests {
             orchestration: Default::default(),
             database: Default::default(),
         }
+    }
+
+    #[test]
+    fn test_db_path_is_derived_from_state_dir() {
+        let config = minimal_config();
+        assert_eq!(
+            config.db_path(),
+            PathBuf::from("/tmp/test-mail").join("jobs.sqlite")
+        );
     }
 
     #[test]
@@ -595,5 +598,20 @@ agents:
         let err = crate::config::load_config_from_str(yaml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
         assert!(err.to_string().contains("preferred_models"));
+    }
+
+    #[test]
+    fn test_legacy_db_path_field_is_rejected() {
+        let yaml = r#"
+project_root: /tmp
+state_dir: /tmp/test
+db_path: /tmp/custom.sqlite
+agents:
+  - alias: a1
+    backend: claude
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+        assert!(err.to_string().contains("db_path"));
     }
 }

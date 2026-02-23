@@ -49,7 +49,7 @@ Operator (MCP client)
 ```
 
 **Two-process model.** The MCP server and worker are separate processes sharing
-the same SQLite database (resolved from `db_path` in config). WAL mode enables
+the same SQLite database (`{state_dir}/jobs.sqlite`). WAL mode enables
 concurrent read/write without SQLITE_BUSY errors.
 
 - **MCP server** — started by the MCP client (Claude Code, opencode, etc.) via
@@ -214,7 +214,6 @@ Generic template: `crates/aster-orch/examples/config-generic.yaml`
 ```yaml
 project_root: /path/to/target-repo
 state_dir: ~/.aster/orch
-db_path: ~/.aster/orch/jobs.sqlite
 poll_interval_secs: 1
 orchestration:
   trigger_intents: [dispatch, handoff]
@@ -250,7 +249,7 @@ Path resolution rules:
 - absolute paths are used as-is
 - `~/...` expands to `$HOME/...`
 - relative paths resolve against the directory containing the config file
-  (`project_root`, `state_dir`, `db_path`, and agent `prompt_file`)
+  (`project_root`, `state_dir`, and agent `prompt_file`)
 
 ### Agent Roles
 

@@ -88,7 +88,6 @@ fn test_config() -> OrchestratorConfig {
     OrchestratorConfig {
         project_root: PathBuf::from("/tmp"),
         state_dir: PathBuf::from("/tmp/aster-orch-test"),
-        db_path: PathBuf::from(":memory:"),
         poll_interval_secs: 1,
         models: None,
         agents: vec![

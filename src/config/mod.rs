@@ -35,7 +35,6 @@ fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
 
     config.project_root = resolve_path(&base, &config.project_root);
     config.state_dir = resolve_path(&base, &config.state_dir);
-    config.db_path = resolve_path(&base, &config.db_path);
 
     for agent in &mut config.agents {
         if let Some(ref prompt_file) = agent.prompt_file {
@@ -92,7 +91,6 @@ mod tests {
         let yaml = r#"
 project_root: /tmp
 state_dir: /tmp/test-mail
-db_path: ~/.aster/orch/jobs.sqlite
 agents:
   - alias: focused
     backend: stub
@@ -109,7 +107,6 @@ agents:
         let yaml = r#"
 project_root: /tmp
 state_dir: /tmp/test-mail
-db_path: ~/.aster/orch/jobs.sqlite
 agents: []
 "#;
         let err = load_config_from_str(yaml).unwrap_err();
@@ -130,7 +127,6 @@ agents: []
             r#"
 project_root: ./repo
 state_dir: ./.aster-orch/state
-db_path: ./.aster-orch/jobs.sqlite
 agents:
   - alias: focused
     backend: stub
@@ -146,8 +142,11 @@ agents:
             dir.path().join(".aster-orch").join("state")
         );
         assert_eq!(
-            config.db_path,
-            dir.path().join(".aster-orch").join("jobs.sqlite")
+            config.db_path(),
+            dir.path()
+                .join(".aster-orch")
+                .join("state")
+                .join("jobs.sqlite")
         );
         assert_eq!(
             config.agents[0].prompt_file.as_deref(),

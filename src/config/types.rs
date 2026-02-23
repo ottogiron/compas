@@ -4,14 +4,12 @@ use std::path::PathBuf;
 
 /// Top-level orchestrator configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
     /// Root directory of the target project where agent backends execute.
     pub project_root: PathBuf,
     /// Orchestrator-owned runtime directory (SQLite DB, logs, and state).
     pub state_dir: PathBuf,
-    /// SQLite database file used by MCP + worker.
-    #[serde(default = "default_db_path")]
-    pub db_path: PathBuf,
     #[serde(default = "default_poll_interval_secs")]
     pub poll_interval_secs: u64,
     /// Optional model catalog for operator reference.
@@ -29,6 +27,14 @@ pub struct OrchestratorConfig {
 }
 
 impl OrchestratorConfig {
+    /// SQLite database file used by MCP + worker.
+    ///
+    /// This path is derived from `state_dir` and is always
+    /// `{state_dir}/jobs.sqlite`.
+    pub fn db_path(&self) -> PathBuf {
+        self.state_dir.join("jobs.sqlite")
+    }
+
     /// Resolved concurrency limit: explicit config or worker agent count (min 1).
     pub fn effective_max_concurrent_triggers(&self) -> usize {
         self.orchestration
@@ -50,10 +56,6 @@ impl OrchestratorConfig {
 
 fn default_poll_interval_secs() -> u64 {
     1
-}
-
-fn default_db_path() -> PathBuf {
-    PathBuf::from("~/.aster/orch/jobs.sqlite")
 }
 
 /// SQLite connection pool configuration.
