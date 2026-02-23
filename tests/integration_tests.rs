@@ -12,6 +12,7 @@ use sqlx::SqlitePool;
 use aster_orch::backend::registry::BackendRegistry;
 use aster_orch::backend::{Backend, PingResult};
 use aster_orch::config::types::*;
+use aster_orch::config::ConfigHandle;
 use aster_orch::error::Result as OrchResult;
 use aster_orch::mcp::params::*;
 use aster_orch::mcp::server::OrchestratorMcpServer;
@@ -138,7 +139,7 @@ async fn test_server() -> OrchestratorMcpServer {
     let config = test_config();
     let mut registry = BackendRegistry::new();
     registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
-    OrchestratorMcpServer::new(config, store, registry)
+    OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry)
 }
 
 /// Helper: extract JSON string from CallToolResult's first content block.
@@ -1926,7 +1927,7 @@ mod session_health_tests {
         let config = test_config();
         let mut registry = BackendRegistry::new();
         registry.register("stub", Arc::new(StubBackend { ping_alive: false }));
-        let server = OrchestratorMcpServer::new(config, store, registry);
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
 
         let result = server
             .health_impl(HealthParams { alias: None })

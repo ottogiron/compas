@@ -49,18 +49,17 @@ impl OrchestratorMcpServer {
 
         let queue_depth = self.store.queue_depth().await.unwrap_or(0);
 
+        // Snapshot live config for this request.
+        let config = self.config.load();
+
         // Filter agents if alias specified
         let agents_to_check: Vec<_> = if let Some(ref alias) = params.alias {
-            self.config
-                .agents
-                .iter()
-                .filter(|a| a.alias == *alias)
-                .collect()
+            config.agents.iter().filter(|a| a.alias == *alias).collect()
         } else {
-            self.config.agents.iter().collect()
+            config.agents.iter().collect()
         };
 
-        let ping_timeout = self.config.orchestration.ping_timeout_secs;
+        let ping_timeout = config.orchestration.ping_timeout_secs;
         let mut agent_health = Vec::new();
 
         for agent_cfg in agents_to_check {

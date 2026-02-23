@@ -33,7 +33,8 @@ use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_ex
 /// Each card is `CARD_HEIGHT` rows tall; any leftover space at the bottom
 /// is left blank.
 pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
-    if app.config.agents.is_empty() {
+    let cfg = app.config.load();
+    if cfg.agents.is_empty() {
         let p = Paragraph::new(Line::from(Span::styled(
             "  No agents configured.",
             Style::default().fg(Color::DarkGray),
@@ -49,10 +50,10 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let n = app.config.agents.len();
+    let n = cfg.agents.len();
     let selected = app.agents_selected.min(n.saturating_sub(1));
     let mut items: Vec<ListItem> = Vec::new();
-    for (idx, agent) in app.config.agents.iter().enumerate() {
+    for (idx, agent) in cfg.agents.iter().enumerate() {
         if idx > 0 {
             items.push(ListItem::new(Line::from(Span::styled(
                 "────────────────────────────────────────────────────────────────────────────",

@@ -17,47 +17,41 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::backend::registry::BackendRegistry;
-use crate::config::types::OrchestratorConfig;
+use crate::config::ConfigHandle;
 use crate::store::Store;
 
 use super::executor::{execute_trigger, TriggerOutput};
 
 /// Worker runner configuration.
 pub struct WorkerRunner {
-    config: Arc<OrchestratorConfig>,
+    config: ConfigHandle,
     store: Store,
     backend_registry: Arc<BackendRegistry>,
     worker_id: String,
-    poll_interval: Duration,
-    max_per_agent: usize,
 }
 
 impl WorkerRunner {
-    pub fn new(
-        config: OrchestratorConfig,
-        store: Store,
-        backend_registry: BackendRegistry,
-    ) -> Self {
-        let poll_interval = Duration::from_secs(config.poll_interval_secs.max(1));
-        let max_per_agent = config.orchestration.max_triggers_per_agent;
+    pub fn new(config: ConfigHandle, store: Store, backend_registry: BackendRegistry) -> Self {
         let worker_id = format!("worker-{}", std::process::id());
 
         Self {
-            config: Arc::new(config),
+            config,
             store,
             backend_registry: Arc::new(backend_registry),
             worker_id,
-            poll_interval,
-            max_per_agent,
         }
     }
 
     /// Run the worker loop. This never returns unless cancelled.
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Read startup-only config values once.
+        let startup_config = self.config.load();
+        let poll_interval_secs = startup_config.poll_interval_secs;
+        let max_concurrent = startup_config.effective_max_concurrent_triggers();
+
         tracing::info!(
             worker_id = %self.worker_id,
-            poll_interval_ms = self.poll_interval.as_millis() as u64,
-            max_per_agent = self.max_per_agent,
+            poll_interval_secs,
             "worker starting"
         );
 
@@ -68,23 +62,23 @@ impl WorkerRunner {
         }
 
         // Create log directory and prune old log files on startup.
-        let log_dir = self.config.log_dir();
+        let log_dir = startup_config.log_dir();
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
             tracing::warn!(path = %log_dir.display(), error = %e, "failed to create log dir");
         }
-        prune_log_files(&log_dir, self.config.orchestration.log_retention_count);
+        prune_log_files(&log_dir, startup_config.orchestration.log_retention_count);
 
         // Initial heartbeat
         self.store
             .write_heartbeat(&self.worker_id, env!("CARGO_PKG_VERSION"))
             .await?;
 
-        // Concurrency semaphore (global limit)
-        let max_concurrent = self.config.effective_max_concurrent_triggers();
+        // Concurrency semaphore (global limit — startup-only, restart to change).
         let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
-        let mut poll_interval = tokio::time::interval(self.poll_interval);
+        let mut poll_interval =
+            tokio::time::interval(Duration::from_secs(poll_interval_secs.max(1)));
 
         loop {
             tokio::select! {
@@ -104,6 +98,10 @@ impl WorkerRunner {
     }
 
     async fn poll_once(&self, semaphore: &Arc<Semaphore>) {
+        // Read live-reloadable config values each poll cycle.
+        let config = self.config.load();
+        let max_per_agent = config.orchestration.max_triggers_per_agent;
+
         // Try to claim work. We loop to drain all available queued items.
         loop {
             // Check if we have global capacity
@@ -111,7 +109,7 @@ impl WorkerRunner {
                 return;
             }
 
-            match self.store.claim_next_execution(self.max_per_agent).await {
+            match self.store.claim_next_execution(max_per_agent).await {
                 Ok(Some(execution)) => {
                     let permit = match semaphore.clone().try_acquire_owned() {
                         Ok(p) => p,
@@ -128,9 +126,12 @@ impl WorkerRunner {
                     // Get the instruction from the latest dispatch message on this thread
                     let store = self.store.clone();
                     let backend_registry = self.backend_registry.clone();
-                    let agent_configs = self.config.agents.clone();
-                    let execution_timeout_secs = self.config.orchestration.execution_timeout_secs;
-                    let log_dir = Some(self.config.log_dir());
+                    // Snapshot config for this trigger (live-reloadable).
+                    let trigger_config = self.config.load().clone();
+                    let agent_configs = trigger_config.agents.clone();
+                    let execution_timeout_secs =
+                        trigger_config.orchestration.execution_timeout_secs;
+                    let log_dir = Some(trigger_config.log_dir());
                     let thread_id = execution.thread_id.clone();
 
                     tokio::spawn(async move {

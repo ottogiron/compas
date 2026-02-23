@@ -252,10 +252,11 @@ impl OrchestratorMcpServer {
         // When neither `intent` nor `since_reference` is provided, trigger
         // trigger intents are auto-excluded
         // so the caller gets the agent's response, not their own dispatch.
+        let config = self.config.load();
         let filtered: Vec<&MessageRow> = if let Some(ref intent) = params.intent {
             messages.iter().filter(|m| m.intent == *intent).collect()
         } else if params.since_reference.is_none() {
-            let trigger_intents = &self.config.orchestration.trigger_intents;
+            let trigger_intents = &config.orchestration.trigger_intents;
             messages
                 .iter()
                 .filter(|m| !trigger_intents.contains(&m.intent))

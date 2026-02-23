@@ -26,6 +26,7 @@ use crate::dashboard::views::{
 use crate::store::ThreadStatusView;
 
 const RECENTLY_COMPLETED_LIMIT: usize = 12;
+const OPS_BATCH_SECTION_LIMIT: usize = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsSelectable {
@@ -135,6 +136,11 @@ fn capped_recently_completed(indices: &[usize]) -> &[usize] {
     &indices[..end]
 }
 
+fn capped_batches(batches: &[BatchProgress]) -> &[BatchProgress] {
+    let end = batches.len().min(OPS_BATCH_SECTION_LIMIT);
+    &batches[..end]
+}
+
 fn sort_indices_by_updated(rows: &[ThreadStatusView], indices: &mut [usize]) {
     indices.sort_by(|a, b| {
         let a_ts = rows.get(*a).map(|r| r.thread_updated_at).unwrap_or(0);
@@ -228,8 +234,7 @@ pub fn ops_selectable_targets(
     );
     if drill_batch.is_none() {
         out.extend(
-            classified
-                .active_batches
+            capped_batches(&classified.active_batches)
                 .iter()
                 .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
         );
@@ -252,8 +257,7 @@ pub fn ops_selectable_targets(
     }
     if drill_batch.is_none() {
         out.extend(
-            classified
-                .batches
+            capped_batches(&classified.batches)
                 .iter()
                 .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
         );
@@ -433,7 +437,7 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
     let left = panes[0];
     let right = panes[1];
 
-    let stale_after_secs = app.config.orchestration.stale_active_secs as i64;
+    let stale_after_secs = app.config.load().orchestration.stale_active_secs as i64;
     render_ops_list(f, app, data, left, now_unix, stale_after_secs);
     render_context_panel(f, app, data, right, now_unix, stale_after_secs);
 }
@@ -533,7 +537,7 @@ fn render_ops_list(
         if classified.active_batches.is_empty() {
             items.push(empty_line("  none"));
         } else {
-            for batch in &classified.active_batches {
+            for batch in capped_batches(&classified.active_batches) {
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
                 items.push(ListItem::new(make_batch_line(
@@ -598,7 +602,7 @@ fn render_ops_list(
         if classified.batches.is_empty() {
             items.push(empty_line("  none"));
         } else {
-            for batch in &classified.batches {
+            for batch in capped_batches(&classified.batches) {
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
                 items.push(ListItem::new(make_batch_line(
@@ -1269,6 +1273,48 @@ mod tests {
         let count = ops_selectable_count(&rows, None, 100, 3600);
         let targets_len = ops_selectable_targets(&rows, None, 100, 3600).len();
         assert_eq!(count, targets_len);
+    }
+
+    #[test]
+    fn test_ops_selectable_targets_caps_batches_section() {
+        let mut rows = Vec::new();
+        for i in 0..(OPS_BATCH_SECTION_LIMIT + 5) {
+            rows.push(make_row(
+                &format!("t{i}"),
+                Some(&format!("b{i}")),
+                "Completed",
+                Some("completed"),
+                i as i64,
+            ));
+        }
+
+        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let batch_count = targets
+            .iter()
+            .filter(|t| matches!(t, OpsSelectable::Batch(_)))
+            .count();
+        assert_eq!(batch_count, OPS_BATCH_SECTION_LIMIT);
+    }
+
+    #[test]
+    fn test_ops_selectable_targets_caps_active_batches_section() {
+        let mut rows = Vec::new();
+        for i in 0..(OPS_BATCH_SECTION_LIMIT + 5) {
+            rows.push(make_row(
+                &format!("t{i}"),
+                Some(&format!("b{i}")),
+                "Active",
+                None,
+                i as i64,
+            ));
+        }
+
+        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let batch_count = targets
+            .iter()
+            .filter(|t| matches!(t, OpsSelectable::Batch(_)))
+            .count();
+        assert_eq!(batch_count, OPS_BATCH_SECTION_LIMIT * 2);
     }
 
     #[test]

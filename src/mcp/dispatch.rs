@@ -20,14 +20,17 @@ impl OrchestratorMcpServer {
         &self,
         params: DispatchParams,
     ) -> Result<CallToolResult, rmcp::Error> {
+        // Snapshot live config for this request.
+        let config = self.config.load();
+
         // Validate target agent exists
-        let target = match self.config.agents.iter().find(|a| a.alias == params.to) {
+        let target = match config.agents.iter().find(|a| a.alias == params.to) {
             Some(a) => a,
             None => {
                 return Ok(err_text(format!(
                     "unknown agent alias: '{}'. available: {}",
                     params.to,
-                    self.config
+                    config
                         .agents
                         .iter()
                         .map(|a| a.alias.as_str())
@@ -61,8 +64,7 @@ impl OrchestratorMcpServer {
 
         // Check if we should trigger the agent (worker role + matching intent)
         let should_trigger = target.role == AgentRole::Worker
-            && self
-                .config
+            && config
                 .orchestration
                 .trigger_intents
                 .iter()

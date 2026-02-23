@@ -1,7 +1,9 @@
 pub mod types;
 pub mod validation;
+pub mod watcher;
 
 pub use types::OrchestratorConfig;
+pub use watcher::ConfigHandle;
 
 use crate::error::Result;
 use std::path::{Path, PathBuf};

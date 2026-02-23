@@ -9,6 +9,9 @@ impl OrchestratorMcpServer {
     // ── orch_session_info ────────────────────────────────────────────────
 
     pub fn session_info_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+        // Snapshot live config for this request.
+        let config = self.config.load();
+
         #[derive(Serialize)]
         struct SessionInfo {
             server: String,
@@ -20,14 +23,17 @@ impl OrchestratorMcpServer {
         Ok(json_text(&SessionInfo {
             server: "aster-orch".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            agent_count: self.config.agents.len(),
-            db_path: self.config.db_path.display().to_string(),
+            agent_count: config.agents.len(),
+            db_path: config.db_path.display().to_string(),
         }))
     }
 
     // ── orch_list_agents ─────────────────────────────────────────────────
 
     pub fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+        // Snapshot live config for this request.
+        let config = self.config.load();
+
         #[derive(Serialize)]
         struct AgentInfo {
             alias: String,
@@ -37,8 +43,7 @@ impl OrchestratorMcpServer {
             timeout_secs: Option<u64>,
         }
 
-        let agents: Vec<AgentInfo> = self
-            .config
+        let agents: Vec<AgentInfo> = config
             .agents
             .iter()
             .map(|a| AgentInfo {

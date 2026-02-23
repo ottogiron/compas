@@ -225,7 +225,10 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
 
-    let runner = WorkerRunner::new(config, store, backend_registry);
+    // Start config file watcher and get a live-reloadable handle.
+    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
+
+    let runner = WorkerRunner::new(config_handle, store, backend_registry);
 
     tracing::info!(
         db = %db_path.display(),
@@ -255,7 +258,10 @@ async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
 
-    let server = OrchestratorMcpServer::new(config, store, backend_registry);
+    // Start config file watcher and get a live-reloadable handle.
+    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
+
+    let server = OrchestratorMcpServer::new(config_handle, store, backend_registry);
 
     tracing::info!("starting MCP server on stdio");
     let transport = rmcp::transport::io::stdio();
@@ -278,15 +284,20 @@ async fn run_dashboard(
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
 
+    // Start config file watcher and get a live-reloadable handle.
+    // All consumers share the same handle and see updates atomically.
+    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
+
     // If requested, spawn the worker in the background.
     let mut worker_task = None;
     let mut worker_reporter = None;
     if with_worker {
-        let backend_registry = build_backend_registry(&config);
+        let worker_cfg = config_handle.load().clone();
+        let backend_registry = build_backend_registry(&worker_cfg);
         let worker_store = store.clone();
-        let worker_config = config.clone();
+        let worker_config_handle = config_handle.clone();
 
-        let runner = WorkerRunner::new(worker_config, worker_store, backend_registry);
+        let runner = WorkerRunner::new(worker_config_handle, worker_store, backend_registry);
         let (worker_error_tx, mut worker_error_rx) = tokio::sync::mpsc::unbounded_channel();
 
         worker_task = Some(tokio::spawn(async move {
@@ -318,7 +329,7 @@ async fn run_dashboard(
     let tui_result = tokio::task::spawn_blocking(move || {
         aster_orch::dashboard::app::run_tui(
             store,
-            config,
+            config_handle,
             resolved_config_path,
             handle,
             poll_interval,

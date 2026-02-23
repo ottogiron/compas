@@ -33,7 +33,7 @@ use std::{
 };
 use tokio::runtime::Handle;
 
-use crate::config::types::OrchestratorConfig;
+use crate::config::ConfigHandle;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions::{self, HistorySelectable};
@@ -160,8 +160,8 @@ pub struct App {
     pub should_quit: bool,
     /// Handle to the SQLite store.
     pub store: Store,
-    /// Orchestrator configuration (agents, orchestration settings, etc.).
-    pub config: OrchestratorConfig,
+    /// Orchestrator configuration — live-reloaded via `ConfigHandle`.
+    pub config: ConfigHandle,
     /// Path to the config file — shown on the Settings tab.
     pub config_path: PathBuf,
     /// How often to re-query SQLite for fresh metrics.
@@ -210,7 +210,7 @@ impl App {
     }
 
     fn stale_active_secs(&self) -> i64 {
-        self.config.orchestration.stale_active_secs as i64
+        self.config.load().orchestration.stale_active_secs as i64
     }
 
     pub fn history_group_visible_limit(&self) -> usize {
@@ -219,12 +219,12 @@ impl App {
 
     pub fn new(
         store: Store,
-        config: OrchestratorConfig,
+        config: ConfigHandle,
         config_path: PathBuf,
         handle: Handle,
         poll_interval: Duration,
     ) -> Self {
-        let log_dir = config.log_dir();
+        let log_dir = config.load().log_dir();
         Self {
             active_tab: 0,
             should_quit: false,
@@ -315,9 +315,11 @@ impl App {
     /// TUI thread. Silently swallows errors — stale data is preferable to a
     /// panic inside the event loop.
     pub fn refresh_agents(&mut self) {
-        // Collect aliases up-front to avoid holding a borrow into self.config
+        // Snapshot live config for this refresh cycle.
+        let cfg = self.config.load();
+        // Collect aliases up-front to avoid holding a borrow into config
         // across the async block.
-        let aliases: Vec<String> = self.config.agents.iter().map(|a| a.alias.clone()).collect();
+        let aliases: Vec<String> = cfg.agents.iter().map(|a| a.alias.clone()).collect();
 
         let store = &self.store;
         let handle = &self.handle;
@@ -358,8 +360,9 @@ impl App {
         });
 
         self.agents_data = Some(data);
-        if !self.config.agents.is_empty() {
-            self.agents_selected = self.agents_selected.min(self.config.agents.len() - 1);
+        let agent_count = cfg.agents.len();
+        if agent_count > 0 {
+            self.agents_selected = self.agents_selected.min(agent_count - 1);
         } else {
             self.agents_selected = 0;
         }
@@ -451,7 +454,7 @@ impl App {
                 self.executions_selected = (self.executions_selected + 1).min(max);
             }
             1 => {
-                let max = self.config.agents.len().saturating_sub(1);
+                let max = self.config.load().agents.len().saturating_sub(1);
                 self.agents_selected = (self.agents_selected + 1).min(max);
             }
             _ => {}
@@ -830,7 +833,8 @@ impl App {
             return;
         };
 
-        let svc = LifecycleService::new(self.store.clone(), self.config.agents.as_slice());
+        let cfg = self.config.load();
+        let svc = LifecycleService::new(self.store.clone(), cfg.agents.as_slice());
         match action.kind {
             AdminActionKind::Abandon => {
                 let thread_id = action.thread_ids.first().cloned().unwrap_or_default();
@@ -973,7 +977,7 @@ impl App {
                 self.executions_selected = max;
             }
             1 => {
-                self.agents_selected = self.config.agents.len().saturating_sub(1);
+                self.agents_selected = self.config.load().agents.len().saturating_sub(1);
             }
             _ => {}
         }
@@ -990,7 +994,7 @@ impl App {
 /// `poll_interval_secs` overrides the default 2-second refresh cadence.
 pub fn run_tui(
     store: Store,
-    config: OrchestratorConfig,
+    config: ConfigHandle,
     config_path: PathBuf,
     handle: Handle,
     poll_interval_secs: u64,
@@ -1374,6 +1378,7 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let value = |s: String| Span::styled(s, Style::default().fg(Color::White));
 
     let poll_secs = app.poll_interval.as_secs();
+    let cfg = app.config.load();
 
     let lines = vec![
         Line::from(vec![
@@ -1384,7 +1389,7 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::raw("  "),
             label("DB:           "),
-            value(app.config.db_path.display().to_string()),
+            value(cfg.db_path.display().to_string()),
         ]),
         Line::from(vec![
             Span::raw("  "),
@@ -1394,7 +1399,7 @@ fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::raw("  "),
             label("Agents:       "),
-            value(format!(" {}", app.config.agents.len())),
+            value(format!(" {}", cfg.agents.len())),
         ]),
         Line::from(vec![
             Span::raw("  "),

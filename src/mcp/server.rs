@@ -11,7 +11,7 @@ use rmcp::{tool, ServerHandler};
 use serde::Serialize;
 
 use crate::backend::registry::BackendRegistry;
-use crate::config::types::OrchestratorConfig;
+use crate::config::ConfigHandle;
 use crate::store::Store;
 
 pub use super::params::*;
@@ -22,7 +22,7 @@ pub use super::params::*;
 
 #[derive(Clone)]
 pub struct OrchestratorMcpServer {
-    pub config: Arc<OrchestratorConfig>,
+    pub config: ConfigHandle,
     pub store: Store,
     /// Backend registry — used by orch_health for backend pings.
     pub backend_registry: Arc<BackendRegistry>,
@@ -44,13 +44,9 @@ pub fn err_text(msg: impl std::fmt::Display) -> CallToolResult {
 }
 
 impl OrchestratorMcpServer {
-    pub fn new(
-        config: OrchestratorConfig,
-        store: Store,
-        backend_registry: BackendRegistry,
-    ) -> Self {
+    pub fn new(config: ConfigHandle, store: Store, backend_registry: BackendRegistry) -> Self {
         Self {
-            config: Arc::new(config),
+            config,
             store,
             backend_registry: Arc::new(backend_registry),
         }

@@ -12,13 +12,15 @@ use crate::wait::{self, WaitOutcome, WaitRequest};
 
 impl OrchestratorMcpServer {
     pub async fn wait_impl(&self, params: WaitParams) -> Result<CallToolResult, rmcp::Error> {
+        // Snapshot live config for this request.
+        let config = self.config.load();
         let req = WaitRequest {
             thread_id: params.thread_id,
             intent: params.intent,
             since_reference: params.since_reference,
             strict_new: params.strict_new.unwrap_or(false),
             timeout: Duration::from_secs(params.timeout_secs.unwrap_or(15)),
-            trigger_intents: self.config.orchestration.trigger_intents.clone(),
+            trigger_intents: config.orchestration.trigger_intents.clone(),
         };
 
         match wait::wait_for_message(&self.store, &req).await {
