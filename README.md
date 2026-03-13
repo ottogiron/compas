@@ -135,12 +135,14 @@ Log viewer controls:
 ## MCP Tools (16)
 
 ### Core Workflow
+
 | Tool | Description |
 |------|-------------|
 | `orch_dispatch` | Send a message to an agent. Creates or continues a thread. |
 | `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
 
 ### Query & Observability
+
 | Tool | Description |
 |------|-------------|
 | `orch_status` | Query thread + latest execution status by agent and/or thread. |
@@ -151,12 +153,14 @@ Log viewer controls:
 | `orch_tasks` | List trigger execution records with timing and result status. |
 
 ### Blocking & Polling
+
 | Tool | Description |
 |------|-------------|
 | `orch_wait` | Poll DB at 200ms intervals until a message appears (with timeout). |
 | `orch_poll` | Non-blocking check of thread state and recent messages. |
 
 ### Lifecycle
+
 | Tool | Description |
 |------|-------------|
 | `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
@@ -165,6 +169,7 @@ Log viewer controls:
 | `orch_diagnose` | Thread diagnostics: status, blockers, suggested next actions. |
 
 ### Configuration
+
 | Tool | Description |
 |------|-------------|
 | `orch_session_info` | Current MCP session metadata. |
@@ -188,10 +193,12 @@ When `orch_dispatch` is called:
 ### Worker Lifecycle
 
 On startup:
+
 1. **Crash recovery** — marks orphaned executions (`picked_up`/`executing`) as `crashed`
 2. **Initial heartbeat** — writes to `worker_heartbeats` table
 
 Main loop (concurrent via `tokio::select!`):
+
 - **Poll interval** — claims queued executions, enforces per-agent concurrency via SQL, spawns execution tasks with global semaphore
 - **Heartbeat interval** (10s) — writes liveness record for `orch_health` to check
 
@@ -275,6 +282,7 @@ Path resolution rules:
 ## MCP Client Configuration
 
 ### Claude Code (`.mcp.json`)
+
 ```json
 {
   "mcpServers": {
@@ -287,6 +295,7 @@ Path resolution rules:
 ```
 
 ### opencode (`opencode.json`)
+
 ```json
 {
   "mcp": {
@@ -299,6 +308,7 @@ Path resolution rules:
 ```
 
 ### RustRover (worker)
+
 ```
 run --package aster-orch --bin aster_orch -- worker --config .aster-orch/config.yaml
 ```
