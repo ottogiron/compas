@@ -407,3 +407,56 @@ src/
     ├── agent.rs         #   Agent struct
     └── session.rs       #   Session, SessionStatus, TriggerResult
 ```
+
+## Development
+
+### Setup
+
+```bash
+git clone git@github.com:ottogiron/aster-orch.git
+cd aster-orch
+make setup-hooks       # install pre-commit hook
+cargo install --git https://github.com/ottogiron/ticket-tracker  # install ticket CLI
+make verify            # fmt-check + clippy + 328 tests
+```
+
+### Dev Dashboard
+
+A dev config at `.aster-orch/config.yaml` uses a local state directory (`.aster-orch/state/`) isolated from the production instance:
+
+```bash
+make dashboard-dev     # dashboard + embedded worker on dev DB
+```
+
+### Two MCP Server Instances
+
+Both `aster-orch` (production) and `aster-orch-dev` (dev) are configured globally in Claude Code, Codex, and OpenCode:
+
+| Server | Binary | State | Purpose |
+|--------|--------|-------|---------|
+| `aster-orch` | Release binary | `~/.aster/orch/` | Daily orchestration |
+| `aster-orch-dev` | `cargo run` | `.aster-orch/state/` | Testing MCP changes |
+
+### Testing MCP Changes
+
+1. Edit source (e.g., `src/mcp/*.rs`)
+2. `cargo build`
+3. Call the changed tool via `aster-orch-dev` — it runs `cargo run` and picks up your build
+4. Verify in the dev dashboard (`make dashboard-dev`)
+5. `make verify` before committing
+
+### Orchestrating Development
+
+The production orch dispatches agents to work on this repo. The dev instance is for testing changes, not for dispatching work. See `AGENTS.md` for the full development workflow.
+
+### Ticket Tracking
+
+This project uses backlog-first governance via the [`ticket-tracker`](https://github.com/ottogiron/ticket-tracker) CLI:
+
+```bash
+ticket start ORCH-EVO --batch   # start a batch session
+ticket status                   # show active sessions
+ticket done ORCH-EVO --batch    # close a batch
+```
+
+Backlogs are in `docs/project/backlog/`. The pre-commit hook blocks code commits without an active ticket session.

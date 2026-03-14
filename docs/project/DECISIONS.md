@@ -38,3 +38,20 @@ Moved from single `.session` file to `.sessions/` directory with per-key YAML fi
 **Status:** Active
 
 Extracted ticket-tracker to its own repo (`ottogiron/ticket-tracker`). Installed globally via `cargo install`. Generic tool usable across any project — not coupled to aster or aster-orch.
+
+## ADR-006: Standalone repo with independent dev infrastructure
+
+**Date:** 2026-03
+**Status:** Active
+
+Extracted aster-orch from aster as a fully independent repository with its own development infrastructure: ticket system, backlogs, pre-commit hooks, skills, governance docs, and MCP server configs.
+
+**Why:** Submodule git workflow (two-step commits, detached HEAD) added friction. Parallel development on aster (compiler) and aster-orch (orchestrator) was blocked by the single-session ticket system. Independent repos enable independent development cadences.
+
+**How it works:**
+- Production orch (`aster-orch` MCP server) dispatches agents to work on any repo, including aster-orch itself.
+- Dev orch (`aster-orch-dev` MCP server, via `cargo run`) uses a local state directory (`.aster-orch/state/`) for testing MCP changes.
+- Both MCP servers are configured globally (user scope) in Claude Code, Codex, and OpenCode — available from any project.
+- `make dashboard-dev` runs the dashboard with an embedded worker on the dev DB.
+
+**Trade-off:** Loses the convenience of `cargo test -p aster-orch` from the aster workspace. Gained: independent git history, parallel ticket sessions, no submodule friction, self-contained dev infrastructure.

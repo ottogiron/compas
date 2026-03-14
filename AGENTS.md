@@ -6,7 +6,7 @@ Operational guide for agents working in this repository.
 
 Aster Orchestrator is a multi-agent orchestration system for AI-assisted software development. It dispatches work to AI coding agents (Claude, Codex, Gemini, OpenCode), manages execution lifecycle, and provides a TUI dashboard for monitoring.
 
-This is a standalone repository (`ottogiron/aster-orch`). It is also included as a git submodule in the aster compiler repo (`ottogiron/aster`).
+This is a standalone repository (`ottogiron/aster-orch`).
 
 ## Project Principles
 
@@ -35,6 +35,7 @@ make verify         # fmt-check + clippy + test (matches CI)
 make setup-hooks    # install pre-commit hook
 make worker         # run worker
 make dashboard      # run dashboard
+make dashboard-dev  # dashboard + embedded worker (dev DB)
 make mcp-server     # run MCP server
 ```
 
@@ -95,16 +96,40 @@ If you change a layer, update/review the paired artifacts in the same commit set
 - Config (`src/config/*`): validation tests, `README.md`
 - Store/DB (`src/store/*`): migration handling, integration tests
 
-## Git Workflow
+## Development Workflow
 
-### Standalone (normal development)
+### Two MCP server instances
+
+Both are configured globally (user scope) in Claude Code, Codex, and OpenCode:
+
+| MCP Server | Points to | State dir | Use for |
+|---|---|---|---|
+| `aster-orch` | Production release binary | `~/.aster/orch/` | Dispatching agents, daily orchestration |
+| `aster-orch-dev` | `cargo run` (latest build) | `.aster-orch/state/` | Testing MCP changes during development |
+
+### Dev config
+
+`.aster-orch/config.yaml` configures the dev instance with a local state directory. The dev DB (`.aster-orch/state/jobs.sqlite`) is completely isolated from production.
+
+```bash
+make dashboard-dev   # dashboard + embedded worker on dev DB
+```
+
+### Testing MCP changes
+
+1. Edit source code (e.g., `src/mcp/*.rs`)
+2. `cargo build`
+3. Call the changed tool via `aster-orch-dev` MCP server — it uses `cargo run` and picks up your build
+4. Verify results in the dev dashboard (`make dashboard-dev`)
+5. `make verify` before committing
+
+### Orchestrating orch development
+
+The production orch (`aster-orch`) dispatches agents to work on this repo. Agents are configured in the production config with `backend_args` pointing `--directory` at this repo. The dev instance is for testing changes, not for dispatching work.
+
+### Git workflow
 
 Standard git workflow. Commit, push, PR.
-
-### As submodule in aster
-
-1. Commit and push changes here first.
-2. Then update the submodule pointer in aster: `cd <aster-root> && git add crates/aster-orch && git commit`
 
 ## Failure and Recovery Guidance
 
