@@ -125,7 +125,7 @@ make dashboard-dev   # dashboard + embedded worker on dev DB
 
 ### Orchestrating orch development
 
-The production orch (`aster-orch`) dispatches agents to work on this repo. Agents are configured in the production config with `backend_args` pointing `--directory` at this repo. The dev instance is for testing changes, not for dispatching work.
+The production orch (`aster-orch`) dispatches agents to work on this repo. Agents are configured in the production config with prompts scoped to this repo's directory. The dev instance is for testing MCP changes, not for dispatching work.
 
 ### Git workflow
 
@@ -148,4 +148,5 @@ Available skills in `skills/`:
 
 - `dev-workflow` — Ticket-driven development lifecycle
 - `backlog-setup` — Create backlog artifacts before implementation
+- `orch-dispatch` — Operator dispatch-review-complete loop for delegating work via the orchestrator
 - `stop-and-think` — Behavioral guardrail (always active)

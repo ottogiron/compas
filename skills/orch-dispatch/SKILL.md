@@ -1,0 +1,248 @@
+---
+name: orch-dispatch
+description: Operator dispatch-review-complete loop for delegating work to worker agents via the orchestrator.
+---
+
+# orch-dispatch
+
+## Description
+
+Full lifecycle for dispatching implementation work, getting it reviewed, and closing the thread. Covers two modes:
+
+- **Mode A — Worker delegation** (default): operator dispatches work to a worker agent, then sends the result to a reviewer agent for code review.
+- **Mode B — Operator self-review**: operator implements a change inline, then sends their own diff to a reviewer agent before committing.
+
+Do not use for trivial fixes (typo, single-line config) where dispatch overhead exceeds value.
+
+Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/dev-workflow`.
+
+## Inputs
+
+- Active ticket or batch context from `/dev-workflow`
+- Target worker alias (routing: `orch-dev` for aster-orch development work)
+- Reviewer alias: `chill` (configured in the production orch config). Verify with `orch_list_agents()`.
+- Task description with acceptance criteria
+
+---
+
+## Mode A — Worker Delegation
+
+### Step 1 — Health check
+
+```
+orch_health(alias="<worker>")
+```
+
+Use the **production** orch (`aster-orch` MCP server) for dispatching work. The dev orch (`aster-orch-dev`) is for testing MCP changes only.
+
+### Step 2 — Dispatch to worker
+
+```
+orch_dispatch(
+  from="operator",
+  to="<worker>",
+  intent="dispatch",
+  body="<task + acceptance criteria>",
+  batch="<ticket-or-batch-id>"
+)
+```
+
+Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
+
+### Step 3 — Wait for worker response
+
+Use the CLI wait (not MCP `orch_wait` — removed due to stdio transport timeout issues).
+
+The production orch config path depends on your setup. Check the `aster-orch` MCP server config for the `--config` value, or use the release binary directly:
+
+```bash
+aster_orch wait \
+  --config <production-config-path> \
+  --thread-id <thread-id> \
+  --intent review-request \
+  --since db:<dispatch-message-id> \
+  --timeout 900
+```
+
+### Step 4 — Contract check
+
+Verify the worker's `review-request` message contains the 4 required fields (see `references/review-request-contract.md`):
+
+1. TL;DR present
+2. File paths changed listed
+3. Verification command + result included
+4. Next action requested
+
+If any field is missing, reject immediately with feedback specifying what's missing.
+
+### Step 5 — Run verification
+
+Execute the verification command the worker claims to have run:
+
+```bash
+make verify   # fmt-check + clippy + test
+```
+
+If verification fails, reject with the failure output.
+
+### Step 6 — Dispatch to reviewer
+
+The operator does NOT review code. A reviewer agent does.
+
+**Trivial exception:** For trivial worker output (config tweak, typo fix, mechanical rename), the operator may skip this step and approve directly. If in doubt, send to reviewer.
+
+For non-trivial work:
+
+```
+orch_health(alias="chill")
+
+orch_dispatch(
+  from="operator",
+  to="chill",
+  intent="dispatch",
+  body="Review the following changes. Report findings ordered by severity (blocking, major, minor, nit) with file:line references.\n\n## Scope\n<git diff --stat summary + key file diffs>\n\n## Context\n<ticket ID, batch, what the worker was asked to do>\n\n## Focus\nCorrectness, test coverage, doc alignment, scope creep, no unrelated changes.\n\nIf no issues, state residual risks and verification gaps.",
+  batch="<ticket-or-batch-id>"
+)
+```
+
+Save the reviewer `thread_id` and `reference`.
+
+### Step 7 — Wait for reviewer findings
+
+```bash
+aster_orch wait \
+  --config <production-config-path> \
+  --thread-id <reviewer-thread-id> \
+  --intent review-request \
+  --since db:<reviewer-dispatch-message-id> \
+  --timeout 300
+```
+
+### Step 8 — Act on findings
+
+Based on reviewer response:
+
+- **No blocking findings → close both threads:**
+
+  ```
+  orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Review passed")
+  orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review")
+  ```
+
+  Then commit the worker's changes.
+
+- **Blocking findings → request changes from worker:**
+
+  ```
+  orch_dispatch(
+    from="operator",
+    to="<worker>",
+    thread_id="<worker-thread-id>",
+    intent="changes-requested",
+    body="<reviewer findings, verbatim or summarized>"
+  )
+  ```
+
+  Close the reviewer thread:
+
+  ```
+  orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Changes requested from worker based on findings")
+  ```
+
+  Then loop back to Step 3. Use the `reference` from the `changes-requested` dispatch as the new `--since` value.
+
+- **Unclear findings → ask reviewer for clarification:**
+
+  ```
+  orch_dispatch(
+    from="operator",
+    to="chill",
+    thread_id="<reviewer-thread-id>",
+    intent="dispatch",
+    body="Clarify finding #N: <question>"
+  )
+  ```
+
+  Then wait again on the reviewer thread with `--since db:<clarification-message-id>`.
+
+---
+
+## Mode B — Operator Self-Review
+
+When the operator implements a change inline (trivial fix, config cleanup, etc.) and the change is non-trivial enough to warrant review:
+
+### Step 1 — Implement the change
+
+Operator makes the code changes directly.
+
+### Step 2 — Run verification
+
+```bash
+make verify
+```
+
+### Step 3 — Dispatch own diff to reviewer
+
+```bash
+# Gather the diff
+git diff --stat
+git diff
+```
+
+```
+orch_health(alias="chill")
+
+orch_dispatch(
+  from="operator",
+  to="chill",
+  intent="dispatch",
+  body="Review my changes before commit. Report findings ordered by severity with file:line references.\n\n## Scope\n<git diff --stat + key diffs>\n\n## Context\n<what was changed and why>\n\n## Focus\nCorrectness, test coverage, no regressions.",
+  batch="<ticket-or-batch-id>"
+)
+```
+
+### Step 4 — Wait and act on findings
+
+Same as Mode A Steps 7-8. Fix issues if any, then commit.
+
+---
+
+## When to Skip Reviewer
+
+The reviewer dispatch (Step 6 in Mode A, Step 3 in Mode B) may be skipped for:
+
+- Single-line config/typo fixes
+- Mechanical field deletion (e.g., removing dead code already confirmed unused)
+- Documentation-only changes with no behavioral impact
+
+When skipping, state the reason out loud so the decision is auditable:
+> "Skipping reviewer — trivial config cleanup, no behavioral change."
+
+---
+
+## Required Checks
+
+- Review-request contract compliance (all 4 required fields)
+- Verification command actually passes (not just claimed by worker)
+- `orch_health` and `orch_tasks` checked for timeout or unexpected behavior
+- Reviewer findings acted on — do not ignore blocking findings
+
+## Output Format
+
+```
+Thread ID: <worker-thread-id>
+Worker: <alias>
+Review Thread: <reviewer-thread-id> (or "skipped — <reason>")
+Review Decision: approved / changes-requested / operator-takeover
+Verification Result: pass / fail
+Completion Status: completed / rejected / abandoned
+```
+
+## Failure Handling
+
+- **CLI wait timeout:** `aster_orch wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
+- **CLI wait error:** `aster_orch wait` exits `2`. Verify worker process + config path, then retry.
+- **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
+- **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
+- **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.
+- **Reviewer unresponsive:** Check `orch_health(alias="chill")`. If unhealthy, operator may do a manual code review as fallback (read the full diff) and document that reviewer was bypassed.
