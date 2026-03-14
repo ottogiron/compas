@@ -13,7 +13,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_close ───────────────────────────────────────────────────────
 
-    pub async fn close_impl(&self, params: CloseParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn close_impl(&self, params: CloseParams) -> Result<CallToolResult, rmcp::ErrorData> {
         let status = match params.status {
             super::params::CloseStatus::Completed => crate::lifecycle::CloseStatus::Completed,
             super::params::CloseStatus::Failed => crate::lifecycle::CloseStatus::Failed,
@@ -35,7 +35,10 @@ impl OrchestratorMcpServer {
 
     // ── orch_abandon ─────────────────────────────────────────────────────
 
-    pub async fn abandon_impl(&self, params: AbandonParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn abandon_impl(
+        &self,
+        params: AbandonParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self.lifecycle_service().abandon(&params.thread_id).await {
             Ok(out) => Ok(json_text(&out)),
             Err(e) => Ok(err_text(e)),
@@ -44,7 +47,10 @@ impl OrchestratorMcpServer {
 
     // ── orch_reopen ──────────────────────────────────────────────────────
 
-    pub async fn reopen_impl(&self, params: ReopenParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn reopen_impl(
+        &self,
+        params: ReopenParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self.lifecycle_service().reopen(&params.thread_id).await {
             Ok(out) => Ok(json_text(&out)),
             Err(e) => Ok(err_text(e)),

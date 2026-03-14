@@ -38,7 +38,10 @@ impl From<ThreadStatusView> for StatusEntry {
 }
 
 impl OrchestratorMcpServer {
-    pub async fn status_impl(&self, params: StatusParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn status_impl(
+        &self,
+        params: StatusParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         match self
             .store
             .status_view(
@@ -62,7 +65,7 @@ impl OrchestratorMcpServer {
     pub async fn transcript_impl(
         &self,
         params: TranscriptParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let messages = match self.store.get_thread_messages(&params.thread_id).await {
             Ok(m) => m,
             Err(e) => return Ok(err_text(format!("transcript query failed: {}", e))),
@@ -152,7 +155,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_read ────────────────────────────────────────────────────────
 
-    pub async fn read_impl(&self, params: ReadParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn read_impl(&self, params: ReadParams) -> Result<CallToolResult, rmcp::ErrorData> {
         let id = match store::parse_message_ref(&params.reference) {
             Ok(id) => id,
             Err(e) => return Ok(err_text(e)),
@@ -189,7 +192,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_metrics ─────────────────────────────────────────────────────
 
-    pub async fn metrics_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn metrics_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         #[derive(Serialize)]
         struct Metrics {
             thread_counts: Vec<(String, i64)>,
@@ -225,7 +228,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_poll ────────────────────────────────────────────────────────
 
-    pub async fn poll_impl(&self, params: PollParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn poll_impl(&self, params: PollParams) -> Result<CallToolResult, rmcp::ErrorData> {
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {
@@ -313,7 +316,7 @@ impl OrchestratorMcpServer {
     pub async fn batch_status_impl(
         &self,
         params: BatchStatusParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let threads = match self
             .store
             .list_threads(Some(&params.batch_id), None, 100)
@@ -351,7 +354,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_tasks ───────────────────────────────────────────────────────
 
-    pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {
         // Query executions — we use status_view as a convenient join
         let limit = params.limit.unwrap_or(20) as i64;
         let views = match self

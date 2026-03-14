@@ -6,8 +6,11 @@
 
 use std::sync::Arc;
 
+use rmcp::handler::server::tool::ToolRouter;
+use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, ServerHandler};
+use rmcp::service::RequestContext;
+use rmcp::{tool, tool_handler, tool_router, Peer, RoleServer, ServerHandler};
 use serde::Serialize;
 
 use crate::backend::registry::BackendRegistry;
@@ -26,6 +29,7 @@ pub struct OrchestratorMcpServer {
     pub store: Store,
     /// Backend registry — used by orch_health for backend pings.
     pub backend_registry: Arc<BackendRegistry>,
+    tool_router: ToolRouter<Self>,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,21 +53,22 @@ impl OrchestratorMcpServer {
             config,
             store,
             backend_registry: Arc::new(backend_registry),
+            tool_router: Self::tool_router(),
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// #[tool(tool_box)] — thin delegation stubs
+// #[tool_router] — thin delegation stubs
 // ---------------------------------------------------------------------------
 
-#[tool(tool_box)]
+#[tool_router]
 impl OrchestratorMcpServer {
     #[tool(
         name = "orch_session_info",
         description = "Get current MCP session namespace and binding metadata."
     )]
-    fn orch_session_info(&self) -> Result<CallToolResult, rmcp::Error> {
+    fn orch_session_info(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         self.session_info_impl()
     }
 
@@ -73,8 +78,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_dispatch(
         &self,
-        #[tool(aggr)] params: DispatchParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<DispatchParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.dispatch_impl(params).await
     }
 
@@ -84,8 +89,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_status(
         &self,
-        #[tool(aggr)] params: StatusParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<StatusParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.status_impl(params).await
     }
 
@@ -95,8 +100,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_transcript(
         &self,
-        #[tool(aggr)] params: TranscriptParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<TranscriptParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.transcript_impl(params).await
     }
 
@@ -106,8 +111,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_close(
         &self,
-        #[tool(aggr)] params: CloseParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<CloseParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.close_impl(params).await
     }
 
@@ -117,8 +122,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_read(
         &self,
-        #[tool(aggr)] params: ReadParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<ReadParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.read_impl(params).await
     }
 
@@ -126,7 +131,7 @@ impl OrchestratorMcpServer {
         name = "orch_metrics",
         description = "Get aggregate orchestrator metrics (active/blocked/completed threads, queue depth)."
     )]
-    async fn orch_metrics(&self) -> Result<CallToolResult, rmcp::Error> {
+    async fn orch_metrics(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         self.metrics_impl().await
     }
 
@@ -136,9 +141,10 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_wait(
         &self,
-        #[tool(aggr)] params: WaitParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
-        self.wait_impl(params).await
+        Parameters(params): Parameters<WaitParams>,
+        peer: Peer<RoleServer>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.wait_impl(params, peer).await
     }
 
     #[tool(
@@ -147,8 +153,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_poll(
         &self,
-        #[tool(aggr)] params: PollParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<PollParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.poll_impl(params).await
     }
 
@@ -158,8 +164,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_batch_status(
         &self,
-        #[tool(aggr)] params: BatchStatusParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<BatchStatusParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.batch_status_impl(params).await
     }
 
@@ -169,8 +175,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_abandon(
         &self,
-        #[tool(aggr)] params: AbandonParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<AbandonParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.abandon_impl(params).await
     }
 
@@ -180,8 +186,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_reopen(
         &self,
-        #[tool(aggr)] params: ReopenParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<ReopenParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.reopen_impl(params).await
     }
 
@@ -191,8 +197,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_diagnose(
         &self,
-        #[tool(aggr)] params: DiagnoseParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<DiagnoseParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.diagnose_impl(params).await
     }
 
@@ -200,7 +206,7 @@ impl OrchestratorMcpServer {
         name = "orch_list_agents",
         description = "List all configured agents with their alias, backend, model, and other settings."
     )]
-    fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::Error> {
+    fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         self.list_agents_impl()
     }
 
@@ -210,8 +216,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_health(
         &self,
-        #[tool(aggr)] params: HealthParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<HealthParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.health_impl(params).await
     }
 
@@ -221,8 +227,8 @@ impl OrchestratorMcpServer {
     )]
     async fn orch_tasks(
         &self,
-        #[tool(aggr)] params: TasksParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+        Parameters(params): Parameters<TasksParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.tasks_impl(params).await
     }
 }
@@ -231,21 +237,15 @@ impl OrchestratorMcpServer {
 // ServerHandler trait
 // ---------------------------------------------------------------------------
 
-#[tool(tool_box)]
+#[tool_handler]
 impl ServerHandler for OrchestratorMcpServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::default(),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation {
-                name: "aster-orch".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-            instructions: Some(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new("aster-orch", env!("CARGO_PKG_VERSION")))
+            .with_instructions(
                 "Aster orchestrator MCP server. Exposes dispatch, status, \
                  metrics, and diagnostic tools for multi-agent coordination."
-                    .into(),
-            ),
-        }
+                    .to_string(),
+            )
     }
 }

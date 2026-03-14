@@ -21,7 +21,7 @@ impl OrchestratorMcpServer {
     pub async fn dispatch_impl(
         &self,
         params: DispatchParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for alias validation.
         let config = self.config.load();
 

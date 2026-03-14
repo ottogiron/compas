@@ -11,7 +11,10 @@ use crate::store::ThreadStatus;
 impl OrchestratorMcpServer {
     // ── orch_health ──────────────────────────────────────────────────────
 
-    pub async fn health_impl(&self, params: HealthParams) -> Result<CallToolResult, rmcp::Error> {
+    pub async fn health_impl(
+        &self,
+        params: HealthParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         #[derive(Serialize)]
         struct AgentHealth {
             alias: String,
@@ -105,7 +108,7 @@ impl OrchestratorMcpServer {
     pub async fn diagnose_impl(
         &self,
         params: DiagnoseParams,
-    ) -> Result<CallToolResult, rmcp::Error> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let thread = match self.store.get_thread(&params.thread_id).await {
             Ok(Some(t)) => t,
             Ok(None) => {

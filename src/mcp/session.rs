@@ -8,7 +8,7 @@ use super::server::{json_text, OrchestratorMcpServer};
 impl OrchestratorMcpServer {
     // ── orch_session_info ────────────────────────────────────────────────
 
-    pub fn session_info_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+    pub fn session_info_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
 
@@ -30,7 +30,7 @@ impl OrchestratorMcpServer {
 
     // ── orch_list_agents ─────────────────────────────────────────────────
 
-    pub fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::Error> {
+    pub fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
 
