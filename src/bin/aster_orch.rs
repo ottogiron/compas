@@ -406,24 +406,12 @@ async fn spawn_worker_process(
         .truncate(false)
         .open(&lock_path)?;
 
-    use libc::{flock, LOCK_EX, LOCK_NB};
-    let lock_fd = {
-        #[cfg(unix)]
-        {
-            use std::os::unix::io::AsRawFd;
-            lock_file.as_raw_fd()
-        }
-        #[cfg(not(unix))]
-        {
-            // On non-Unix, skip locking (best-effort heartbeat guard only).
-            -1
-        }
-    };
-
     #[cfg(unix)]
     {
+        use libc::{flock, LOCK_EX, LOCK_NB};
+        use std::os::unix::io::AsRawFd;
         // Non-blocking exclusive lock. If another dashboard holds it, skip spawn.
-        let ret = unsafe { flock(lock_fd, LOCK_EX | LOCK_NB) };
+        let ret = unsafe { flock(lock_file.as_raw_fd(), LOCK_EX | LOCK_NB) };
         if ret != 0 {
             // Another dashboard is currently spawning a worker — treat as "already running".
             return Ok(None);
@@ -476,19 +464,22 @@ async fn spawn_worker_process(
     #[cfg(unix)]
     cmd.process_group(0);
 
-    let child = cmd.spawn()?;
-    let pid = child.id().unwrap_or(0);
+    let mut child = cmd.spawn()?;
+    let pid = child.id();
+
+    if pid.is_none() || pid == Some(0) {
+        tracing::warn!("worker process exited before PID could be captured");
+    }
 
     // Reap the child asynchronously to prevent zombie processes.
     tokio::spawn(async move {
-        let _ = child.wait_with_output().await;
+        let _ = child.wait().await;
     });
 
     // Release the lockfile (drop closes the fd and releases flock).
     drop(lock_file);
-    let _ = lock_fd; // suppress unused warning on non-unix
 
-    Ok(Some(pid))
+    Ok(pid)
 }
 
 // ---------------------------------------------------------------------------
