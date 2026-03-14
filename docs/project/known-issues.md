@@ -45,13 +45,8 @@ If a persisted backend session ID has expired or been pruned by the provider (ov
 ## Worker processes orphaned on dashboard exit
 
 **Severity:** Medium
-**Status:** Open
+**Status:** Fixed on Unix (clean exit path). Non-unix platforms remain unresolved.
 
-`--with-worker` spawns the worker as an independent OS process that survives dashboard exit. This is intentional (don't kill running executions when closing the dashboard), but causes problems:
-- Stale workers running old code after rebuild
-- Multiple orphaned workers accumulating
-- Heartbeat guard prevents new worker spawn when stale worker is still alive
+Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `execution_timeout_secs`) then exits cleanly. The dashboard waits up to 10s for the worker to exit before returning.
 
-**Workaround:** Manually kill worker processes before restarting: `pgrep -fl aster_orch` then `kill <pid>`.
-
-**Planned fix:** Graceful shutdown — dashboard sends SIGTERM on exit, worker finishes current execution then exits. Or embed worker in-process (same tokio runtime).
+**Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state, but the stale worker process must be killed manually.

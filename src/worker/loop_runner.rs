@@ -24,6 +24,23 @@ use crate::store::Store;
 
 use super::executor::{execute_trigger, TriggerOutput};
 
+/// Wait for a shutdown signal (SIGTERM or Ctrl+C).
+async fn shutdown_signal() {
+    let ctrl_c = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to register SIGTERM handler");
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = sigterm.recv() => {},
+        }
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await.ok();
+}
+
 /// Worker runner configuration.
 pub struct WorkerRunner {
     config: ConfigHandle,
@@ -44,7 +61,7 @@ impl WorkerRunner {
         }
     }
 
-    /// Run the worker loop. This never returns unless cancelled.
+    /// Run the worker loop. Returns when a shutdown signal is received or cancelled.
     pub async fn run(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Read startup-only config values once.
         let startup_config = self.config.load();
@@ -91,6 +108,9 @@ impl WorkerRunner {
             Duration::from_secs(60),
         );
 
+        // Create the shutdown signal future once before the loop.
+        let mut shutdown = std::pin::pin!(shutdown_signal());
+
         loop {
             tokio::select! {
                 _ = poll_interval.tick() => {
@@ -116,8 +136,39 @@ impl WorkerRunner {
                         _ => {}
                     }
                 }
+                _ = &mut shutdown => {
+                    tracing::info!("received shutdown signal, draining in-flight executions...");
+                    break;
+                }
             }
         }
+
+        // Drain in-flight executions by waiting for all semaphore permits to
+        // become available (meaning no tasks are running).
+        //
+        // `max_permits` must use the startup value (matches semaphore capacity,
+        // which is fixed at startup). `drain_timeout` reads live config — safe
+        // because it's independent of semaphore capacity.
+        let max_permits =
+            u32::try_from(max_concurrent).expect("max_concurrent_triggers exceeds u32::MAX");
+        let config = self.config.load();
+        let drain_timeout = Duration::from_secs(config.orchestration.execution_timeout_secs);
+
+        tracing::info!(
+            drain_timeout_secs = drain_timeout.as_secs(),
+            "waiting for in-flight executions to complete..."
+        );
+
+        match tokio::time::timeout(drain_timeout, semaphore.acquire_many(max_permits)).await {
+            Ok(Ok(_)) => tracing::info!("all executions drained, shutting down cleanly"),
+            Ok(Err(_)) => tracing::warn!("semaphore closed during drain"),
+            Err(_) => tracing::warn!(
+                "drain timeout after {}s, some executions may still be running",
+                drain_timeout.as_secs()
+            ),
+        }
+
+        Ok(())
     }
 
     async fn poll_once(&self, semaphore: &Arc<Semaphore>) {

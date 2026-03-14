@@ -331,14 +331,45 @@ async fn run_dashboard(
     })
     .await;
 
-    // The worker runs as its own process — no cleanup needed here.
+    // Send SIGTERM to the worker for graceful shutdown.
     if let Some(pid) = worker_pid {
-        eprintln!(
-            "dashboard exited; worker process (PID: {}) continues running",
-            pid
-        );
-        eprintln!("worker log: {}", worker_log_path.display());
-        eprintln!("to stop it: kill {}", pid);
+        #[cfg(unix)]
+        {
+            let pid_i32 = pid as i32;
+            unsafe {
+                libc::kill(pid_i32, libc::SIGTERM);
+            }
+            eprintln!(
+                "sent SIGTERM to worker (PID: {}), waiting for graceful shutdown...",
+                pid
+            );
+
+            // Wait up to 10s for the worker to exit.
+            let mut exited = false;
+            for _ in 0..20 {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                if unsafe { libc::kill(pid_i32, 0) } != 0 {
+                    exited = true;
+                    break;
+                }
+            }
+
+            if exited {
+                eprintln!("worker shut down cleanly");
+            } else {
+                eprintln!("worker still running after 10s — it may be draining executions");
+                eprintln!("worker log: {}", worker_log_path.display());
+                eprintln!("to force kill: kill -9 {}", pid);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            eprintln!(
+                "dashboard exited; worker (PID: {}) may still be running",
+                pid
+            );
+            eprintln!("to stop it: taskkill /PID {}", pid);
+        }
     } else if with_worker {
         // Pre-existing worker was detected at startup; remind user it's still running.
         eprintln!("dashboard exited; pre-existing worker is still running");

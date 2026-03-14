@@ -55,3 +55,18 @@ Extracted aster-orch from aster as a fully independent repository with its own d
 - `make dashboard-dev` runs the dashboard with an embedded worker on the dev DB.
 
 **Trade-off:** Loses the convenience of `cargo test -p aster-orch` from the aster workspace. Gained: independent git history, parallel ticket sessions, no submodule friction, self-contained dev infrastructure.
+
+## ADR-007: Graceful worker shutdown via SIGTERM + semaphore drain
+
+**Date:** 2026-03
+**Status:** Active
+
+`--with-worker` previously spawned the worker as a fully independent OS process (`process_group(0)`, `kill_on_drop(false)`) that survived dashboard exit indefinitely. This caused orphaned workers running stale code after rebuilds, and heartbeat guards preventing new workers from spawning.
+
+**Decision:** Dashboard sends SIGTERM to the worker on exit. Worker handles SIGTERM (and SIGINT) by breaking its poll loop and draining in-flight executions via semaphore permit acquisition with a timeout of `execution_timeout_secs`.
+
+**Alternatives considered:**
+- Kill worker immediately on dashboard exit — rejected because it kills running agent executions mid-task.
+- Embed worker in-process (same tokio runtime) — rejected because dashboard exit always kills the worker, even during long executions.
+
+**Accepted residual risk:** If the dashboard crashes (SIGKILL, panic) before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state; the stale process must be killed manually. This is the same behavior as before — the fix only covers the clean exit path.
