@@ -333,7 +333,10 @@ async fn run_dashboard(
 
     // The worker runs as its own process — no cleanup needed here.
     if let Some(pid) = worker_pid {
-        eprintln!("dashboard exited; worker process (PID: {}) continues running", pid);
+        eprintln!(
+            "dashboard exited; worker process (PID: {}) continues running",
+            pid
+        );
         eprintln!("worker log: {}", worker_log_path.display());
         eprintln!("to stop it: kill {}", pid);
     } else if with_worker {
@@ -352,7 +355,10 @@ async fn run_dashboard(
 ///
 /// A heartbeat is "recent" if it was written at most `max_age_secs` seconds
 /// ago. Tolerates up to 5 s of forward clock skew.
-fn is_worker_alive(heartbeat: &Option<(String, i64, i64, Option<String>)>, max_age_secs: i64) -> bool {
+fn is_worker_alive(
+    heartbeat: &Option<(String, i64, i64, Option<String>)>,
+    max_age_secs: i64,
+) -> bool {
     match heartbeat {
         Some((_, last_beat_at, _, _)) => {
             let now_unix = std::time::SystemTime::now()
@@ -560,7 +566,9 @@ async fn run_wait(
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_config_path, is_worker_alive, WORKER_HEARTBEAT_MAX_AGE_SECS, Cli, Commands};
+    use super::{
+        effective_config_path, is_worker_alive, Cli, Commands, WORKER_HEARTBEAT_MAX_AGE_SECS,
+    };
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -791,7 +799,12 @@ mod tests {
     }
 
     fn heartbeat_at(ts: i64) -> Option<(String, i64, i64, Option<String>)> {
-        Some(("worker-1".to_string(), ts, ts - 100, Some("0.2.0".to_string())))
+        Some((
+            "worker-1".to_string(),
+            ts,
+            ts - 100,
+            Some("0.2.0".to_string()),
+        ))
     }
 
     #[test]
