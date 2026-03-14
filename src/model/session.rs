@@ -8,6 +8,11 @@ pub struct Session {
     pub agent_alias: String,
     pub backend: String,
     pub started_at: DateTime<Utc>,
+    /// Backend-specific session ID for resuming a prior CLI session.
+    /// When `Some`, the backend should pass the appropriate resume flag
+    /// (e.g. `-r` for Claude, `resume <id>` for Codex, `-s` for OpenCode).
+    #[serde(default)]
+    pub resume_session_id: Option<String>,
 }
 
 /// Status of an agent session.

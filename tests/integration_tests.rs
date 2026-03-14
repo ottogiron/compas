@@ -42,6 +42,7 @@ impl Backend for StubBackend {
             agent_alias: agent.alias.clone(),
             backend: "stub".to_string(),
             started_at: chrono::Utc::now(),
+            resume_session_id: None,
         })
     }
 

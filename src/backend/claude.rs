@@ -123,6 +123,7 @@ impl Backend for ClaudeCodeBackend {
             agent_alias: agent.alias.clone(),
             backend: "claude".into(),
             started_at: Utc::now(),
+            resume_session_id: None,
         })
     }
 
@@ -134,10 +135,9 @@ impl Backend for ClaudeCodeBackend {
     ) -> Result<TriggerResult> {
         let instruction = instruction.unwrap_or("Check inbox and process pending tasks.");
 
-        // Only resume if we have a real Claude session ID (from a previous trigger's output).
-        // Our internally-generated UUIDs are not valid Claude session IDs.
-        let real_sid = self.tracker.get_real_session_id(&session.id);
-        let resume_id = real_sid.as_deref();
+        // Use the DB-persisted real Claude session ID when available so the
+        // agent picks up its conversation history from the prior dispatch.
+        let resume_id = session.resume_session_id.as_deref();
 
         let args = Self::build_args(agent, instruction, resume_id)?;
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
@@ -179,11 +179,6 @@ impl Backend for ClaudeCodeBackend {
                     }
                     Err(_) => (String::from_utf8_lossy(&out.stdout).to_string(), None),
                 };
-
-                // Store real session ID for future resume
-                if let Some(ref real_sid) = real_session_id {
-                    self.tracker.set_real_session_id(&session.id, real_sid);
-                }
 
                 // Consider the trigger successful if we got valid JSON output
                 // with a result field, even if the exit code was non-zero.

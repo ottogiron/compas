@@ -108,6 +108,7 @@ impl Backend for GeminiBackend {
             agent_alias: agent.alias.clone(),
             backend: "gemini".into(),
             started_at: Utc::now(),
+            resume_session_id: None,
         })
     }
 

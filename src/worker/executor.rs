@@ -132,6 +132,23 @@ pub async fn execute_trigger(
         log_path,
     };
 
+    // Look up the last backend session ID for this thread+agent so the backend
+    // can resume the prior CLI session and preserve conversational context.
+    let resume_session_id = match store
+        .get_last_backend_session_id(&thread_id, &agent_alias)
+        .await
+    {
+        Ok(sid) => sid,
+        Err(e) => {
+            tracing::warn!(
+                exec_id = %exec_id,
+                error = %e,
+                "failed to query last backend session ID — starting fresh session"
+            );
+            None
+        }
+    };
+
     // Start a session then trigger — all inside spawn_blocking
     let instruction = instruction.to_string();
     let start = Instant::now();
@@ -141,10 +158,11 @@ pub async fn execute_trigger(
         // Use Handle::current() which was captured before spawn_blocking.
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
-            let session = backend
+            let mut session = backend
                 .start_session(&agent)
                 .await
                 .map_err(|e| e.to_string())?;
+            session.resume_session_id = resume_session_id;
             backend
                 .trigger(&agent, &session, Some(&instruction))
                 .await
@@ -182,6 +200,21 @@ pub async fn execute_trigger(
                         tracing::warn!(exec_id = %exec_id, error = %e, "complete_execution failed");
                     }
                     _ => {}
+                }
+
+                // Persist the backend session ID so the next dispatch to this
+                // thread+agent can resume the same CLI session.
+                if !result.session_id.is_empty() {
+                    if let Err(e) = store
+                        .set_backend_session_id(&exec_id, &result.session_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            exec_id = %exec_id,
+                            error = %e,
+                            "failed to persist backend session ID"
+                        );
+                    }
                 }
             } else {
                 match store

@@ -36,8 +36,18 @@ impl OpenCodeBackend {
         }
     }
 
-    fn build_args(agent: &Agent, instruction: &str) -> Result<Vec<String>> {
+    fn build_args(
+        agent: &Agent,
+        instruction: &str,
+        resume_session_id: Option<&str>,
+    ) -> Result<Vec<String>> {
         let mut args = vec!["run".to_string()];
+
+        // Resume an existing session when the DB provides one.
+        if let Some(sid) = resume_session_id {
+            args.push("-s".to_string());
+            args.push(sid.to_string());
+        }
 
         // Model
         if let Some(ref model) = agent.model {
@@ -170,6 +180,7 @@ impl Backend for OpenCodeBackend {
             agent_alias: agent.alias.clone(),
             backend: "opencode".into(),
             started_at: Utc::now(),
+            resume_session_id: None,
         })
     }
 
@@ -181,7 +192,7 @@ impl Backend for OpenCodeBackend {
     ) -> Result<TriggerResult> {
         let instruction = instruction.unwrap_or("Check inbox and process pending tasks.");
 
-        let args = Self::build_args(agent, instruction)?;
+        let args = Self::build_args(agent, instruction, session.resume_session_id.as_deref())?;
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let timeout = agent
@@ -203,15 +214,16 @@ impl Backend for OpenCodeBackend {
 
         match output {
             Ok(out) => {
-                // Clean up the OpenCode-side session to prevent accumulation.
-                if let Some(oc_sid) = Self::extract_session_id_from_output(&out.stdout) {
-                    Self::cleanup_session(&oc_sid, self.workdir.as_deref());
-                }
-
                 let output_text = extract_output_text(&out);
+                // Extract the OpenCode session ID to persist in the DB so future
+                // dispatches to this thread+agent resume the same session.
+                // We do NOT clean up dispatch sessions — they need to persist
+                // for resumption. Only ping sessions (below) are cleaned up.
+                let session_id = Self::extract_session_id_from_output(&out.stdout)
+                    .unwrap_or_else(|| session.id.clone());
 
                 Ok(TriggerResult {
-                    session_id: session.id.clone(),
+                    session_id,
                     success: out.status.success(),
                     output: Some(output_text),
                 })
@@ -300,7 +312,7 @@ mod tests {
     #[test]
     fn test_build_args_new_session() {
         let agent = test_agent();
-        let args = OpenCodeBackend::build_args(&agent, "do work").unwrap();
+        let args = OpenCodeBackend::build_args(&agent, "do work", None).unwrap();
 
         assert_eq!(args[0], "run");
         assert!(args.contains(&"-m".to_string()));
@@ -315,7 +327,17 @@ mod tests {
     #[test]
     fn test_build_args_resume_session() {
         let agent = test_agent();
-        let args = OpenCodeBackend::build_args(&agent, "continue").unwrap();
+        let args = OpenCodeBackend::build_args(&agent, "continue", Some("ses_abc123")).unwrap();
+
+        assert!(args.contains(&"-s".to_string()));
+        assert!(args.contains(&"ses_abc123".to_string()));
+        assert!(args.contains(&"continue".to_string()));
+    }
+
+    #[test]
+    fn test_build_args_no_resume_session() {
+        let agent = test_agent();
+        let args = OpenCodeBackend::build_args(&agent, "continue", None).unwrap();
 
         assert!(!args.contains(&"-s".to_string()));
         assert!(args.contains(&"continue".to_string()));
@@ -325,7 +347,7 @@ mod tests {
     fn test_build_args_with_full_prompt_inlines_guidance() {
         let mut agent = test_agent();
         agent.prompt = Some("You are GLM5.\nFollow AGENTS.md.".into());
-        let args = OpenCodeBackend::build_args(&agent, "do work").unwrap();
+        let args = OpenCodeBackend::build_args(&agent, "do work", None).unwrap();
 
         assert!(!args.contains(&"--agent".to_string()));
         let last = args.last().expect("instruction should exist");
@@ -353,7 +375,7 @@ mod tests {
     fn test_build_args_with_backend_args() {
         let mut agent = test_agent();
         agent.backend_args = Some(vec!["--sandbox".into(), "workspace-write".into()]);
-        let args = OpenCodeBackend::build_args(&agent, "task").unwrap();
+        let args = OpenCodeBackend::build_args(&agent, "task", None).unwrap();
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
     }

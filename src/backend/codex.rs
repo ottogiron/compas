@@ -11,6 +11,7 @@ use super::{Backend, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus, TriggerResult};
+use serde_json::Value;
 
 /// Codex CLI backend.
 ///
@@ -33,14 +34,14 @@ impl CodexBackend {
     fn build_args(
         agent: &Agent,
         instruction: &str,
-        resume: bool,
+        resume_session_id: Option<&str>,
         workdir: Option<&PathBuf>,
     ) -> Vec<String> {
         let mut args = vec!["exec".to_string()];
 
-        if resume {
+        if let Some(thread_id) = resume_session_id {
             args.push("resume".to_string());
-            args.push("--last".to_string());
+            args.push(thread_id.to_string());
         }
 
         // Model
@@ -70,6 +71,31 @@ impl CodexBackend {
         args.push(instruction.to_string());
 
         args
+    }
+
+    /// Extract the Codex thread ID from JSONL output.
+    ///
+    /// Codex emits a `{"type":"thread.started","thread_id":"..."}` event on
+    /// the first line of every session. We use this as the backend session ID
+    /// so future dispatches can resume via `codex exec resume <thread_id>`.
+    fn extract_thread_id_from_output(stdout: &[u8]) -> Option<String> {
+        let text = String::from_utf8_lossy(stdout);
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(line) {
+                if val.get("type").and_then(|t| t.as_str()) == Some("thread.started") {
+                    if let Some(tid) = val.get("thread_id").and_then(|v| v.as_str()) {
+                        if !tid.is_empty() {
+                            return Some(tid.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn build_ping_args(agent: &Agent) -> Vec<String> {
@@ -104,6 +130,7 @@ impl Backend for CodexBackend {
             agent_alias: agent.alias.clone(),
             backend: "codex".into(),
             started_at: Utc::now(),
+            resume_session_id: None,
         })
     }
 
@@ -115,9 +142,14 @@ impl Backend for CodexBackend {
     ) -> Result<TriggerResult> {
         let instruction = instruction.unwrap_or("Check inbox and process pending tasks.");
 
-        // Use resume for existing sessions (not the first trigger)
-        let is_resume = false; // First trigger is always a new exec
-        let args = Self::build_args(agent, instruction, is_resume, self.workdir.as_ref());
+        // Resume the prior Codex session when the DB provided a thread_id from
+        // a previous completed execution for this thread+agent.
+        let args = Self::build_args(
+            agent,
+            instruction,
+            session.resume_session_id.as_deref(),
+            self.workdir.as_ref(),
+        );
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
         let timeout = agent
@@ -140,9 +172,14 @@ impl Backend for CodexBackend {
         match output {
             Ok(out) => {
                 let output_text = extract_output_text(&out);
+                // Use the Codex thread_id as the session ID so the next
+                // dispatch for this thread+agent can resume via
+                // `codex exec resume <thread_id>`.
+                let session_id = Self::extract_thread_id_from_output(&out.stdout)
+                    .unwrap_or_else(|| session.id.clone());
 
                 Ok(TriggerResult {
-                    session_id: session.id.clone(),
+                    session_id,
                     success: out.status.success(),
                     output: Some(output_text),
                 })
@@ -227,7 +264,7 @@ mod tests {
     fn test_build_args_new_session() {
         let agent = test_agent();
         let workdir = PathBuf::from("/home/user/project");
-        let args = CodexBackend::build_args(&agent, "implement X", false, Some(&workdir));
+        let args = CodexBackend::build_args(&agent, "implement X", None, Some(&workdir));
 
         assert_eq!(args[0], "exec");
         assert!(args.contains(&"-m".to_string()));
@@ -242,17 +279,17 @@ mod tests {
     #[test]
     fn test_build_args_resume() {
         let agent = test_agent();
-        let args = CodexBackend::build_args(&agent, "continue", true, None);
+        let args = CodexBackend::build_args(&agent, "continue", Some("thread-abc-123"), None);
 
         assert_eq!(args[0], "exec");
         assert_eq!(args[1], "resume");
-        assert_eq!(args[2], "--last");
+        assert_eq!(args[2], "thread-abc-123");
     }
 
     #[test]
     fn test_build_args_no_workdir() {
         let agent = test_agent();
-        let args = CodexBackend::build_args(&agent, "task", false, None);
+        let args = CodexBackend::build_args(&agent, "task", None, None);
 
         assert!(!args.contains(&"-C".to_string()));
     }
@@ -261,7 +298,7 @@ mod tests {
     fn test_build_args_with_backend_args() {
         let mut agent = test_agent();
         agent.backend_args = Some(vec!["--sandbox".into(), "workspace-write".into()]);
-        let args = CodexBackend::build_args(&agent, "task", false, None);
+        let args = CodexBackend::build_args(&agent, "task", None, None);
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
     }
@@ -312,6 +349,27 @@ mod tests {
 {"type":"turn.completed"}"#,
         );
         assert_eq!(extract_output_text(&out), "task complete");
+    }
+
+    #[test]
+    fn test_extract_thread_id_from_output_found() {
+        let stdout =
+            b"{\"type\":\"thread.started\",\"thread_id\":\"019c5d27-abc\"}\n{\"type\":\"turn.started\"}";
+        assert_eq!(
+            CodexBackend::extract_thread_id_from_output(stdout),
+            Some("019c5d27-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_thread_id_from_output_not_found() {
+        let stdout = b"{\"type\":\"turn.started\"}\n{\"type\":\"turn.completed\"}";
+        assert_eq!(CodexBackend::extract_thread_id_from_output(stdout), None);
+    }
+
+    #[test]
+    fn test_extract_thread_id_from_output_empty() {
+        assert_eq!(CodexBackend::extract_thread_id_from_output(b""), None);
     }
 
     #[test]

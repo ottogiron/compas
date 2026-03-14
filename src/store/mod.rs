@@ -228,20 +228,21 @@ impl Store {
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS executions (
-                id             TEXT PRIMARY KEY,
-                thread_id      TEXT NOT NULL,
-                agent_alias    TEXT NOT NULL,
+                id                  TEXT PRIMARY KEY,
+                thread_id           TEXT NOT NULL,
+                agent_alias         TEXT NOT NULL,
                 dispatch_message_id INTEGER,
-                status         TEXT NOT NULL DEFAULT 'queued',
-                queued_at      INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-                picked_up_at   INTEGER,
-                started_at     INTEGER,
-                finished_at    INTEGER,
-                duration_ms    INTEGER,
-                exit_code      INTEGER,
-                output_preview TEXT,
-                error_detail   TEXT,
-                parsed_intent  TEXT
+                status              TEXT NOT NULL DEFAULT 'queued',
+                queued_at           INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                picked_up_at        INTEGER,
+                started_at          INTEGER,
+                finished_at         INTEGER,
+                duration_ms         INTEGER,
+                exit_code           INTEGER,
+                output_preview      TEXT,
+                error_detail        TEXT,
+                parsed_intent       TEXT,
+                backend_session_id  TEXT
             )",
         )
         .execute(&self.pool)
@@ -267,6 +268,12 @@ impl Store {
         let has_dispatch_message_id = columns.iter().any(|c| c.1 == "dispatch_message_id");
         if !has_dispatch_message_id {
             sqlx::query("ALTER TABLE executions ADD COLUMN dispatch_message_id INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_backend_session_id = columns.iter().any(|c| c.1 == "backend_session_id");
+        if !has_backend_session_id {
+            sqlx::query("ALTER TABLE executions ADD COLUMN backend_session_id TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -1191,6 +1198,44 @@ impl Store {
         .await?;
         Ok(row.map(row_to_execution))
     }
+
+    /// Retrieve the backend-specific session ID from the most recent completed
+    /// execution for a given thread+agent pair.
+    ///
+    /// Used by the executor to resume a prior CLI session rather than starting
+    /// a fresh one on every dispatch.
+    pub async fn get_last_backend_session_id(
+        &self,
+        thread_id: &str,
+        agent_alias: &str,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT backend_session_id FROM executions
+             WHERE thread_id = ? AND agent_alias = ? AND backend_session_id IS NOT NULL
+               AND status = 'completed'
+             ORDER BY finished_at DESC, id DESC LIMIT 1",
+        )
+        .bind(thread_id)
+        .bind(agent_alias)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Persist the backend-specific session ID for an execution so future
+    /// dispatches to the same thread+agent can resume it.
+    pub async fn set_backend_session_id(
+        &self,
+        execution_id: &str,
+        session_id: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE executions SET backend_session_id = ? WHERE id = ?")
+            .bind(session_id)
+            .bind(execution_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
 }
 
 /// Combined thread + execution view.
@@ -1543,5 +1588,110 @@ mod tests {
             .unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].agent_alias.as_deref(), Some("focused"));
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_backend_session_id() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .complete_execution(&exec_id, Some(0), Some("ok"), None, 1000)
+            .await
+            .unwrap();
+
+        // No session ID persisted yet.
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid, None);
+
+        // Persist a session ID.
+        store
+            .set_backend_session_id(&exec_id, "claude-sid-abc")
+            .await
+            .unwrap();
+
+        // Should now be retrievable.
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid.as_deref(), Some("claude-sid-abc"));
+    }
+
+    #[tokio::test]
+    async fn test_get_last_backend_session_id_returns_latest() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // First execution for thread t-1, agent focused.
+        let exec_id_1 = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id_1).await.unwrap();
+        store
+            .complete_execution(&exec_id_1, Some(0), Some("ok"), None, 1000)
+            .await
+            .unwrap();
+        store
+            .set_backend_session_id(&exec_id_1, "claude-sid-first")
+            .await
+            .unwrap();
+
+        // Second execution for the same thread+agent.
+        let exec_id_2 = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id_2).await.unwrap();
+        store
+            .complete_execution(&exec_id_2, Some(0), Some("ok"), None, 1000)
+            .await
+            .unwrap();
+        store
+            .set_backend_session_id(&exec_id_2, "claude-sid-latest")
+            .await
+            .unwrap();
+
+        // get_last_backend_session_id must return the latest completed one.
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid.as_deref(), Some("claude-sid-latest"));
+    }
+
+    #[tokio::test]
+    async fn test_get_last_backend_session_id_ignores_failed_executions() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // An execution that failed with a backend_session_id set.
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .fail_execution(
+                &exec_id,
+                "some error",
+                Some(1),
+                500,
+                ExecutionStatus::Failed,
+            )
+            .await
+            .unwrap();
+        store
+            .set_backend_session_id(&exec_id, "claude-sid-failed")
+            .await
+            .unwrap();
+
+        // Should not return session IDs from failed executions.
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid, None);
     }
 }
