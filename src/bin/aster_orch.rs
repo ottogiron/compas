@@ -228,7 +228,8 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     // Start config file watcher and get a live-reloadable handle.
     let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
 
-    let runner = WorkerRunner::new(config_handle, store, backend_registry);
+    let event_bus = aster_orch::events::EventBus::new();
+    let runner = WorkerRunner::new(config_handle, store, backend_registry, event_bus);
 
     tracing::info!(
         db = %db_path.display(),
@@ -327,6 +328,7 @@ async fn run_dashboard(
             resolved_config_path,
             handle,
             poll_interval,
+            None, // event_bus: worker runs as separate process
         )
     })
     .await;

@@ -10,6 +10,7 @@
 //! 3. For each claimed execution, spawns a task to run the backend trigger
 //! 4. Writes periodic heartbeats
 //! 5. Inserts reply messages from completed triggers
+//! 6. Emits `OrchestratorEvent`s on all state transitions
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,6 +21,7 @@ use tokio::sync::Semaphore;
 use crate::backend::registry::BackendRegistry;
 use crate::config::types::AgentRole;
 use crate::config::ConfigHandle;
+use crate::events::{EventBus, OrchestratorEvent};
 use crate::store::Store;
 
 use super::executor::{execute_trigger, TriggerOutput};
@@ -47,10 +49,16 @@ pub struct WorkerRunner {
     store: Store,
     backend_registry: Arc<BackendRegistry>,
     worker_id: String,
+    event_bus: EventBus,
 }
 
 impl WorkerRunner {
-    pub fn new(config: ConfigHandle, store: Store, backend_registry: BackendRegistry) -> Self {
+    pub fn new(
+        config: ConfigHandle,
+        store: Store,
+        backend_registry: BackendRegistry,
+        event_bus: EventBus,
+    ) -> Self {
         let worker_id = format!("worker-{}", std::process::id());
 
         Self {
@@ -58,6 +66,7 @@ impl WorkerRunner {
             store,
             backend_registry: Arc::new(backend_registry),
             worker_id,
+            event_bus,
         }
     }
 
@@ -171,7 +180,11 @@ impl WorkerRunner {
         Ok(())
     }
 
-    async fn poll_once(&self, semaphore: &Arc<Semaphore>) {
+    /// Poll for queued executions and spawn trigger tasks for any that are claimed.
+    ///
+    /// `pub` so integration tests in `tests/` can drive the worker directly without
+    /// starting the full poll loop.
+    pub async fn poll_once(&self, semaphore: &Arc<Semaphore>) {
         // Read live-reloadable config values each poll cycle.
         let config = self.config.load();
         let max_per_agent = config.orchestration.max_triggers_per_agent;
@@ -200,6 +213,13 @@ impl WorkerRunner {
                         "claimed execution"
                     );
 
+                    // Emit ExecutionStarted before spawning.
+                    self.event_bus.emit(OrchestratorEvent::ExecutionStarted {
+                        execution_id: execution.id.clone(),
+                        thread_id: execution.thread_id.clone(),
+                        agent_alias: execution.agent_alias.clone(),
+                    });
+
                     // Get the instruction from the latest dispatch message on this thread
                     let store = self.store.clone();
                     let backend_registry = self.backend_registry.clone();
@@ -210,6 +230,7 @@ impl WorkerRunner {
                         trigger_config.orchestration.execution_timeout_secs;
                     let log_dir = Some(trigger_config.log_dir());
                     let thread_id = execution.thread_id.clone();
+                    let event_bus = self.event_bus.clone();
 
                     tokio::spawn(async move {
                         let _permit = permit; // held until task completes
@@ -260,8 +281,8 @@ impl WorkerRunner {
                         )
                         .await;
 
-                        // Post-execution: insert reply message if we got output
-                        handle_trigger_output(&store, &output).await;
+                        // Post-execution: insert reply message and emit events.
+                        handle_trigger_output(&store, &event_bus, &output).await;
                     });
                 }
                 Ok(None) => {
@@ -368,8 +389,10 @@ fn prune_log_files(log_dir: &Path, retention_count: usize) {
     }
 }
 
-/// Insert a reply message from the agent after trigger completion.
-async fn handle_trigger_output(store: &Store, output: &TriggerOutput) {
+/// Insert a reply message from the agent after trigger completion, and emit
+/// events for `ExecutionCompleted`, `ThreadStatusChanged` (on failure), and
+/// `MessageReceived`.
+async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &TriggerOutput) {
     let reply_intent = if output.success {
         output.parsed_intent.as_deref().unwrap_or("status-update")
     } else {
@@ -382,7 +405,29 @@ async fn handle_trigger_output(store: &Store, output: &TriggerOutput) {
         "(failed with no output)"
     });
 
-    if let Err(e) = store
+    // Emit ExecutionCompleted before inserting the reply message.
+    event_bus.emit(OrchestratorEvent::ExecutionCompleted {
+        execution_id: output.execution_id.clone(),
+        thread_id: output.thread_id.clone(),
+        agent_alias: output.agent_alias.clone(),
+        success: output.success,
+        duration_ms: output.duration_ms,
+    });
+
+    // Emit ThreadStatusChanged for both success and failure paths so all
+    // consumers get push notification regardless of outcome.
+    let thread_status = if output.success {
+        "Active" // thread stays Active after a successful execution; operator closes it
+    } else {
+        "Failed"
+    };
+    event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+        thread_id: output.thread_id.clone(),
+        new_status: thread_status.to_string(),
+    });
+
+    // Insert the reply message and emit MessageReceived on success.
+    match store
         .insert_message(
             &output.thread_id,
             &output.agent_alias,
@@ -393,11 +438,21 @@ async fn handle_trigger_output(store: &Store, output: &TriggerOutput) {
         )
         .await
     {
-        tracing::error!(
-            thread_id = %output.thread_id,
-            error = %e,
-            "failed to insert reply message"
-        );
+        Ok(message_id) => {
+            event_bus.emit(OrchestratorEvent::MessageReceived {
+                thread_id: output.thread_id.clone(),
+                message_id,
+                from_alias: output.agent_alias.clone(),
+                intent: reply_intent.to_string(),
+            });
+        }
+        Err(e) => {
+            tracing::error!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "failed to insert reply message"
+            );
+        }
     }
 
     tracing::info!(
