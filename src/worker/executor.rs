@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::backend::registry::BackendRegistry;
+use crate::backend::BackendOutput;
 use crate::config::types::AgentConfig;
 use crate::model::agent::Agent;
-use crate::model::session::TriggerResult;
 use crate::store::{ExecutionRow, ExecutionStatus, Store};
 
 /// Result of running a trigger execution.
@@ -153,7 +153,7 @@ pub async fn execute_trigger(
     let instruction = instruction.to_string();
     let start = Instant::now();
 
-    let trigger_result: Result<TriggerResult, String> = tokio::task::spawn_blocking(move || {
+    let trigger_result: Result<BackendOutput, String> = tokio::task::spawn_blocking(move || {
         // We need a runtime handle to call async methods from blocking context.
         // Use Handle::current() which was captured before spawn_blocking.
         let rt = tokio::runtime::Handle::current();
@@ -176,8 +176,9 @@ pub async fn execute_trigger(
 
     match trigger_result {
         Ok(result) => {
-            let output_text = result.output.clone().unwrap_or_default();
-            let parsed_intent = parse_intent_from_output(&output_text);
+            // Intent is already parsed by the backend — no executor-side parsing needed.
+            let parsed_intent = result.parsed_intent.clone();
+            let output_text = result.result_text.clone();
 
             if result.success {
                 match store
@@ -204,16 +205,18 @@ pub async fn execute_trigger(
 
                 // Persist the backend session ID so the next dispatch to this
                 // thread+agent can resume the same CLI session.
-                if !result.session_id.is_empty() {
-                    if let Err(e) = store
-                        .set_backend_session_id(&exec_id, &result.session_id)
-                        .await
-                    {
-                        tracing::warn!(
-                            exec_id = %exec_id,
-                            error = %e,
-                            "failed to persist backend session ID"
-                        );
+                if let Some(ref backend_session_id) = result.session_id {
+                    if !backend_session_id.is_empty() {
+                        if let Err(e) = store
+                            .set_backend_session_id(&exec_id, backend_session_id)
+                            .await
+                        {
+                            tracing::warn!(
+                                exec_id = %exec_id,
+                                error = %e,
+                                "failed to persist backend session ID"
+                            );
+                        }
                     }
                 }
             } else {
@@ -246,7 +249,7 @@ pub async fn execute_trigger(
                 thread_id,
                 agent_alias,
                 success: result.success,
-                output: result.output,
+                output: Some(output_text),
                 exit_code: if result.success { Some(0) } else { Some(1) },
                 duration_ms,
                 parsed_intent,
@@ -279,31 +282,6 @@ pub async fn execute_trigger(
     }
 }
 
-/// Try to parse structured intent from agent output.
-///
-/// Agents can embed JSON like `{"intent": "status-update", "to": "operator", "body": "..."}`
-/// in their output text. We look for this pattern.
-fn parse_intent_from_output(text: &str) -> Option<String> {
-    // Try parsing the entire text as JSON
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text) {
-        if let Some(intent) = val.get("intent").and_then(|v| v.as_str()) {
-            return Some(intent.to_string());
-        }
-    }
-    // Try finding embedded JSON in the text (last {...} block)
-    if let Some(start) = text.rfind('{') {
-        if let Some(end) = text[start..].rfind('}') {
-            let candidate = &text[start..=start + end];
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
-                if let Some(intent) = val.get("intent").and_then(|v| v.as_str()) {
-                    return Some(intent.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -315,29 +293,6 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_intent_json() {
-        let text = r#"{"intent": "status-update", "to": "operator", "body": "Done"}"#;
-        assert_eq!(
-            parse_intent_from_output(text),
-            Some("status-update".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_intent_embedded() {
-        let text = r#"I finished the task. {"intent": "completion", "to": "lead"}"#;
-        assert_eq!(
-            parse_intent_from_output(text),
-            Some("completion".to_string())
-        );
-    }
-
-    #[test]
-    fn test_parse_intent_none() {
-        assert_eq!(parse_intent_from_output("just plain text"), None);
-    }
 
     #[test]
     fn test_truncate() {

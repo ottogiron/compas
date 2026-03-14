@@ -7,10 +7,10 @@ use uuid::Uuid;
 use super::process::{
     kill_process, parse_json_output, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{Backend, PingResult};
+use super::{parse_intent_from_text, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
-use crate::model::session::{Session, SessionStatus, TriggerResult};
+use crate::model::session::{Session, SessionStatus};
 
 /// Gemini CLI backend.
 ///
@@ -117,7 +117,7 @@ impl Backend for GeminiBackend {
         agent: &Agent,
         session: &Session,
         instruction: Option<&str>,
-    ) -> Result<TriggerResult> {
+    ) -> Result<BackendOutput> {
         let instruction = instruction.unwrap_or("Check inbox and process pending tasks.");
 
         let args = Self::build_args(agent, instruction)?;
@@ -142,8 +142,9 @@ impl Backend for GeminiBackend {
 
         match output {
             Ok(out) => {
+                let raw_output = String::from_utf8_lossy(&out.stdout).to_string();
                 let json = parse_json_output(&out);
-                let (output_text, real_session_id) = match &json {
+                let (result_text, real_session_id) = match &json {
                     Ok(val) => {
                         // Check "result" first, then "response"
                         let text = val
@@ -160,7 +161,7 @@ impl Backend for GeminiBackend {
                             .map(|s| s.to_string());
                         (text, sid)
                     }
-                    Err(_) => (String::from_utf8_lossy(&out.stdout).to_string(), None),
+                    Err(_) => (raw_output.clone(), None),
                 };
 
                 // Store real session ID for future resume (if we supported stateful resume)
@@ -168,10 +169,14 @@ impl Backend for GeminiBackend {
                     self.tracker.set_real_session_id(&session.id, real_sid);
                 }
 
-                Ok(TriggerResult {
-                    session_id: real_session_id.unwrap_or_else(|| session.id.clone()),
+                let parsed_intent = parse_intent_from_text(&result_text);
+
+                Ok(BackendOutput {
                     success: out.status.success(),
-                    output: Some(output_text),
+                    result_text,
+                    parsed_intent,
+                    session_id: real_session_id,
+                    raw_output,
                 })
             }
             Err(e) => Err(e),

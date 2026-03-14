@@ -7,10 +7,10 @@ use uuid::Uuid;
 use super::process::{
     extract_output_text, kill_process, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{Backend, PingResult};
+use super::{parse_intent_from_text, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
-use crate::model::session::{Session, SessionStatus, TriggerResult};
+use crate::model::session::{Session, SessionStatus};
 use serde_json::Value;
 
 /// Codex CLI backend.
@@ -139,7 +139,7 @@ impl Backend for CodexBackend {
         agent: &Agent,
         session: &Session,
         instruction: Option<&str>,
-    ) -> Result<TriggerResult> {
+    ) -> Result<BackendOutput> {
         let instruction = instruction.unwrap_or("Check inbox and process pending tasks.");
 
         // Resume the prior Codex session when the DB provided a thread_id from
@@ -171,17 +171,20 @@ impl Backend for CodexBackend {
 
         match output {
             Ok(out) => {
-                let output_text = extract_output_text(&out);
+                let raw_output = String::from_utf8_lossy(&out.stdout).to_string();
+                let result_text = extract_output_text(&out);
                 // Use the Codex thread_id as the session ID so the next
                 // dispatch for this thread+agent can resume via
                 // `codex exec resume <thread_id>`.
-                let session_id = Self::extract_thread_id_from_output(&out.stdout)
-                    .unwrap_or_else(|| session.id.clone());
+                let session_id = Self::extract_thread_id_from_output(&out.stdout);
+                let parsed_intent = parse_intent_from_text(&result_text);
 
-                Ok(TriggerResult {
-                    session_id,
+                Ok(BackendOutput {
                     success: out.status.success(),
-                    output: Some(output_text),
+                    result_text,
+                    parsed_intent,
+                    session_id,
+                    raw_output,
                 })
             }
             Err(e) => Err(e),

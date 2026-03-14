@@ -25,7 +25,12 @@ pub enum SessionStatus {
     Crashed,
 }
 
-/// Result of triggering a backend agent.
+/// Legacy result of triggering a backend agent.
+///
+/// Superseded by `crate::backend::BackendOutput` which provides richer fields
+/// (parsed intent, raw output, structured session ID). Kept temporarily for
+/// reference; will be removed in a follow-up cleanup.
+#[deprecated(since = "0.2.0", note = "Use crate::backend::BackendOutput instead")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TriggerResult {
     pub session_id: String,

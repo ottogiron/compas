@@ -10,14 +10,14 @@ use async_trait::async_trait;
 use sqlx::SqlitePool;
 
 use aster_orch::backend::registry::BackendRegistry;
-use aster_orch::backend::{Backend, PingResult};
+use aster_orch::backend::{Backend, BackendOutput, PingResult};
 use aster_orch::config::types::*;
 use aster_orch::config::ConfigHandle;
 use aster_orch::error::Result as OrchResult;
 use aster_orch::mcp::params::*;
 use aster_orch::mcp::server::OrchestratorMcpServer;
 use aster_orch::model::agent::Agent;
-use aster_orch::model::session::{Session, SessionStatus, TriggerResult};
+use aster_orch::model::session::{Session, SessionStatus};
 use aster_orch::store::{ExecutionStatus, Store, ThreadStatus};
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -51,14 +51,14 @@ impl Backend for StubBackend {
         _agent: &Agent,
         session: &Session,
         instruction: Option<&str>,
-    ) -> OrchResult<TriggerResult> {
-        Ok(TriggerResult {
-            session_id: session.id.clone(),
+    ) -> OrchResult<BackendOutput> {
+        let result_text = format!("stub response to: {}", instruction.unwrap_or("(none)"));
+        Ok(BackendOutput {
             success: true,
-            output: Some(format!(
-                "stub response to: {}",
-                instruction.unwrap_or("(none)")
-            )),
+            result_text: result_text.clone(),
+            parsed_intent: None,
+            session_id: Some(session.id.clone()),
+            raw_output: result_text,
         })
     }
 
