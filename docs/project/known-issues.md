@@ -41,3 +41,17 @@ If a persisted backend session ID has expired or been pruned by the provider (ov
 **Workaround:** Abandon the thread and re-dispatch, or close and open a new thread for the same task.
 
 **Planned fix:** Per-backend session-not-found detection — if resume fails with a recognizable error pattern, retry as a fresh session automatically.
+
+## Worker processes orphaned on dashboard exit
+
+**Severity:** Medium
+**Status:** Open
+
+`--with-worker` spawns the worker as an independent OS process that survives dashboard exit. This is intentional (don't kill running executions when closing the dashboard), but causes problems:
+- Stale workers running old code after rebuild
+- Multiple orphaned workers accumulating
+- Heartbeat guard prevents new worker spawn when stale worker is still alive
+
+**Workaround:** Manually kill worker processes before restarting: `pgrep -fl aster_orch` then `kill <pid>`.
+
+**Planned fix:** Graceful shutdown — dashboard sends SIGTERM on exit, worker finishes current execution then exits. Or embed worker in-process (same tokio runtime).
