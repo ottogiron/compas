@@ -1873,13 +1873,17 @@ mod wait_tests {
             .unwrap();
 
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-1".to_string(),
-                intent: None,
-                since_reference: None,
-                strict_new: None,
-                timeout_secs: Some(1),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-1".to_string(),
+                    intent: None,
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1902,13 +1906,17 @@ mod wait_tests {
 
         // Wait without intent/since_reference → auto-exclude dispatch → timeout
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-exc".to_string(),
-                intent: None,
-                since_reference: None,
-                strict_new: None,
-                timeout_secs: Some(1),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-exc".to_string(),
+                    intent: None,
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1945,13 +1953,17 @@ mod wait_tests {
             .unwrap();
 
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-i".to_string(),
-                intent: Some("status-update".to_string()),
-                since_reference: None,
-                strict_new: None,
-                timeout_secs: Some(1),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-i".to_string(),
+                    intent: Some("status-update".to_string()),
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1973,13 +1985,17 @@ mod wait_tests {
 
         let start = std::time::Instant::now();
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-to".to_string(),
-                intent: Some("status-update".to_string()),
-                since_reference: None,
-                strict_new: None,
-                timeout_secs: Some(1),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-to".to_string(),
+                    intent: Some("status-update".to_string()),
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
         let elapsed = start.elapsed();
@@ -2007,13 +2023,17 @@ mod wait_tests {
             .unwrap();
 
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-sr".to_string(),
-                intent: None,
-                since_reference: Some(format!("db:{}", id1)),
-                strict_new: None,
-                timeout_secs: Some(1),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-sr".to_string(),
+                    intent: None,
+                    since_reference: Some(format!("db:{}", id1)),
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2053,13 +2073,17 @@ mod wait_tests {
 
         // Wait should pick up the message once it arrives
         let result = server
-            .wait_impl(WaitParams {
-                thread_id: "t-wait-conc".to_string(),
-                intent: Some("status-update".to_string()),
-                since_reference: None,
-                strict_new: None,
-                timeout_secs: Some(5),
-            })
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-wait-conc".to_string(),
+                    intent: Some("status-update".to_string()),
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(5),
+                },
+                None,
+                None,
+            )
             .await
             .unwrap();
 

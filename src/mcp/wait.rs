@@ -8,6 +8,7 @@ use std::time::Duration;
 use rmcp::model::{CallToolResult, NumberOrString, ProgressNotificationParam, ProgressToken};
 use rmcp::{Peer, RoleServer};
 use serde::Serialize;
+use tracing::debug;
 
 use super::params::WaitParams;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
@@ -22,6 +23,7 @@ impl OrchestratorMcpServer {
         &self,
         params: WaitParams,
         peer: Option<Peer<RoleServer>>,
+        client_progress_token: Option<ProgressToken>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
@@ -40,27 +42,43 @@ impl OrchestratorMcpServer {
         // Spawn a background task that sends progress notifications at regular
         // intervals. This keeps the MCP client from timing out the tool call
         // while we wait for the agent's response.
+        //
+        // Use the client's progress token if provided (spec-compliant), otherwise
+        // generate a stable token for the duration of this wait.
         let progress_handle = if let Some(peer) = peer {
+            let token = client_progress_token.unwrap_or_else(|| {
+                ProgressToken(NumberOrString::String(
+                    format!("orch-wait-{}", thread_id_for_progress).into(),
+                ))
+            });
+            debug!(
+                thread_id = %thread_id_for_progress,
+                token = ?token,
+                "starting progress reporter for orch_wait"
+            );
             Some(tokio::spawn(async move {
                 let mut elapsed = 0u64;
                 loop {
                     tokio::time::sleep(PROGRESS_INTERVAL).await;
                     elapsed += PROGRESS_INTERVAL.as_secs();
 
-                    let param = ProgressNotificationParam::new(
-                        ProgressToken(NumberOrString::Number(elapsed as i64)),
-                        elapsed as f64,
-                    )
-                    .with_total(timeout_secs as f64)
-                    .with_message(format!(
-                        "waiting for message on thread {}... {}/{}s",
-                        thread_id_for_progress, elapsed, timeout_secs
-                    ));
+                    let param = ProgressNotificationParam::new(token.clone(), elapsed as f64)
+                        .with_total(timeout_secs as f64)
+                        .with_message(format!(
+                            "waiting for message on thread {}... {}/{}s",
+                            thread_id_for_progress, elapsed, timeout_secs
+                        ));
+
+                    debug!(elapsed, "sending orch_wait progress notification");
 
                     // Best-effort — if the client disconnects, we'll stop on
                     // the next iteration when the wait itself completes.
-                    if peer.notify_progress(param).await.is_err() {
-                        break;
+                    match peer.notify_progress(param).await {
+                        Ok(_) => debug!(elapsed, "progress notification sent"),
+                        Err(e) => {
+                            debug!(elapsed, error = %e, "progress notification failed, stopping reporter");
+                            break;
+                        }
                     }
                 }
             }))

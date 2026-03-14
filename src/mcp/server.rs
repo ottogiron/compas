@@ -9,7 +9,6 @@ use std::sync::Arc;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::service::RequestContext;
 use rmcp::{tool, tool_handler, tool_router, Peer, RoleServer, ServerHandler};
 use serde::Serialize;
 
@@ -142,9 +141,11 @@ impl OrchestratorMcpServer {
     async fn orch_wait(
         &self,
         Parameters(params): Parameters<WaitParams>,
+        meta: Meta,
         peer: Peer<RoleServer>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.wait_impl(params, peer).await
+        let progress_token = meta.get_progress_token();
+        self.wait_impl(params, Some(peer), progress_token).await
     }
 
     #[tool(
