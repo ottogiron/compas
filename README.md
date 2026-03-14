@@ -1,462 +1,243 @@
 # aster-orch
 
-Agent orchestrator for multi-agent engineering workflows. Coordinates AI coding
-agents (Claude, Codex, Gemini, OpenCode) through an MCP server interface with a
-custom poll-loop background worker for trigger execution.
+Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to AI coding agents, monitor execution in a TUI dashboard, and manage the full lifecycle from your terminal.
 
-`aster-orch` is project-agnostic: Aster uses it, but it can orchestrate agents
-for any repository by pointing `target_repo_root` at that repo.
+Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — point it at any repository.
 
-Replaces the deprecated `aster-orchestrator` crate.
-
-## Architecture
-
-```
-Operator (MCP client)
-    │
-    ▼
-┌─────────────────────────────────────┐
-│  MCP Server  (stdio transport)      │
-│  16 tools: dispatch, status, wait,  │
-│  close, abandon, reopen, ...        │
-│                                     │
-│  ┌───────────┐   ┌───────────────┐  │
-│  │ messages   │   │ executions    │  │
-│  │  table     │   │  table        │  │
-│  └─────┬─────┘   └───────┬───────┘  │
-│        │    SQLite (WAL)  │          │
-└────────┼──────────────────┼──────────┘
-         │                  │
-         │    ┌─────────────┘
-         ▼    ▼
-┌─────────────────────────────────────┐
-│  Worker  (custom poll-loop)         │
-│                                     │
-│  claim_next_execution()             │
-│  → resolve agent/backend            │
-│  → spawn_blocking(trigger CLI)      │
-│  → update execution status          │
-│  → insert reply message             │
-│  → periodic heartbeat               │
-└─────────────────────────────────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Backends       │
-│  claude, codex, │
-│  gemini,opencode│
-└─────────────────┘
-```
-
-**Two-process model.** The MCP server and worker are separate processes sharing
-the same SQLite database (`{state_dir}/jobs.sqlite`). WAL mode enables
-concurrent read/write without SQLITE_BUSY errors.
-
-- **MCP server** — started by the MCP client (Claude Code, opencode, etc.) via
-  stdio transport. Reads/writes `messages` and `threads` tables. Inserts queued
-  rows into the `executions` table when dispatching to worker agents.
-- **Worker** — long-running background process. Polls the `executions` table for
-  `status='queued'` rows, claims work atomically with per-agent concurrency
-  enforcement, runs backend triggers via `tokio::task::spawn_blocking`, and
-  writes reply messages back.
-
-## Project/State Paths
-
-`aster-orch` uses two distinct filesystem roots:
-
-- `target_repo_root`: the target repository where backend CLIs run commands/tasks.
-- `state_dir`: orchestrator-owned runtime state (DB/logs/heartbeats).
-
-This separation allows one shared orchestrator binary/config model to work
-across unrelated repositories.
-
-## Database Schema
-
-Four tables in a single SQLite file with WAL mode:
-
-| Table | Purpose |
-|-------|---------|
-| `threads` | Thread lifecycle (Active, Completed, Failed, Abandoned) |
-| `messages` | Conversation ledger between operator and agents |
-| `executions` | Job queue AND execution lifecycle tracker (queued → picked_up → executing → completed/failed/timed_out/crashed/cancelled) |
-| `worker_heartbeats` | Worker liveness tracking |
-
-The `executions` table is the single source of truth for both queuing and
-execution state — no separate job queue system.
-
-## CLI
+## Install
 
 ```bash
-# Worker only (run in background terminal / RustRover)
-aster_orch worker
-
-# MCP server only (started by MCP client config)
-aster_orch mcp-server
-
-# Dashboard only (reads SQLite directly)
-aster_orch dashboard
-
-# Dashboard + worker (spawns worker as a separate process)
-aster_orch dashboard --with-worker
-
-# Optional override when config is not at the standard location
-aster_orch wait --config /path/to/config.yaml --thread-id <thread-id>
+cargo install --git https://github.com/ottogiron/aster-orch
 ```
 
-`--with-worker` spawns the worker as an independent OS process. The worker
-continues running after the dashboard exits — restart the dashboard freely
-without interrupting running triggers. Worker output goes to
-`{state_dir}/worker.log`. A heartbeat guard prevents spawning duplicate workers
-on re-launch. The worker PID is printed on dashboard exit; stop it with
-`kill <pid>`.
+Or build from source:
 
-Dashboard controls:
-
-- `Tab` / `Shift+Tab` / `1-4`: switch tabs
-- `↑/↓` or `j/k`: move selection
-- `g` / `G`: jump to first/last row
-- `Enter`: open selected log, or drill into selected batch on Ops
-- `Esc`: back out of active batch drill filter
-- `a`: open guided action menu for selected thread
-- `b` / `o`: quick aliases for abandon/reopen (still opens guided confirm)
-- `s`: abandon stale active threads (age >= `orchestration.stale_active_secs`, excluding queued/running)
-- `?`: open keyboard help overlay
-- `q` or `Ctrl+C`: exit dashboard
-
-Log viewer controls:
-
-- `Esc`: back to dashboard
-- `Tab` / `Shift+Tab`: switch between `Input` and `Output` sections
-- `←` / `→`: collapse/expand selected section
-- `g` / `G`: top/bottom
-- `f`: toggle follow mode
-- `J`: pretty-print JSON log lines when possible
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--config` | `.aster-orch/config.yaml` | Optional config path override |
-
-## MCP Tools (16)
-
-### Core Workflow
-
-| Tool | Description |
-|------|-------------|
-| `orch_dispatch` | Send a message to an agent. Creates or continues a thread. |
-| `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
-
-### Query & Observability
-
-| Tool | Description |
-|------|-------------|
-| `orch_status` | Query thread + latest execution status by agent and/or thread. |
-| `orch_transcript` | Get full conversation transcript (messages + executions) for a thread. |
-| `orch_read` | Read a single message by reference (`db:<id>`). |
-| `orch_metrics` | Aggregate metrics (thread counts, queue depth, active executions). |
-| `orch_batch_status` | Batch-level status with per-thread breakdown. |
-| `orch_tasks` | List trigger execution records with timing and result status. |
-
-### Blocking & Polling
-
-| Tool | Description |
-|------|-------------|
-| `orch_wait` | Poll DB at 200ms intervals until a message appears (with timeout). |
-| `orch_poll` | Non-blocking check of thread state and recent messages. |
-
-### Lifecycle
-
-| Tool | Description |
-|------|-------------|
-| `orch_close` | Close a thread with terminal status (`completed` or `failed`). |
-| `orch_abandon` | Abandon a thread, cancel active executions. |
-| `orch_reopen` | Reopen a terminal thread (Completed/Failed/Abandoned) to Active. |
-| `orch_diagnose` | Thread diagnostics: status, blockers, suggested next actions. |
-
-### Configuration
-
-| Tool | Description |
-|------|-------------|
-| `orch_session_info` | Current MCP session metadata. |
-| `orch_list_agents` | List all configured agents with backend/model info. |
-| `orch_health` | Worker heartbeat status + backend health pings. |
-
-## Dispatch Flow
-
-When `orch_dispatch` is called:
-
-1. Message inserted into `messages` table (thread auto-created if needed)
-2. If intent matches `trigger_intents` config AND target agent role is `Worker`:
-   - Execution row inserted into `executions` table with `status='queued'`
-   - Worker picks it up on next poll cycle via `claim_next_execution()`
-   - Worker resolves agent config → backend → starts session
-   - Backend CLI process spawned inside `tokio::task::spawn_blocking`
-   - Output parsed for structured intent (JSON auto-reply)
-   - Execution status updated (completed/failed/timed_out)
-   - Reply message inserted into `messages` table
-
-### Worker Lifecycle
-
-On startup:
-
-1. **Crash recovery** — marks orphaned executions (`picked_up`/`executing`) as `crashed`
-2. **Initial heartbeat** — writes to `worker_heartbeats` table
-
-Main loop (concurrent via `tokio::select!`):
-
-- **Poll interval** — claims queued executions, enforces per-agent concurrency via SQL, spawns execution tasks with global semaphore
-- **Heartbeat interval** (10s) — writes liveness record for `orch_health` to check
-
-### Execution Status Lifecycle
-
-```
-queued → picked_up → executing → completed
-                               → failed
-                               → timed_out
-                               → crashed (worker died mid-execution)
-                    → cancelled (thread abandoned)
+```bash
+git clone git@github.com:ottogiron/aster-orch.git
+cd aster-orch
+cargo build --release
+# Binary at target/release/aster_orch
 ```
 
-## Configuration
+## Quick Start
 
-Config file: `.aster-orch/config.yaml`
+### 1. Create a config
 
-Generic template: `crates/aster-orch/examples/config-generic.yaml`
+Create `.aster-orch/config.yaml` in your project (or anywhere):
 
 ```yaml
-target_repo_root: /path/to/target-repo
+target_repo_root: /path/to/your/project
 state_dir: ~/.aster/orch
 poll_interval_secs: 1
+
 orchestration:
   trigger_intents: [dispatch, handoff]
-  execution_timeout_secs: 300
-  stale_active_secs: 3600
-  max_concurrent_triggers: 10
-  max_triggers_per_agent: 2
-  ping_timeout_secs: 15
-
-models:
-  - id: claude-sonnet-4-6
-    backend: claude
-  - id: claude-opus-4-6
-    backend: claude
-  - id: opencode/minimax-m2.5
-    backend: opencode
+  execution_timeout_secs: 600
+  max_concurrent_triggers: 4
+  max_triggers_per_agent: 1
 
 agents:
-  - alias: focused
+  - alias: dev
     backend: claude
     model: claude-sonnet-4-6
-    prompt: "You are focused on backend implementation and tests."
-  - alias: chill
-    backend: claude
-    model: claude-sonnet-4-6
-    prompt: "You are focused on docs and release quality."
+    prompt: >
+      You are a development agent. Follow the project's AGENTS.md.
+      When done, end your response with:
+      {"intent":"review-request","to":"operator"}
 ```
 
-`models` is optional and informational. Runtime selection uses `agents[].model`.
+Supported backends: `claude`, `codex`, `gemini`, `opencode`.
 
-Path resolution rules:
+### 2. Connect your coding CLI
 
-- absolute paths are used as-is
-- `~/...` expands to `$HOME/...`
-- relative paths resolve against the directory containing the config file
-  (`target_repo_root`, `state_dir`, and agent `prompt_file`)
+Add the MCP server to your preferred tool:
 
-### Agent Roles
-
-- **Worker** (default) — triggered when dispatch intent matches `trigger_intents`.
-  The worker spawns CLI processes via `spawn_blocking` to execute work.
-- **Operator** — MCP-only, never triggered. The operator is whoever calls the MCP tools.
-
-### Key Config Fields
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `target_repo_root` | *(required)* | Target repository root where all backend CLIs execute |
-| `state_dir` | *(required)* | Orchestrator runtime directory (logs/state files) |
-| `poll_interval_secs` | 1 | Worker poll interval for queued executions |
-| `models` | *(optional)* | Informational model catalog (metadata only) |
-| `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
-| `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
-| `orchestration.execution_timeout_secs` | 600 | Per-trigger timeout |
-| `orchestration.stale_active_secs` | 3600 | Staleness threshold for non-running Active threads |
-| `orchestration.trigger_intents` | dispatch, handoff | Intents that trigger worker execution |
-| `orchestration.ping_timeout_secs` | 15 | Backend ping liveness timeout |
-
-## MCP Client Configuration
-
-### Claude Code (`.mcp.json`)
-
-```json
-{
-  "mcpServers": {
-    "aster-orch": {
-      "command": "/path/to/target/release/aster_orch",
-      "args": ["mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
-    }
-  }
-}
+**Claude Code:**
+```bash
+claude mcp add --scope user --transport stdio aster-orch -- \
+  /path/to/aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
 ```
 
-### opencode (`opencode.json`)
+**Codex:**
+```bash
+codex mcp add aster-orch -- \
+  /path/to/aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
+```
 
+**OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
 ```json
 {
   "mcp": {
     "aster-orch": {
       "type": "local",
-      "command": ["/path/to/target/release/aster_orch", "mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
+      "command": ["/path/to/aster_orch", "mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
     }
   }
 }
 ```
 
-### RustRover (worker)
-
-```
-run --package aster-orch --bin aster_orch -- worker --config .aster-orch/config.yaml
-```
-
-## Building & Testing
+### 3. Start the dashboard
 
 ```bash
-# Build
-cargo build --package aster-orch
+# Dashboard + worker (recommended for getting started)
+aster_orch dashboard --with-worker --config .aster-orch/config.yaml
 
-# Release build
-cargo build --package aster-orch --release
-
-# Run tests
-cargo test --package aster-orch
-
-# Binary location (root workspace)
-target/release/aster_orch
+# Or run worker and dashboard separately
+aster_orch worker --config .aster-orch/config.yaml &
+aster_orch dashboard --config .aster-orch/config.yaml
 ```
 
-## Key Design Decisions
+### 4. Dispatch your first task
 
-- **Custom `executions` table as job queue** — single source of truth for both
-  queuing and execution lifecycle. No external job queue dependency.
-- **`spawn_blocking` for CLI execution** — backend trigger calls run inside
-  `tokio::task::spawn_blocking` to avoid starving the async runtime with blocking
-  subprocess I/O.
-- **Per-agent concurrency enforcement** — `claim_next_execution()` uses a SQL
-  subquery to check active execution count per agent before claiming work.
-- **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing`
-  rows as `crashed` on startup, preventing lost work from going unnoticed.
-- **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP
-  server + worker) to read/write concurrently without SQLITE_BUSY errors.
-- **200ms DB polling for `orch_wait`** — simple, reliable, works across process
-  boundaries without in-memory notification channels.
-- **Three core tables** — `threads` (lifecycle), `messages` (conversation
-  ledger), `executions` (job queue + execution tracker). Plus `worker_heartbeats`
-  for liveness.
-
-## Differences from `aster-orchestrator` (deprecated)
-
-| Old (`aster-orchestrator`) | New (`aster-orch`) |
-|----------------------------|---------------------|
-| Custom daemon poll loop | Custom poll-loop worker with `spawn_blocking` |
-| rusqlite | sqlx (async, WAL mode) |
-| Single `messages.status` field (never updated) | Typed `ExecutionStatus` enum with full lifecycle |
-| No crash recovery | Orphan detection on startup |
-| No heartbeat | Worker heartbeats every 10s |
-| Blocking I/O on async runtime | `spawn_blocking` for all CLI execution |
-| Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
-| AgentRuntime state machine | Stateless worker (execution-per-trigger) |
-| Session namespace scoping | Scoping by DB file |
-| 24 MCP tools | 16 MCP tools |
-| `daemon run` subcommand | `worker` + `mcp-server` subcommands only |
-
-## Module Structure
+From your coding CLI (Claude Code, Codex, or OpenCode), use the MCP tools:
 
 ```
-src/
-├── bin/aster_orch.rs    # CLI binary (worker, mcp-server)
-├── lib.rs               # Module declarations
-├── error.rs             # Error types
-├── backend/             # Backend trait + implementations
-│   ├── mod.rs           #   Backend trait, PingResult
-│   ├── claude.rs        #   Claude CLI backend
-│   ├── codex.rs         #   Codex CLI backend
-│   ├── gemini.rs        #   Gemini CLI backend
-│   ├── opencode.rs      #   OpenCode CLI backend
-│   ├── process.rs       #   CLI process spawning, output extraction
-│   └── registry.rs      #   BackendRegistry lookup
-├── config/              # Configuration
-│   ├── mod.rs           #   Config loading + normalization
-│   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
-│   └── validation.rs    #   Config validation
-├── mcp/                 # MCP server (16 tools)
-│   ├── mod.rs           #   Module declarations
-│   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
-│   ├── params.rs        #   All parameter structs
-│   ├── dispatch.rs      #   orch_dispatch (message + execution insert)
-│   ├── query.rs         #   orch_status, transcript, read, metrics, poll, batch_status, tasks
-│   ├── lifecycle.rs     #   orch_close, abandon, reopen
-│   ├── wait.rs          #   orch_wait (200ms DB poll loop)
-│   ├── session.rs       #   orch_session_info, orch_list_agents
-│   └── health.rs        #   orch_health, orch_diagnose
-├── store/               # SQLite store (threads + messages + executions + heartbeats)
-│   └── mod.rs           #   Store with WAL setup, typed enums, all CRUD, claim logic
-├── worker/              # Custom poll-loop worker
-│   ├── mod.rs           #   Re-exports
-│   ├── loop_runner.rs   #   WorkerRunner: poll loop, heartbeat, crash recovery
-│   └── executor.rs      #   execute_trigger: spawn_blocking wrapper, output parsing
-└── model/               # Domain types
-    ├── agent.rs         #   Agent struct
-    └── session.rs       #   Session, SessionStatus, TriggerResult
+orch_dispatch(from="operator", to="dev", body="Add a hello world endpoint to the API", intent="dispatch")
 ```
+
+Watch the agent work in the dashboard. When it responds, review and close:
+
+```
+orch_close(thread_id="<id>", from="operator", status="completed")
+```
+
+## Dashboard
+
+The TUI dashboard shows real-time orchestrator state across four tabs:
+
+- **Ops** — active threads, running executions, batch progress
+- **Agents** — configured agents with health status
+- **History** — completed executions with duration and status
+- **Settings** — current configuration
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `1-4` | Switch tabs |
+| `↑/↓` or `j/k` | Navigate |
+| `Enter` | Open log viewer / drill into batch |
+| `a` | Action menu (close, abandon, reopen) |
+| `s` | Abandon stale threads |
+| `?` | Keyboard help |
+| `q` | Quit |
+
+**Log viewer** (`Enter` on an execution):
+
+| Key | Action |
+|-----|--------|
+| `Tab` | Switch Input/Output sections |
+| `←/→` | Collapse/expand section |
+| `f` | Toggle follow mode |
+| `J` | Pretty-print JSON |
+| `Esc` | Back to dashboard |
+
+## MCP Tools
+
+### Core
+
+| Tool | What it does |
+|------|-------------|
+| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution) |
+| `orch_close` | Close a thread as `completed` or `failed` |
+| `orch_abandon` | Cancel a thread and its active executions |
+| `orch_reopen` | Reopen a closed/failed/abandoned thread |
+
+### Monitor
+
+| Tool | What it does |
+|------|-------------|
+| `orch_status` | Thread and execution status (filter by agent or thread) |
+| `orch_poll` | Quick non-blocking check for new messages |
+| `orch_wait` | Block until a message arrives (with timeout) |
+| `orch_transcript` | Full conversation history for a thread |
+| `orch_read` | Read a single message by reference |
+| `orch_batch_status` | Status breakdown for all threads in a batch |
+| `orch_tasks` | Execution history with timing and results |
+| `orch_metrics` | Aggregate stats (thread counts, queue depth) |
+| `orch_diagnose` | Thread diagnostics with suggested next actions |
+
+### System
+
+| Tool | What it does |
+|------|-------------|
+| `orch_health` | Worker heartbeat + backend health pings |
+| `orch_list_agents` | List configured agents with backend/model info |
+| `orch_session_info` | Current MCP session metadata |
+
+## Configuration Reference
+
+```yaml
+target_repo_root: /path/to/repo        # Where agents work (required)
+state_dir: ~/.aster/orch               # Runtime state: DB, logs (required)
+poll_interval_secs: 1                  # Worker poll frequency
+
+orchestration:
+  trigger_intents: [dispatch, handoff]  # Intents that trigger agent execution
+  execution_timeout_secs: 600           # Per-task timeout
+  max_concurrent_triggers: 10           # Global concurrency limit
+  max_triggers_per_agent: 2             # Per-agent concurrency limit
+  stale_active_secs: 3600              # Staleness threshold for idle threads
+  ping_timeout_secs: 15                # Backend health check timeout
+
+agents:
+  - alias: dev                         # Unique name for dispatching
+    backend: claude                    # claude | codex | gemini | opencode
+    model: claude-sonnet-4-6           # Model to use
+    prompt: "..."                      # System prompt for the agent
+    # prompt_file: prompts/dev.md      # Or load prompt from file
+    # backend_args: ["--flag"]         # Extra CLI args for the backend
+```
+
+**Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
+
+**Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
+
+## Typical Workflow
+
+```
+1. Operator dispatches task    →  orch_dispatch(to="dev", body="...", intent="dispatch")
+2. Worker picks up execution   →  visible in dashboard as "executing"
+3. Agent works in the repo     →  backend CLI runs with the prompt
+4. Agent responds              →  reply message with intent (e.g., review-request)
+5. Operator reviews            →  orch_transcript or dashboard log viewer
+6. Operator closes thread      →  orch_close(status="completed")
+```
+
+For multi-step work, dispatch follow-ups to the same thread by passing `thread_id`. Use `batch` to group related threads.
+
+## Troubleshooting
+
+**Agent not responding:**
+```
+orch_health()              # Check worker heartbeat and backend pings
+orch_diagnose(thread_id=…) # Thread-level diagnostics with suggestions
+orch_tasks()               # Check execution status and errors
+```
+
+**Stale state / corrupted DB:**
+```bash
+# Stop all processes, remove state, restart
+kill $(pgrep aster_orch)
+rm ~/.aster/orch/jobs.sqlite*
+aster_orch dashboard --with-worker --config .aster-orch/config.yaml
+```
+
+**Worker not picking up work:**
+- Check `orch_health()` — is there a recent heartbeat?
+- Check `orch_metrics()` — is `queue_depth > 0`?
+- Verify the agent's backend CLI is installed and authenticated
+
+## More Information
+
+- [Architecture & internals](docs/project/architecture.md)
+- [Development workflow](AGENTS.md)
+- [Design decisions](docs/project/DECISIONS.md)
 
 ## Development
 
-### Setup
-
 ```bash
-git clone git@github.com:ottogiron/aster-orch.git
-cd aster-orch
-make setup-hooks       # install pre-commit hook
-cargo install --git https://github.com/ottogiron/ticket-tracker  # install ticket CLI
-make verify            # fmt-check + clippy + 328 tests
+make setup-hooks       # Install pre-commit hook
+make verify            # fmt-check + clippy + tests
+make dashboard-dev     # Dashboard + worker on isolated dev DB
 ```
 
-### Dev Dashboard
-
-A dev config at `.aster-orch/config.yaml` uses a local state directory (`.aster-orch/state/`) isolated from the production instance:
-
-```bash
-make dashboard-dev     # dashboard + embedded worker on dev DB
-```
-
-### Two MCP Server Instances
-
-Both `aster-orch` (production) and `aster-orch-dev` (dev) are configured globally in Claude Code, Codex, and OpenCode:
-
-| Server | Binary | State | Purpose |
-|--------|--------|-------|---------|
-| `aster-orch` | Release binary | `~/.aster/orch/` | Daily orchestration |
-| `aster-orch-dev` | `cargo run` | `.aster-orch/state/` | Testing MCP changes |
-
-### Testing MCP Changes
-
-1. Edit source (e.g., `src/mcp/*.rs`)
-2. `cargo build`
-3. Call the changed tool via `aster-orch-dev` — it runs `cargo run` and picks up your build
-4. Verify in the dev dashboard (`make dashboard-dev`)
-5. `make verify` before committing
-
-### Orchestrating Development
-
-The production orch dispatches agents to work on this repo. The dev instance is for testing changes, not for dispatching work. See `AGENTS.md` for the full development workflow.
-
-### Ticket Tracking
-
-This project uses backlog-first governance via the [`ticket-tracker`](https://github.com/ottogiron/ticket-tracker) CLI:
-
-```bash
-ticket start ORCH-EVO --batch   # start a batch session
-ticket status                   # show active sessions
-ticket done ORCH-EVO --batch    # close a batch
-```
-
-Backlogs are in `docs/project/backlog/`. The pre-commit hook blocks code commits without an active ticket session.
+See [AGENTS.md](AGENTS.md) for the full development workflow including dual MCP server setup, testing MCP changes, and ticket tracking.
