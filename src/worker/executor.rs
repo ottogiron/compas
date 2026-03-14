@@ -69,9 +69,12 @@ pub async fn execute_trigger(
         None => {
             let err = format!("no agent config for alias '{}'", agent_alias);
             tracing::error!(%err);
-            let _ = store
+            if let Ok(0) = store
                 .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
-                .await;
+                .await
+            {
+                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+            }
             let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
@@ -92,9 +95,12 @@ pub async fn execute_trigger(
         Err(e) => {
             let err = format!("backend lookup failed: {}", e);
             tracing::error!(%err, agent = %agent_alias);
-            let _ = store
+            if let Ok(0) = store
                 .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
-                .await;
+                .await
+            {
+                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+            }
             let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
@@ -219,9 +225,12 @@ pub async fn execute_trigger(
             } else {
                 ExecutionStatus::Failed
             };
-            let _ = store
+            if let Ok(0) = store
                 .fail_execution(&exec_id, &err, None, duration_ms, status)
-                .await;
+                .await
+            {
+                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+            }
             let _ = store.mark_thread_failed_if_active(&thread_id).await;
             TriggerOutput {
                 execution_id: exec_id,

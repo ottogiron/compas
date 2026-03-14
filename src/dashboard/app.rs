@@ -206,6 +206,12 @@ pub struct App {
     pub activity_refresh_error: Option<String>,
     pub agents_refresh_error: Option<String>,
     pub executions_refresh_error: Option<String>,
+    /// Timestamp of the last refresh attempt for each component. Used for
+    /// backoff when `*_data` is still `None` (first fetch failed) so the
+    /// staleness check doesn't tight-loop on every TUI tick.
+    last_activity_attempt: Option<Instant>,
+    last_agents_attempt: Option<Instant>,
+    last_executions_attempt: Option<Instant>,
 }
 
 impl App {
@@ -258,6 +264,9 @@ impl App {
             activity_refresh_error: None,
             agents_refresh_error: None,
             executions_refresh_error: None,
+            last_activity_attempt: None,
+            last_agents_attempt: None,
+            last_executions_attempt: None,
         }
     }
 
@@ -1075,6 +1084,30 @@ pub fn run_tui(
     result
 }
 
+// ── Staleness helper ──────────────────────────────────────────────────────────
+
+/// Check whether a data source needs refreshing.
+///
+/// Returns `true` if either the data has never been fetched or the most
+/// recent fetch/attempt is older than `interval`. When `data` is `None`
+/// (first fetch hasn't succeeded), `last_attempt` provides backoff so the
+/// TUI doesn't tight-loop on every tick under a degraded DB.
+fn is_data_stale(
+    data_fetched_at: Option<Instant>,
+    last_attempt: Option<Instant>,
+    interval: Duration,
+) -> bool {
+    // If we have data, use its timestamp.
+    if let Some(fetched) = data_fetched_at {
+        return fetched.elapsed() >= interval;
+    }
+    // No data yet — respect backoff from last attempt.
+    match last_attempt {
+        Some(t) => t.elapsed() >= interval,
+        None => true, // never attempted — fetch now
+    }
+}
+
 // ── Event loop ────────────────────────────────────────────────────────────────
 
 fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
@@ -1096,35 +1129,38 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         // viewer is open to avoid unnecessary DB queries — an immediate
         // refresh fires when the viewer is closed (see close_log_viewer).
         if app.viewing_log.is_none() {
-            let is_stale = app
-                .activity_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
+            let is_stale = is_data_stale(
+                app.activity_data.as_ref().map(|d| d.fetched_at),
+                app.last_activity_attempt,
+                interval,
+            );
             if is_stale {
+                app.last_activity_attempt = Some(Instant::now());
                 app.refresh_activity();
             }
         }
 
         // Agents and History refresh when their tab is active and stale.
         if app.active_tab == 1 {
-            let is_stale = app
-                .agents_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
+            let is_stale = is_data_stale(
+                app.agents_data.as_ref().map(|d| d.fetched_at),
+                app.last_agents_attempt,
+                interval,
+            );
             if is_stale {
+                app.last_agents_attempt = Some(Instant::now());
                 app.refresh_agents();
             }
         }
 
         if app.active_tab == 2 {
-            let is_stale = app
-                .executions_data
-                .as_ref()
-                .map(|d| d.fetched_at.elapsed() >= interval)
-                .unwrap_or(true);
+            let is_stale = is_data_stale(
+                app.executions_data.as_ref().map(|d| d.fetched_at),
+                app.last_executions_attempt,
+                interval,
+            );
             if is_stale {
+                app.last_executions_attempt = Some(Instant::now());
                 app.refresh_executions();
             }
         }
