@@ -59,7 +59,7 @@ Created: 2026-03-14
   - Unit test: emit events, verify subscriber receives them
   - Integration test: full dispatch cycle produces expected event sequence
   - Dashboard shows updates without manual refresh when events fire
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-EVO-3 — Dashboard "Currently Working On" Display
 
@@ -288,28 +288,114 @@ Created: 2026-03-14
   - Unit test: summary generation from event sequence produces reasonable output
 - Status: Todo
 
+## Ticket ORCH-EVO-12 — Retry with Error Classification
+
+- Goal: Automatically retry failed executions for transient errors (network blips, temporary rate limits), while not retrying terminal failures (usage exhausted, genuine agent errors).
+- In scope:
+  - Configurable per-agent `max_retries` (default: 0 — no retry, preserving current behavior)
+  - Error classification per backend: parse exit code + stderr/output for known transient patterns
+    - Claude: rate limit (429), temporary API errors vs usage exhaustion
+    - Codex: similar classification
+    - OpenCode: similar classification
+  - New execution row per retry attempt (linked to original via `retry_of` column)
+  - Exponential backoff between retries (configurable base delay)
+  - Dashboard shows retry count and history for an execution
+  - `orch_diagnose` includes retry history in diagnostics
+- Out of scope:
+  - Fallback to a different backend on failure (cross-backend retry)
+  - Automatic prompt modification on retry
+  - Circuit breaker (global failure rate tracking)
+- Dependencies: ORCH-FOUND-2 (backend output contract helps with error classification)
+- Acceptance criteria:
+  - Transient failures are retried up to `max_retries` with backoff
+  - Terminal failures (usage exhausted, timeout) are NOT retried
+  - Each retry attempt is a separate execution row, traceable to the original
+  - `max_retries: 0` (default) preserves current fail-fast behavior
+  - Dashboard and `orch_tasks` show retry lineage
+- Verification:
+  - Integration test: stub backend fails with transient error, verify retry occurs
+  - Integration test: stub backend fails with terminal error, verify no retry
+  - `make verify` passes
+- Status: Todo
+
+## Ticket ORCH-EVO-13 — Prompt Version Hashing
+
+- Goal: Store a hash of the agent prompt at dispatch time in the executions table, enabling prompt-to-outcome correlation without building a full prompt management system.
+- In scope:
+  - Compute SHA-256 hash of the resolved agent prompt (system prompt + any prompt_file content) at execution creation time
+  - Add `prompt_hash TEXT` column to `executions` table
+  - `orch_tasks` includes `prompt_hash` in output
+  - Enables querying: "all executions that ran with this prompt version"
+  - Store full prompt text in execution log (already happens via backend args) — hash is for correlation only
+- Out of scope:
+  - Prompt versioning UI or management
+  - A/B testing framework
+  - Prompt rollback
+  - Prompt storage/registry (just the hash)
+- Dependencies: None
+- Acceptance criteria:
+  - Every execution has a `prompt_hash` stored
+  - Same prompt produces same hash (deterministic)
+  - Different prompts produce different hashes
+  - `orch_tasks` output includes the hash
+  - Config hot-reload that changes a prompt produces a different hash on next execution
+- Verification:
+  - Unit test: same prompt → same hash, different prompt → different hash
+  - Integration test: dispatch, verify prompt_hash is stored in executions table
+  - `make verify` passes
+- Status: Todo
+
+## Ticket ORCH-EVO-14 — Thread Dependency Primitive
+
+- Goal: Allow threads to declare dependencies on other threads, enabling basic coordination for complex multi-step orchestration without a full DAG engine.
+- In scope:
+  - Add `depends_on TEXT` column to `threads` table (JSON array of thread IDs, nullable)
+  - `orch_dispatch` accepts optional `depends_on: ["thread-id-1", "thread-id-2"]` parameter
+  - Worker skips execution for threads whose dependencies are not all in `Completed` status
+  - `orch_status` and `orch_batch_status` show dependency state (waiting, ready, blocked)
+  - `orch_diagnose` reports unmet dependencies as blockers
+  - Dashboard Ops tab shows dependency indicators on threads
+- Out of scope:
+  - Full DAG execution engine (topological sort, parallel branch execution)
+  - Circular dependency detection (enforce at dispatch time with simple check)
+  - Automatic dispatch when dependencies complete (operator must dispatch explicitly)
+  - Cross-batch dependencies
+- Dependencies: None
+- Acceptance criteria:
+  - Thread with `depends_on` is not executed until all dependencies are `Completed`
+  - Thread without `depends_on` behaves as today (no change)
+  - `orch_diagnose` shows "waiting on thread X (Active)" as a blocker
+  - Circular dependency is rejected at dispatch time with clear error
+  - Dashboard shows dependency status visually
+- Verification:
+  - Integration test: create thread A, create thread B depending on A, verify B is not executed until A completes
+  - Integration test: circular dependency rejected with error
+  - `make verify` passes
+- Status: Todo
+
 ## Execution Order
 
-1. ORCH-EVO-2 (Event Broadcast — foundation for most other tickets)
+1. ORCH-EVO-2 (Event Broadcast — done)
 2. ORCH-EVO-1 (Execution Telemetry — feeds into dashboard display)
-3. ORCH-EVO-4 (Desktop Notifications — quick win, high daily-use value)
-4. ORCH-EVO-3 (Dashboard "Currently Working On" — uses telemetry + events)
-5. ORCH-EVO-5 (Conversation View — independent, high ergonomic value)
-6. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
-7. ORCH-EVO-7 (Git Worktrees — independent, enables parallel agents)
-8. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
-9. ORCH-EVO-8 (HTTP API — larger effort, enables remote access)
-10. ORCH-EVO-10 (Webhook Notifications — uses event broadcast + HTTP)
-11. ORCH-EVO-9 (Web Dashboard — largest effort, caps remote access story)
+3. ORCH-EVO-7 (Git Worktrees — moved up: prerequisite for safe concurrent agents)
+4. ORCH-EVO-4 (Desktop Notifications — quick win, high daily-use value)
+5. ORCH-EVO-3 (Dashboard "Currently Working On" — uses telemetry + events)
+6. ORCH-EVO-5 (Conversation View — independent, high ergonomic value)
+7. ORCH-EVO-10 (Webhook Notifications — moved up: simpler than HTTP API, high value for Slack/Discord alerts)
+8. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
+9. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
+10. ORCH-EVO-8 (HTTP API — larger effort, enables remote access)
+11. ORCH-EVO-9 (Web Dashboard — DEFERRED: build HTTP API first, web UI can be community contribution)
 
 ## Tracking Notes
 
 - Backlog-first governance applies.
 - Implementation commits should reference ticket IDs.
-- Tickets 1-6 are focused on local TUI ergonomics and can be done independently.
-- Tickets 8-10 form the "remote access" track and should be done in order.
-- Ticket 7 (worktrees) is independent and can be scheduled based on need.
-- All work happens in the `crates/aster-orch` submodule — follow submodule git workflow.
+- EVO-2 completed 2026-03-14 (event broadcast channel).
+- EVO-7 (worktrees) moved up per orch-architect review — concurrent agents without isolation is a data corruption risk.
+- EVO-10 (webhooks) moved before EVO-8 (HTTP API) — outbound webhooks are 10x simpler and more immediately useful than a full API layer.
+- EVO-9 (web dashboard) deferred per orch-architect review — HTTP API (EVO-8) enables web UIs without committing to maintaining a React app. Build the API, let the UI emerge.
+- All work happens in the aster-orch standalone repo.
 
 ## Execution Metrics
 
@@ -404,6 +490,33 @@ Created: 2026-03-14
 - Notes:
 
 - Ticket: ORCH-EVO-11
+- Owner: TBD
+- Complexity: M
+- Risk: Medium
+- Start:
+- End:
+- Duration:
+- Notes:
+
+- Ticket: ORCH-EVO-12
+- Owner: TBD
+- Complexity: M
+- Risk: High
+- Start:
+- End:
+- Duration:
+- Notes:
+
+- Ticket: ORCH-EVO-13
+- Owner: TBD
+- Complexity: S
+- Risk: Low
+- Start:
+- End:
+- Duration:
+- Notes:
+
+- Ticket: ORCH-EVO-14
 - Owner: TBD
 - Complexity: M
 - Risk: Medium

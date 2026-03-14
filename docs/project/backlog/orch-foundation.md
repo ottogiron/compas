@@ -7,7 +7,7 @@ Created: 2026-03-14
 ## Scope Summary
 
 - Backend session continuity across dispatches (Claude, Codex, OpenCode)
-- Project-based configuration redesign (per-project repo_root, agents scoped to projects)
+- Backend output contract (structured response format to protect against CLI format changes)
 
 ## Ticket ORCH-FOUND-1 — Backend Session Continuity
 
@@ -40,70 +40,65 @@ Created: 2026-03-14
 - Verification:
   - `make verify` passes (all tests including new session continuity tests)
   - Manual: dispatch to Claude agent, close thread, re-dispatch with changes-requested, verify agent references prior work
-- Status: Todo
+- Status: Done
 
-## Ticket ORCH-FOUND-2 — Project-Based Configuration
+## Ticket ORCH-FOUND-2 — Backend Output Contract
 
-- Goal: Replace global `target_repo_root` with per-project configuration, enabling agents scoped to different repositories under a single orchestrator instance.
+- Goal: Define a structured JSON response format for all backends, replacing fragile text parsing of CLI output. Protect against silent breakage when backend CLIs change their output format.
 - In scope:
-  - New `ProjectConfig` struct: `id`, `repo_root`, optional per-project `orchestration` overrides
-  - Config schema: top-level `projects[]` with agents nested under each project
-  - Agent aliases must be globally unique across all projects
-  - Per-project orchestration settings (execution_timeout, max_triggers_per_agent, trigger_intents, stale_active_secs) with fallback to global defaults
-  - Remove `target_repo_root` from top-level config (replaced by `projects[].repo_root`)
-  - Add `project_id TEXT` column to `threads` and `executions` tables
-  - Worker resolves agent → project → repo_root when spawning executions
-  - `orch_dispatch` resolves project automatically from agent alias (no project parameter needed)
-  - `orch_list_agents` shows project context per agent
-  - `orch_status` and `orch_batch_status` include project_id in response
-  - Dashboard shows project context in ops/history views
-  - Migrate production config (aster) and dev config (aster-orch) to new schema
+  - Define a canonical response envelope: `{"intent": "...", "result": "...", "session_id": "...", "error": null}`
+  - Update executor output parsing to expect the envelope format
+  - Backend-specific wrappers: extract the envelope from each backend's native output format
+    - Claude: already returns JSON with `result` and `session_id` — map to envelope
+    - Codex: JSONL stream — extract final `item.completed` text + thread_id, wrap in envelope
+    - OpenCode: JSONL stream — extract final text + sessionID, wrap in envelope
+    - Gemini: JSON output — map to envelope
+  - Unified `BackendOutput` struct in Rust (replaces ad-hoc parsing per backend)
+  - Intent parsing moves from executor to a single `parse_intent()` function on the unified output
+  - Graceful fallback: if a backend returns non-conforming output, wrap it as `{"intent": "status-update", "result": "<raw text>", "error": null}`
 - Out of scope:
-  - Backward compatibility with old config format (clean break, manual migration)
-  - Per-project notification/webhook settings
-  - Shared agents across multiple projects
-  - `orch_dispatch` project parameter (resolve from agent)
+  - Changing what backends actually output (we wrap, not enforce)
+  - Backend-specific error code classification (separate ticket: retry with error classification)
+  - Streaming output parsing (separate ticket: ORCH-EVO-1)
 - Dependencies: None
 - Acceptance criteria:
-  - Config with multiple projects parses and validates correctly
-  - Agents in different projects work in different repo_root directories
-  - Per-project orchestration overrides merge correctly with global defaults
-  - `project_id` is stored on threads and executions
-  - Dashboard shows project context
-  - Both production and dev configs migrated and working
-  - All existing tests updated and passing
+  - All 4 backends produce a unified `BackendOutput` struct after trigger
+  - Intent is parsed from the unified output, not per-backend text extraction
+  - Existing intent parsing behavior is preserved (no regression)
+  - Non-conforming output gracefully falls back to raw text with `status-update` intent
+  - All existing tests pass with the unified output format
+  - New unit tests for each backend's output mapping
 - Verification:
   - `make verify` passes
-  - Manual: dispatch to agents in different projects, verify each works in its project's repo_root
-  - Manual: verify dashboard shows project context
+  - Manual: dispatch to each backend, verify intent parsing works correctly
 - Status: Todo
 
 ## Execution Order
 
-1. ORCH-FOUND-1 (Session Continuity — independent, high immediate value)
-2. ORCH-FOUND-2 (Project-Based Config — larger change, enables multi-project)
+1. ORCH-FOUND-1 (Session Continuity — done)
+2. ORCH-FOUND-2 (Backend Output Contract — protects against CLI format changes)
 
 ## Tracking Notes
 
 - Session continuity pre-validated: Claude (`-r`), Codex (`exec resume`), OpenCode (`-s`) all confirmed working with smoke tests.
-- Gemini skipped: resume is index-based (`-r <index>`), not ID-based — unsafe for concurrent agents.
-- Project config is a clean break from the current schema — no backward compatibility needed.
-- Both tickets are foundational for ORCH-EVO and ORCH-TEAM batches.
+- Gemini skipped for sessions: resume is index-based (`-r <index>`), not ID-based — unsafe for concurrent agents.
+- FOUND-2 was originally "Project-Based Configuration" — deferred to ORCH-TEAM-6 per orch-architect review. Replaced with backend output contract (higher foundation priority).
+- Project-based config design is complete (Option B: projects as first-class concept) and documented in this repo's git history. Ready to implement when TEAM-6 is started.
 
 ## Execution Metrics
 
 - Ticket: ORCH-FOUND-1
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Medium
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-14
+- End: 2026-03-14
+- Duration: 00:30:00
+- Notes: Implemented and smoke-tested. Session resume confirmed for Claude, Codex, OpenCode.
 
 - Ticket: ORCH-FOUND-2
 - Owner: TBD
-- Complexity: L
+- Complexity: M
 - Risk: Medium
 - Start:
 - End:
