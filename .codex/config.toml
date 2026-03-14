@@ -1,0 +1,10 @@
+[mcp_servers.aster-orch-dev]
+command = "cargo"
+args = [
+  "run",
+  "--manifest-path", "/Users/ottogiron/workspace/github.com/ottogiron/aster-orch/Cargo.toml",
+  "--bin", "aster_orch",
+  "--",
+  "mcp-server",
+  "--config", "/Users/ottogiron/workspace/github.com/ottogiron/aster-orch/.aster-orch/config.yaml"
+]
