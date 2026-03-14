@@ -14,8 +14,8 @@ use aster_orch::wait::{self, WaitOutcome, WaitRequest};
 use aster_orch::worker::WorkerRunner;
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
-use std::path::PathBuf;
-use std::process::{ExitCode, Stdio};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -291,6 +291,7 @@ async fn run_dashboard(
     // If requested, spawn the worker as a separate OS process so its
     // lifecycle is independent of the dashboard. The dashboard can be
     // restarted or quit without interrupting running triggers.
+    let worker_log_path = config_handle.load().state_dir.join("worker.log");
     let mut worker_pid: Option<u32> = None;
     if with_worker {
         let spawned = spawn_worker_process(&store, &config_handle, &config_path).await;
@@ -298,6 +299,7 @@ async fn run_dashboard(
             Ok(Some(pid)) => {
                 worker_pid = Some(pid);
                 eprintln!("spawned worker process (PID: {})", pid);
+                eprintln!("worker log: {}", worker_log_path.display());
             }
             Ok(None) => {
                 eprintln!("worker already running (recent heartbeat), skipping spawn");
@@ -330,16 +332,44 @@ async fn run_dashboard(
     .await;
 
     // The worker runs as its own process — no cleanup needed here.
-    // Dropping the Child handle (if any) does NOT kill the child process.
     if let Some(pid) = worker_pid {
         eprintln!("dashboard exited; worker process (PID: {}) continues running", pid);
+        eprintln!("worker log: {}", worker_log_path.display());
         eprintln!("to stop it: kill {}", pid);
+    } else if with_worker {
+        // Pre-existing worker was detected at startup; remind user it's still running.
+        eprintln!("dashboard exited; pre-existing worker is still running");
     }
 
     tui_result??;
 
     Ok(())
 }
+
+// ── Heartbeat guard (extracted for testability) ──────────────────────────
+
+/// Check whether a worker is already running based on heartbeat recency.
+///
+/// A heartbeat is "recent" if it was written at most `max_age_secs` seconds
+/// ago. Tolerates up to 5 s of forward clock skew.
+fn is_worker_alive(heartbeat: &Option<(String, i64, i64, Option<String>)>, max_age_secs: i64) -> bool {
+    match heartbeat {
+        Some((_, last_beat_at, _, _)) => {
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            // Heartbeat is recent if it was written within [now - max_age, now + 5s].
+            *last_beat_at >= now_unix.saturating_sub(max_age_secs) && *last_beat_at <= now_unix + 5
+        }
+        None => false,
+    }
+}
+
+/// Heartbeat recency threshold for the duplicate-worker guard (seconds).
+const WORKER_HEARTBEAT_MAX_AGE_SECS: i64 = 30;
+
+// ── Worker process spawning ──────────────────────────────────────────────
 
 /// Spawn the worker as a detached child process.
 ///
@@ -348,55 +378,115 @@ async fn run_dashboard(
 ///
 /// The child process runs `aster_orch worker --config <path>` with:
 /// - stdin  → /dev/null
-/// - stdout/stderr → `{log_dir}/worker.log`
+/// - stdout/stderr → `{state_dir}/worker.log` (append mode)
+///
+/// Safety mechanisms:
+/// - **Exclusive lockfile** (`{state_dir}/worker.lock`) prevents TOCTOU races
+///   when multiple dashboards start simultaneously.
+/// - **Process group detach** (Unix): the child runs in its own process group
+///   so Ctrl+C on the dashboard terminal does not propagate SIGINT.
+/// - **Zombie prevention**: a background tokio task reaps the child process.
 ///
 /// The child is fully independent: quitting the dashboard does NOT stop it.
 async fn spawn_worker_process(
     store: &aster_orch::store::Store,
     config_handle: &aster_orch::config::ConfigHandle,
-    config_path: &PathBuf,
+    config_path: &Path,
 ) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    let state_dir = config_handle.load().state_dir.clone();
+    tokio::fs::create_dir_all(&state_dir).await?;
+
+    // Acquire an exclusive lock to prevent TOCTOU races when multiple
+    // dashboards start simultaneously. The lock is held through heartbeat
+    // check + spawn, then released.
+    let lock_path = state_dir.join("worker.lock");
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)?;
+
+    use libc::{flock, LOCK_EX, LOCK_NB};
+    let lock_fd = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            lock_file.as_raw_fd()
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-Unix, skip locking (best-effort heartbeat guard only).
+            -1
+        }
+    };
+
+    #[cfg(unix)]
+    {
+        // Non-blocking exclusive lock. If another dashboard holds it, skip spawn.
+        let ret = unsafe { flock(lock_fd, LOCK_EX | LOCK_NB) };
+        if ret != 0 {
+            // Another dashboard is currently spawning a worker — treat as "already running".
+            return Ok(None);
+        }
+    }
+
     // Check if a worker is already running via heartbeat.
-    let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
-    let now_unix = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    let heartbeat = store.latest_heartbeat().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "heartbeat query failed during worker spawn guard");
+        None
+    });
 
-    let worker_already_running = heartbeat
-        .as_ref()
-        .map(|(_, last_beat_at, _, _)| (now_unix - last_beat_at).abs() < 30)
-        .unwrap_or(false);
-
-    if worker_already_running {
+    if is_worker_alive(&heartbeat, WORKER_HEARTBEAT_MAX_AGE_SECS) {
         return Ok(None);
     }
 
     // Resolve paths for the child process.
     let exe = std::env::current_exe()?;
-    let resolved_config = std::fs::canonicalize(config_path)
-        .unwrap_or_else(|_| config_path.clone());
+    let resolved_config = resolve_config_path(&config_path.to_path_buf());
 
-    // Redirect worker output to a log file.
-    let log_dir = config_handle.load().log_dir();
-    std::fs::create_dir_all(&log_dir)?;
-    let worker_log_path = log_dir.join("worker.log");
-    let worker_log = std::fs::File::create(&worker_log_path)?;
+    // Worker log lives in state_dir (not logs/) to avoid collision with
+    // the per-execution log pruner in loop_runner.rs.
+    let worker_log_path = state_dir.join("worker.log");
+    let worker_log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&worker_log_path)?;
     let worker_log_err = worker_log.try_clone()?;
 
-    let child = std::process::Command::new(exe)
-        .arg("worker")
+    // Write a separator so restarts are visible in the append log.
+    use std::io::Write;
+    let mut separator = worker_log.try_clone()?;
+    let _ = writeln!(
+        separator,
+        "\n--- worker spawn at {} ---",
+        chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+    );
+
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg("worker")
         .arg("--config")
         .arg(&resolved_config)
-        .stdin(Stdio::null())
+        .stdin(std::process::Stdio::null())
         .stdout(worker_log)
         .stderr(worker_log_err)
-        .spawn()?;
+        .kill_on_drop(false);
 
-    let pid = child.id();
-    // Dropping the Child handle does not kill the child process.
-    // The worker continues running independently.
-    drop(child);
+    // Detach from the dashboard's process group so Ctrl+C does not
+    // propagate SIGINT to the worker.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let child = cmd.spawn()?;
+    let pid = child.id().unwrap_or(0);
+
+    // Reap the child asynchronously to prevent zombie processes.
+    tokio::spawn(async move {
+        let _ = child.wait_with_output().await;
+    });
+
+    // Release the lockfile (drop closes the fd and releases flock).
+    drop(lock_file);
+    let _ = lock_fd; // suppress unused warning on non-unix
 
     Ok(Some(pid))
 }
@@ -479,7 +569,7 @@ async fn run_wait(
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_config_path, Cli, Commands};
+    use super::{effective_config_path, is_worker_alive, WORKER_HEARTBEAT_MAX_AGE_SECS, Cli, Commands};
     use clap::Parser;
     use std::path::PathBuf;
 
@@ -698,5 +788,61 @@ mod tests {
             effective_config_path(Some(PathBuf::from("custom.yaml"))),
             PathBuf::from("custom.yaml")
         );
+    }
+
+    // ── Worker heartbeat guard tests ─────────────────────────────────────
+
+    fn now_unix() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    fn heartbeat_at(ts: i64) -> Option<(String, i64, i64, Option<String>)> {
+        Some(("worker-1".to_string(), ts, ts - 100, Some("0.2.0".to_string())))
+    }
+
+    #[test]
+    fn test_is_worker_alive_recent_heartbeat_returns_true() {
+        let hb = heartbeat_at(now_unix() - 5);
+        assert!(is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_stale_heartbeat_returns_false() {
+        let hb = heartbeat_at(now_unix() - 60);
+        assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_no_heartbeat_returns_false() {
+        assert!(!is_worker_alive(&None, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_at_exact_boundary_returns_true() {
+        let hb = heartbeat_at(now_unix() - WORKER_HEARTBEAT_MAX_AGE_SECS);
+        assert!(is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_just_past_boundary_returns_false() {
+        let hb = heartbeat_at(now_unix() - WORKER_HEARTBEAT_MAX_AGE_SECS - 1);
+        assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_future_within_tolerance_returns_true() {
+        // Small forward clock skew (3s) should be tolerated.
+        let hb = heartbeat_at(now_unix() + 3);
+        assert!(is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_future_beyond_tolerance_returns_false() {
+        // Large forward clock skew (10s) should not pass the guard.
+        let hb = heartbeat_at(now_unix() + 10);
+        assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
     }
 }

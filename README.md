@@ -96,15 +96,19 @@ aster_orch mcp-server
 # Dashboard only (reads SQLite directly)
 aster_orch dashboard
 
-# Dashboard + embedded worker (convenience mode)
+# Dashboard + worker (spawns worker as a separate process)
 aster_orch dashboard --with-worker
 
 # Optional override when config is not at the standard location
 aster_orch wait --config /path/to/config.yaml --thread-id <thread-id>
 ```
 
-`--with-worker` is intended for local convenience. For long-running or production
-operation, prefer the standard two-process setup (`worker` + `mcp-server`).
+`--with-worker` spawns the worker as an independent OS process. The worker
+continues running after the dashboard exits — restart the dashboard freely
+without interrupting running triggers. Worker output goes to
+`{state_dir}/worker.log`. A heartbeat guard prevents spawning duplicate workers
+on re-launch. The worker PID is printed on dashboard exit; stop it with
+`kill <pid>`.
 
 Dashboard controls:
 
