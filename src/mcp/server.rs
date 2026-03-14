@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, Peer, RoleServer, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use serde::Serialize;
 
 use crate::backend::registry::BackendRegistry;
@@ -134,19 +134,9 @@ impl OrchestratorMcpServer {
         self.metrics_impl().await
     }
 
-    #[tool(
-        name = "orch_wait",
-        description = "Poll for a message on a thread, optionally filtering by intent. Blocks up to timeout_secs. When neither intent nor since_reference is provided, trigger intents are auto-excluded so the result is the agent's response."
-    )]
-    async fn orch_wait(
-        &self,
-        Parameters(params): Parameters<WaitParams>,
-        meta: Meta,
-        peer: Peer<RoleServer>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let progress_token = meta.get_progress_token();
-        self.wait_impl(params, Some(peer), progress_token).await
-    }
+    // orch_wait removed from MCP surface — stdio transport timeouts make it
+    // unreliable. Use `aster_orch wait` CLI subcommand instead.
+    // The wait_impl method is preserved for potential future use.
 
     #[tool(
         name = "orch_poll",

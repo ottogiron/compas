@@ -1,7 +1,7 @@
 //! Transport-agnostic wait logic.
 //!
 //! Polls the store at 200ms intervals for a matching message on a thread.
-//! Used by both the MCP `orch_wait` tool and the `aster_orch wait` CLI subcommand.
+//! Used by the `aster_orch wait` CLI subcommand.
 
 use std::time::Duration;
 

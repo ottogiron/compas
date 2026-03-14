@@ -1,7 +1,8 @@
-//! orch_wait MCP tool — delegates to the shared wait logic.
+//! Wait implementation — preserved for potential future MCP re-exposure.
 //!
-//! Sends MCP progress notifications at regular intervals to keep the
-//! client connection alive during long waits.
+//! Currently not registered as an MCP tool (removed due to stdio transport
+//! timeout unreliability). Blocking waits use the CLI: `aster_orch wait`.
+//! Sends MCP progress notifications at regular intervals when used via MCP.
 
 use std::time::Duration;
 

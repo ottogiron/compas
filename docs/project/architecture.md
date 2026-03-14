@@ -8,7 +8,7 @@ Operator (MCP client)
     ▼
 ┌─────────────────────────────────────┐
 │  MCP Server  (stdio transport)      │
-│  16 tools: dispatch, status, wait,  │
+│  15 tools: dispatch, status, poll,  │
 │  close, abandon, reopen, ...        │
 │                                     │
 │  ┌───────────┐   ┌───────────────┐  │
@@ -116,7 +116,7 @@ queued → picked_up → executing → completed
 - **Per-agent concurrency enforcement** — `claim_next_execution()` uses a SQL subquery to check active execution count per agent before claiming work.
 - **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing` rows as `crashed` on startup, preventing lost work from going unnoticed.
 - **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP server + worker) to read/write concurrently without SQLITE_BUSY errors.
-- **200ms DB polling for `orch_wait`** — simple, reliable, works across process boundaries without in-memory notification channels.
+- **200ms DB polling for wait** — `wait_for_message()` polls at 200ms intervals. Exposed via `aster_orch wait` CLI subcommand. Removed from MCP surface (stdio transport timeouts made it unreliable).
 - **Three core tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker). Plus `worker_heartbeats` for liveness.
 
 ## Module Structure
@@ -138,14 +138,14 @@ src/
 │   ├── mod.rs           #   Config loading + normalization
 │   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
 │   └── validation.rs    #   Config validation
-├── mcp/                 # MCP server (16 tools)
+├── mcp/                 # MCP server (15 tools)
 │   ├── mod.rs           #   Module declarations
 │   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
 │   ├── params.rs        #   All parameter structs
 │   ├── dispatch.rs      #   orch_dispatch (message + execution insert)
 │   ├── query.rs         #   orch_status, transcript, read, metrics, poll, batch_status, tasks
 │   ├── lifecycle.rs     #   orch_close, abandon, reopen
-│   ├── wait.rs          #   orch_wait (200ms DB poll loop)
+│   ├── wait.rs          #   wait logic (200ms DB poll, used by CLI wait)
 │   ├── session.rs       #   orch_session_info, orch_list_agents
 │   └── health.rs        #   orch_health, orch_diagnose
 ├── store/               # SQLite store (threads + messages + executions + heartbeats)
@@ -172,5 +172,5 @@ src/
 | Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
 | AgentRuntime state machine | Stateless worker (execution-per-trigger) |
 | Session namespace scoping | Scoping by DB file |
-| 24 MCP tools | 16 MCP tools |
+| 24 MCP tools | 15 MCP tools (wait moved to CLI-only) |
 | `daemon run` subcommand | `worker` + `mcp-server` subcommands only |

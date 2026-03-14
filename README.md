@@ -178,6 +178,8 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 
 ## MCP Tools
 
+For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300`. The MCP transport is unsuitable for long-blocking calls.
+
 ### Core
 
 | Tool | What it does |
@@ -193,7 +195,6 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 |------|-------------|
 | `orch_status` | Thread and execution status (filter by agent or thread) |
 | `orch_poll` | Quick non-blocking check for new messages |
-| `orch_wait` | Block until a message arrives (with timeout) |
 | `orch_transcript` | Full conversation history for a thread |
 | `orch_read` | Read a single message by reference |
 | `orch_batch_status` | Status breakdown for all threads in a batch |
