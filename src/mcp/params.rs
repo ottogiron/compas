@@ -123,3 +123,16 @@ pub struct ReopenParams {
     /// Thread ID to reopen
     pub thread_id: String,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ExecutionEventsParams {
+    /// Execution ID to fetch events for
+    pub execution_id: String,
+    /// Filter events after this timestamp (unix epoch milliseconds)
+    pub since_timestamp: Option<i64>,
+    /// Return only events with event_index strictly greater than this value.
+    /// Preferred cursor for polling (timestamps can collide; event_index is monotonic).
+    pub since_event_index: Option<i32>,
+    /// Max events to return (default 100)
+    pub limit: Option<i64>,
+}

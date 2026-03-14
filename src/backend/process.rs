@@ -122,10 +122,15 @@ pub fn spawn_cli(
 /// Stdout lines are written as-is; stderr lines are prefixed with `[stderr] `.
 /// The returned `Output` contains the full collected stdout/stderr bytes, identical
 /// in shape to what the previous blocking implementation returned.
+///
+/// `stdout_tx`: when `Some`, each stdout line is sent via `try_send()` for real-time
+/// telemetry consumption. The send is best-effort and never blocks the agent process.
+/// Wrapped in `Arc` so it can be cheaply cloned from `Session` into the reader thread.
 pub fn wait_with_timeout(
     mut child: Child,
     timeout: Option<Duration>,
     log_path: Option<&Path>,
+    stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
 ) -> Result<Output> {
     // Open (or create) the log file before spawning reader threads so that any
     // open error is surfaced early and doesn't swallow output silently.
@@ -169,6 +174,12 @@ pub fn wait_with_timeout(
                     if let Some(ref f) = lf {
                         let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
                         let _ = writeln!(guard, "{}", l);
+                    }
+                    if let Some(ref tx) = stdout_tx {
+                        if let Err(std::sync::mpsc::TrySendError::Full(_)) = tx.try_send(l.clone())
+                        {
+                            tracing::debug!("telemetry channel full, dropping stdout line");
+                        }
                     }
                 }
             })
@@ -575,7 +586,7 @@ mod tests {
     #[test]
     fn test_spawn_cli_echo() {
         let child = spawn_cli("echo", &["hello"], None, None).unwrap();
-        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None).unwrap();
+        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None, None).unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("hello"));
     }
@@ -584,7 +595,7 @@ mod tests {
     fn test_spawn_cli_respects_workdir() {
         let dir = tempfile::tempdir().unwrap();
         let child = spawn_cli("pwd", &[], None, Some(dir.path())).unwrap();
-        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None).unwrap();
+        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None, None).unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         let cwd = std::fs::canonicalize(stdout.trim()).unwrap();
         let expected = std::fs::canonicalize(dir.path()).unwrap();
@@ -594,7 +605,7 @@ mod tests {
     #[test]
     fn test_wait_with_timeout_expires() {
         let child = spawn_cli("sleep", &["60"], None, None).unwrap();
-        let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None);
+        let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
     }
@@ -605,7 +616,7 @@ mod tests {
         let log_path = dir.path().join("exec-test.log");
         let child = spawn_cli("echo", &["hello from stdout"], None, None).unwrap();
         let output =
-            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
         // Output bytes are still collected correctly.
         assert!(String::from_utf8_lossy(&output.stdout).contains("hello from stdout"));
         // Log file contains the line.
@@ -618,7 +629,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("exec-stderr.log");
         let child = spawn_cli("sh", &["-c", "echo 'error line' >&2"], None, None).unwrap();
-        let _ = wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+        let _ =
+            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert!(log.contains("[stderr] error line"), "log was: {:?}", log);
     }
@@ -628,7 +640,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("logs").join("nested").join("exec.log");
         let child = spawn_cli("echo", &["hi"], None, None).unwrap();
-        let _ = wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path)).unwrap();
+        let _ =
+            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
         assert!(log_path.exists(), "log file should have been created");
     }
 

@@ -181,6 +181,7 @@ impl Backend for OpenCodeBackend {
             backend: "opencode".into(),
             started_at: Utc::now(),
             resume_session_id: None,
+            stdout_tx: None,
         })
     }
 
@@ -209,7 +210,12 @@ impl Backend for OpenCodeBackend {
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
-        let output = wait_with_timeout(child, Some(timeout), agent.log_path.as_deref());
+        let output = wait_with_timeout(
+            child,
+            Some(timeout),
+            agent.log_path.as_deref(),
+            session.stdout_tx.clone(),
+        );
         self.tracker.untrack(&session.id);
 
         match output {
@@ -247,7 +253,7 @@ impl Backend for OpenCodeBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None) {
+                match wait_with_timeout(child, Some(timeout), None, None) {
                     Ok(out) => {
                         // Clean up the throwaway ping session.
                         if let Some(oc_sid) = Self::extract_session_id_from_output(&out.stdout) {
@@ -290,6 +296,67 @@ impl Backend for OpenCodeBackend {
             self.tracker.untrack(&session.id);
         }
         Ok(())
+    }
+}
+
+/// Maximum length for the `detail` field (raw JSON) stored per event.
+const MAX_DETAIL_LEN: usize = 2048;
+
+fn truncate_detail(s: &str) -> String {
+    if s.len() <= MAX_DETAIL_LEN {
+        s.to_string()
+    } else {
+        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
+    }
+}
+
+/// Parse a single OpenCode CLI JSONL line into an `ExecutionEvent`.
+///
+/// Schemas observed from OpenCode CLI v0.2.x (`--format json` output).
+/// Returns `None` for unrecognized or irrelevant event lines.
+pub fn parse_opencode_stream_line(line: &str) -> Option<super::ExecutionEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let event_type_str = val.get("type")?.as_str()?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    match event_type_str {
+        "tool_start" => {
+            let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
+            Some(super::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: name.to_string(),
+                detail: Some(truncate_detail(trimmed)),
+                timestamp_ms: now_ms,
+                event_index: 0,
+            })
+        }
+        "step_finish" => Some(super::ExecutionEvent {
+            event_type: "turn_complete".to_string(),
+            summary: "step finished".to_string(),
+            detail: Some(truncate_detail(trimmed)),
+            timestamp_ms: now_ms,
+            event_index: 0,
+        }),
+        "text" => {
+            let text = val.pointer("/part/text").and_then(|v| v.as_str())?;
+            if text.len() <= 10 {
+                return None; // skip tiny deltas
+            }
+            let truncated: String = text.chars().take(60).collect();
+            Some(super::ExecutionEvent {
+                event_type: "message".to_string(),
+                summary: truncated,
+                detail: Some(truncate_detail(trimmed)),
+                timestamp_ms: now_ms,
+                event_index: 0,
+            })
+        }
+        _ => None,
     }
 }
 
@@ -532,5 +599,67 @@ mod tests {
             OpenCodeBackend::extract_session_id_from_output(stdout),
             Some("ses_found".to_string())
         );
+    }
+
+    // -- parse_opencode_stream_line tests --
+    // Schemas observed from OpenCode CLI v0.2.x (--format json output)
+
+    #[test]
+    fn test_parse_opencode_tool_start() {
+        let line = r#"{"type":"tool_start","timestamp":1771873095732,"sessionID":"ses_abc","name":"bash"}"#;
+        let event = parse_opencode_stream_line(line).expect("should parse tool_start");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "bash");
+    }
+
+    #[test]
+    fn test_parse_opencode_tool_start_no_name() {
+        let line = r#"{"type":"tool_start","timestamp":123}"#;
+        let event = parse_opencode_stream_line(line).expect("should parse");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "tool");
+    }
+
+    #[test]
+    fn test_parse_opencode_step_finish() {
+        let line = r#"{"type":"step_finish","timestamp":1771873095880,"sessionID":"ses_abc","part":{"id":"prt_3"}}"#;
+        let event = parse_opencode_stream_line(line).expect("should parse step_finish");
+        assert_eq!(event.event_type, "turn_complete");
+        assert_eq!(event.summary, "step finished");
+    }
+
+    #[test]
+    fn test_parse_opencode_text_long() {
+        let line = r#"{"type":"text","timestamp":123,"sessionID":"ses_abc","part":{"id":"prt_2","text":"Here is a longer response from the agent that exceeds ten characters."}}"#;
+        let event = parse_opencode_stream_line(line).expect("should parse text");
+        assert_eq!(event.event_type, "message");
+        assert_eq!(event.summary.len(), 60); // truncated
+    }
+
+    #[test]
+    fn test_parse_opencode_text_short_skipped() {
+        // Text with 10 or fewer chars should be skipped (tiny delta)
+        let line = r#"{"type":"text","timestamp":123,"part":{"text":"ok"}}"#;
+        assert!(parse_opencode_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_opencode_text_no_part() {
+        let line = r#"{"type":"text","timestamp":123}"#;
+        assert!(parse_opencode_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_opencode_step_start_returns_none() {
+        // step_start is not an event type we recognize — only tool_start
+        let line = r#"{"type":"step_start","timestamp":123,"sessionID":"ses_abc"}"#;
+        assert!(parse_opencode_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_opencode_empty_and_garbage() {
+        assert!(parse_opencode_stream_line("").is_none());
+        assert!(parse_opencode_stream_line("not json").is_none());
+        assert!(parse_opencode_stream_line(r#"{"no_type":true}"#).is_none());
     }
 }

@@ -164,6 +164,7 @@ impl Backend for ClaudeCodeBackend {
             backend: "claude".into(),
             started_at: Utc::now(),
             resume_session_id: None,
+            stdout_tx: None,
         })
     }
 
@@ -196,7 +197,12 @@ impl Backend for ClaudeCodeBackend {
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
-        let output = wait_with_timeout(child, Some(timeout), agent.log_path.as_deref());
+        let output = wait_with_timeout(
+            child,
+            Some(timeout),
+            agent.log_path.as_deref(),
+            session.stdout_tx.clone(),
+        );
         self.tracker.untrack(&session.id);
 
         match output {
@@ -236,7 +242,7 @@ impl Backend for ClaudeCodeBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None) {
+                match wait_with_timeout(child, Some(timeout), None, None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {
@@ -275,6 +281,95 @@ impl Backend for ClaudeCodeBackend {
             self.tracker.untrack(&session.id);
         }
         Ok(())
+    }
+}
+
+/// Maximum length for the `detail` field (raw JSON) stored per event.
+const MAX_DETAIL_LEN: usize = 2048;
+
+fn truncate_detail(s: &str) -> String {
+    if s.len() <= MAX_DETAIL_LEN {
+        s.to_string()
+    } else {
+        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
+    }
+}
+
+/// Parse a single Claude stream-json JSONL line into an `ExecutionEvent`.
+///
+/// Schemas observed from Claude Code CLI v1.0.x (`--output-format stream-json`).
+/// Returns `None` for unrecognized or irrelevant event lines.
+///
+/// **Limitation**: When an `assistant` message contains multiple `tool_use`
+/// blocks, only the *first* one is captured. Subsequent tool_use blocks in
+/// the same message are dropped. This is acceptable because Claude Code
+/// typically emits one tool_use per assistant message in stream-json mode.
+pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let event_type_str = val.get("type")?.as_str()?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    match event_type_str {
+        "assistant" => {
+            // Look for tool_use blocks in message.content[].
+            // Only the first tool_use is captured (see doc comment above).
+            let content = val.pointer("/message/content")?;
+            let items = content.as_array()?;
+            for item in items {
+                if item.get("type").and_then(|t| t.as_str()) == Some("tool_use") {
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("unknown");
+                    let summary = match name {
+                        "Write" => {
+                            let fp = item
+                                .pointer("/input/file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            format!("Write to {}", fp)
+                        }
+                        "Bash" => {
+                            let cmd = item
+                                .pointer("/input/command")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let truncated: String = cmd.chars().take(60).collect();
+                            format!("Bash: {}", truncated)
+                        }
+                        "Read" => {
+                            let fp = item
+                                .pointer("/input/file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            format!("Read {}", fp)
+                        }
+                        other => other.to_string(),
+                    };
+                    return Some(super::ExecutionEvent {
+                        event_type: "tool_call".to_string(),
+                        summary,
+                        detail: Some(truncate_detail(trimmed)),
+                        timestamp_ms: now_ms,
+                        event_index: 0,
+                    });
+                }
+            }
+            None
+        }
+        "result" => Some(super::ExecutionEvent {
+            event_type: "turn_complete".to_string(),
+            summary: "completed".to_string(),
+            detail: Some(truncate_detail(trimmed)),
+            timestamp_ms: now_ms,
+            event_index: 0,
+        }),
+        _ => None,
     }
 }
 
@@ -458,5 +553,90 @@ mod tests {
         let (text, sid, _found) = extract_claude_stream_output(b"");
         assert_eq!(text, "");
         assert!(sid.is_none());
+    }
+
+    // -- parse_claude_stream_line tests --
+    // Schemas observed from Claude Code CLI v1.0.x (--output-format stream-json)
+
+    #[test]
+    fn test_parse_claude_stream_write_tool() {
+        let line = r#"{"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_01","name":"Write","input":{"file_path":"src/events.rs","content":"// new file"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse Write tool_use");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "Write to src/events.rs");
+        assert!(event.detail.is_some());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_bash_tool() {
+        let line = r#"{"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_02","name":"Bash","input":{"command":"cargo test --lib"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse Bash tool_use");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "Bash: cargo test --lib");
+    }
+
+    #[test]
+    fn test_parse_claude_stream_bash_tool_long_command() {
+        let long_cmd = "a]".to_string() + &"x".repeat(100);
+        let line = format!(
+            r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"Bash","input":{{"command":"{}"}}}}]}}}}"#,
+            long_cmd
+        );
+        let event = parse_claude_stream_line(&line).expect("should parse");
+        // Summary should be truncated to 60 chars of the command
+        assert!(event.summary.starts_with("Bash: "));
+        assert!(event.summary.len() <= "Bash: ".len() + 60);
+    }
+
+    #[test]
+    fn test_parse_claude_stream_read_tool() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"Cargo.toml"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse Read tool_use");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "Read Cargo.toml");
+    }
+
+    #[test]
+    fn test_parse_claude_stream_other_tool() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"TODO"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse other tool_use");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "Grep");
+    }
+
+    #[test]
+    fn test_parse_claude_stream_result() {
+        let line = r#"{"type":"result","subtype":"success","cost_usd":0.003,"result":"Done.","session_id":"abc-123"}"#;
+        let event = parse_claude_stream_line(line).expect("should parse result");
+        assert_eq!(event.event_type, "turn_complete");
+        assert_eq!(event.summary, "completed");
+    }
+
+    #[test]
+    fn test_parse_claude_stream_system_init_returns_none() {
+        let line = r#"{"type":"system","subtype":"init","session_id":"abc-123","tools":[],"model":"claude-sonnet-4-20250514"}"#;
+        assert!(parse_claude_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_text_content_returns_none() {
+        // Assistant message with text content only (no tool_use) — not an actionable event
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it..."}]}}"#;
+        assert!(parse_claude_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_empty_line() {
+        assert!(parse_claude_stream_line("").is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_garbage() {
+        assert!(parse_claude_stream_line("not json at all").is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_json_without_type() {
+        assert!(parse_claude_stream_line(r#"{"foo":"bar"}"#).is_none());
     }
 }

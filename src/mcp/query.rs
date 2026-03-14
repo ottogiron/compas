@@ -352,6 +352,50 @@ impl OrchestratorMcpServer {
         }))
     }
 
+    // ── orch_execution_events ─────────────────────────────────────────────
+
+    pub async fn execution_events_impl(
+        &self,
+        params: ExecutionEventsParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let limit = params.limit.unwrap_or(100).min(1000);
+        match self
+            .store
+            .get_execution_events(
+                &params.execution_id,
+                params.since_timestamp,
+                params.since_event_index,
+                Some(limit),
+            )
+            .await
+        {
+            Ok(events) => {
+                #[derive(Serialize)]
+                struct EventEntry {
+                    id: i64,
+                    event_type: String,
+                    summary: String,
+                    detail: Option<String>,
+                    timestamp_ms: i64,
+                    event_index: i32,
+                }
+                let entries: Vec<EventEntry> = events
+                    .into_iter()
+                    .map(|e| EventEntry {
+                        id: e.id,
+                        event_type: e.event_type,
+                        summary: e.summary,
+                        detail: e.detail,
+                        timestamp_ms: e.timestamp_ms,
+                        event_index: e.event_index,
+                    })
+                    .collect();
+                Ok(json_text(&entries))
+            }
+            Err(e) => Ok(err_text(format!("execution events query failed: {}", e))),
+        }
+    }
+
     // ── orch_tasks ───────────────────────────────────────────────────────
 
     pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {

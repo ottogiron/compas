@@ -109,6 +109,7 @@ impl Backend for GeminiBackend {
             backend: "gemini".into(),
             started_at: Utc::now(),
             resume_session_id: None,
+            stdout_tx: None,
         })
     }
 
@@ -137,7 +138,12 @@ impl Backend for GeminiBackend {
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
-        let output = wait_with_timeout(child, Some(timeout), agent.log_path.as_deref());
+        let output = wait_with_timeout(
+            child,
+            Some(timeout),
+            agent.log_path.as_deref(),
+            session.stdout_tx.clone(),
+        );
         self.tracker.untrack(&session.id);
 
         match output {
@@ -195,7 +201,7 @@ impl Backend for GeminiBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None) {
+                match wait_with_timeout(child, Some(timeout), None, None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {

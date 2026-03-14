@@ -43,6 +43,7 @@ impl Backend for StubBackend {
             backend: "stub".to_string(),
             started_at: chrono::Utc::now(),
             resume_session_id: None,
+            stdout_tx: None,
         })
     }
 

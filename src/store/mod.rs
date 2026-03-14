@@ -150,6 +150,18 @@ pub struct ExecutionRow {
     pub parsed_intent: Option<String>,
 }
 
+/// A stored execution event row (real-time telemetry).
+#[derive(Debug, Clone)]
+pub struct ExecutionEventRow {
+    pub id: i64,
+    pub execution_id: String,
+    pub event_type: String,
+    pub summary: String,
+    pub detail: Option<String>,
+    pub timestamp_ms: i64,
+    pub event_index: i32,
+}
+
 /// A stored thread row.
 #[derive(Debug, Clone)]
 pub struct ThreadRow {
@@ -331,6 +343,27 @@ impl Store {
                 started_at   INTEGER NOT NULL,
                 version      TEXT
             )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS execution_events (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id   TEXT NOT NULL,
+                event_type     TEXT NOT NULL,
+                summary        TEXT NOT NULL,
+                detail         TEXT,
+                timestamp_ms   INTEGER NOT NULL,
+                event_index    INTEGER NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_exec_events_lookup
+             ON execution_events(execution_id, timestamp_ms)",
         )
         .execute(&self.pool)
         .await?;
@@ -1235,6 +1268,89 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── Execution event telemetry ────────────────────────────────────────
+
+    /// Batch insert execution events in a single transaction.
+    pub async fn insert_execution_events(
+        &self,
+        execution_id: &str,
+        events: &[crate::backend::ExecutionEvent],
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        for event in events {
+            sqlx::query(
+                "INSERT INTO execution_events (execution_id, event_type, summary, detail, timestamp_ms, event_index)
+                 VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(execution_id)
+            .bind(&event.event_type)
+            .bind(&event.summary)
+            .bind(&event.detail)
+            .bind(event.timestamp_ms)
+            .bind(event.event_index)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Retrieve execution events, optionally filtered by timestamp, event_index cursor, and limited.
+    pub async fn get_execution_events(
+        &self,
+        execution_id: &str,
+        since_timestamp: Option<i64>,
+        since_event_index: Option<i32>,
+        limit: Option<i64>,
+    ) -> Result<Vec<ExecutionEventRow>, sqlx::Error> {
+        let since_ts = since_timestamp.unwrap_or(0);
+        let since_idx = since_event_index.unwrap_or(-1);
+        let lim = limit.unwrap_or(100);
+
+        let rows: Vec<(i64, String, String, String, Option<String>, i64, i32)> = sqlx::query_as(
+            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index
+             FROM execution_events
+             WHERE execution_id = ? AND timestamp_ms >= ? AND event_index > ?
+             ORDER BY event_index ASC
+             LIMIT ?",
+        )
+        .bind(execution_id)
+        .bind(since_ts)
+        .bind(since_idx)
+        .bind(lim)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| ExecutionEventRow {
+                id: r.0,
+                execution_id: r.1,
+                event_type: r.2,
+                summary: r.3,
+                detail: r.4,
+                timestamp_ms: r.5,
+                event_index: r.6,
+            })
+            .collect())
+    }
+
+    /// Delete execution_events rows for executions that are not among the
+    /// `retention_count` most recent executions (by `queued_at`). This prevents
+    /// unbounded growth of the telemetry table.
+    pub async fn prune_execution_events(&self, retention_count: i64) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "DELETE FROM execution_events
+             WHERE execution_id NOT IN (
+                 SELECT id FROM executions ORDER BY queued_at DESC LIMIT ?
+             )",
+        )
+        .bind(retention_count)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 }
 

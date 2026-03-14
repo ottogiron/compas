@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// A backend agent session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -13,6 +14,11 @@ pub struct Session {
     /// (e.g. `-r` for Claude, `resume <id>` for Codex, `-s` for OpenCode).
     #[serde(default)]
     pub resume_session_id: Option<String>,
+    /// Optional channel for streaming stdout lines to a telemetry consumer.
+    /// Set by the executor before calling `trigger()`. Backends pass this
+    /// through to `wait_with_timeout()` for real-time event extraction.
+    #[serde(skip)]
+    pub stdout_tx: Option<Arc<std::sync::mpsc::SyncSender<String>>>,
 }
 
 /// Status of an agent session.

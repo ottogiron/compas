@@ -222,6 +222,17 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.tasks_impl(params).await
     }
+
+    #[tool(
+        name = "orch_execution_events",
+        description = "Get real-time execution telemetry events (tool calls, messages, turn completions) for a running or completed execution."
+    )]
+    async fn orch_execution_events(
+        &self,
+        Parameters(params): Parameters<ExecutionEventsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.execution_events_impl(params).await
+    }
 }
 
 // ---------------------------------------------------------------------------

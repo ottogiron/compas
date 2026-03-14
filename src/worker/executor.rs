@@ -35,6 +35,11 @@ pub struct TriggerOutput {
 ///
 /// `log_dir`: when `Some`, stdout/stderr are streamed to
 /// `{log_dir}/{exec_id}.log` during execution.
+///
+/// `stdout_tx`: when `Some`, each stdout line is forwarded to a telemetry
+/// consumer via the session. Wrapped in `Arc` so it can be shared with the
+/// reader thread inside `wait_with_timeout`.
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_trigger(
     execution: &ExecutionRow,
     store: &Store,
@@ -43,6 +48,7 @@ pub async fn execute_trigger(
     instruction: &str,
     execution_timeout_secs: u64,
     log_dir: Option<PathBuf>,
+    stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
     let thread_id = execution.thread_id.clone();
@@ -163,6 +169,7 @@ pub async fn execute_trigger(
                 .await
                 .map_err(|e| e.to_string())?;
             session.resume_session_id = resume_session_id;
+            session.stdout_tx = stdout_tx;
             backend
                 .trigger(&agent, &session, Some(&instruction))
                 .await

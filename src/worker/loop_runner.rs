@@ -96,6 +96,21 @@ impl WorkerRunner {
         }
         prune_log_files(&log_dir, startup_config.orchestration.log_retention_count);
 
+        // Prune old execution telemetry events (same retention threshold as logs).
+        match self
+            .store
+            .prune_execution_events(startup_config.orchestration.log_retention_count as i64)
+            .await
+        {
+            Ok(count) if count > 0 => {
+                tracing::info!(removed = count, "pruned old execution_events rows");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to prune execution_events");
+            }
+            _ => {}
+        }
+
         // Initial heartbeat
         self.store
             .write_heartbeat(&self.worker_id, env!("CARGO_PKG_VERSION"))
@@ -232,8 +247,49 @@ impl WorkerRunner {
                     let thread_id = execution.thread_id.clone();
                     let event_bus = self.event_bus.clone();
 
+                    // Determine backend name for telemetry parser selection.
+                    let backend_name = agent_configs
+                        .iter()
+                        .find(|a| a.alias == execution.agent_alias)
+                        .map(|a| a.backend.clone())
+                        .unwrap_or_default();
+
+                    // Create telemetry channel for real-time stdout line forwarding.
+                    let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel::<String>(128);
+                    let stdout_tx = std::sync::Arc::new(stdout_tx);
+
+                    // Clone values for the telemetry consumer task.
+                    let telem_store = store.clone();
+                    let telem_event_bus = event_bus.clone();
+                    let telem_exec_id = execution.id.clone();
+                    let telem_thread_id = execution.thread_id.clone();
+                    let telem_agent_alias = execution.agent_alias.clone();
+
                     tokio::spawn(async move {
                         let _permit = permit; // held until task completes
+
+                        // Spawn telemetry consumer before the trigger so it's
+                        // ready to receive lines as soon as stdout starts flowing.
+                        let telemetry_handle = tokio::spawn({
+                            let store = telem_store;
+                            let event_bus = telem_event_bus;
+                            let exec_id = telem_exec_id;
+                            let thread_id = telem_thread_id;
+                            let agent_alias = telem_agent_alias;
+                            let backend = backend_name;
+                            async move {
+                                consume_telemetry(
+                                    stdout_rx,
+                                    &store,
+                                    &event_bus,
+                                    &exec_id,
+                                    &thread_id,
+                                    &agent_alias,
+                                    &backend,
+                                )
+                                .await;
+                            }
+                        });
 
                         // Strict provenance: execute only from the dispatch message
                         // linked to this execution. Legacy/unlinked rows fall back to
@@ -278,8 +334,14 @@ impl WorkerRunner {
                             &instruction,
                             execution_timeout_secs,
                             log_dir,
+                            Some(stdout_tx),
                         )
                         .await;
+
+                        // Wait for telemetry consumer to finish flushing.
+                        // The stdout_tx is dropped when execute_trigger returns,
+                        // which causes the consumer's recv to get Disconnected.
+                        let _ = telemetry_handle.await;
 
                         // Post-execution: insert reply message and emit events.
                         handle_trigger_output(&store, &event_bus, &output).await;
@@ -389,6 +451,77 @@ fn prune_log_files(log_dir: &Path, retention_count: usize) {
     }
 }
 
+/// Consume stdout lines from a running backend process, parse them into
+/// structured execution events, and flush to the store in batches.
+///
+/// Runs as a separate tokio task alongside the trigger execution. The channel
+/// disconnects when the trigger finishes, which terminates this consumer.
+async fn consume_telemetry(
+    rx: std::sync::mpsc::Receiver<String>,
+    store: &Store,
+    event_bus: &EventBus,
+    execution_id: &str,
+    thread_id: &str,
+    agent_alias: &str,
+    backend_name: &str,
+) {
+    use crate::backend::claude::parse_claude_stream_line;
+    use crate::backend::codex::parse_codex_stream_line;
+    use crate::backend::opencode::parse_opencode_stream_line;
+    use crate::backend::ExecutionEvent;
+    use std::time::{Duration, Instant};
+
+    let parser: fn(&str) -> Option<ExecutionEvent> = match backend_name {
+        "claude" => parse_claude_stream_line,
+        "codex" => parse_codex_stream_line,
+        "opencode" => parse_opencode_stream_line,
+        _ => return, // No parser for this backend (e.g., gemini)
+    };
+
+    let mut buffer: Vec<ExecutionEvent> = Vec::new();
+    let mut event_index: i32 = 0;
+    let mut last_flush = Instant::now();
+
+    loop {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) => {
+                if let Some(mut event) = parser(&line) {
+                    event.event_index = event_index;
+                    event_index += 1;
+
+                    event_bus.emit(OrchestratorEvent::ExecutionProgress {
+                        execution_id: execution_id.to_string(),
+                        thread_id: thread_id.to_string(),
+                        agent_alias: agent_alias.to_string(),
+                        summary: event.summary.clone(),
+                    });
+
+                    buffer.push(event);
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+
+        if buffer.len() >= 20
+            || (last_flush.elapsed() > Duration::from_millis(500) && !buffer.is_empty())
+        {
+            if let Err(e) = store.insert_execution_events(execution_id, &buffer).await {
+                tracing::warn!(error = %e, "failed to flush telemetry events");
+            }
+            buffer.clear();
+            last_flush = Instant::now();
+        }
+    }
+
+    // Final flush
+    if !buffer.is_empty() {
+        if let Err(e) = store.insert_execution_events(execution_id, &buffer).await {
+            tracing::warn!(error = %e, "failed to flush final telemetry events");
+        }
+    }
+}
+
 /// Insert a reply message from the agent after trigger completion, and emit
 /// events for `ExecutionCompleted`, `ThreadStatusChanged` (on failure), and
 /// `MessageReceived`.
@@ -464,4 +597,94 @@ async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &Tri
         intent = ?output.parsed_intent,
         "trigger completed"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn test_store() -> Store {
+        let pool = sqlx::sqlite::SqlitePool::connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let store = Store::new(pool);
+        store.setup().await.unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn test_consume_telemetry_stores_and_flushes() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let mut rx_events = event_bus.subscribe();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(128);
+
+        // Feed Claude-style JSONL lines through the channel.
+        tx.send(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"src/main.rs"}}]}}"#.to_string()).unwrap();
+        tx.send(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#.to_string()).unwrap();
+        tx.send(
+            r#"{"type":"result","subtype":"success","result":"Done.","session_id":"s1"}"#
+                .to_string(),
+        )
+        .unwrap();
+        // Also send an unrecognized line — should be silently ignored.
+        tx.send(r#"{"type":"system","subtype":"init"}"#.to_string())
+            .unwrap();
+
+        // Drop sender to signal disconnect.
+        drop(tx);
+
+        consume_telemetry(
+            rx, &store, &event_bus, "exec-1", "thread-1", "agent-a", "claude",
+        )
+        .await;
+
+        // Verify events were stored in SQLite.
+        let events = store
+            .get_execution_events("exec-1", None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            events.len(),
+            3,
+            "expected 3 parsed events (2 tool_call + 1 turn_complete)"
+        );
+        assert_eq!(events[0].event_type, "tool_call");
+        assert_eq!(events[0].summary, "Write to src/main.rs");
+        assert_eq!(events[0].event_index, 0);
+        assert_eq!(events[1].event_type, "tool_call");
+        assert!(events[1].summary.starts_with("Bash:"));
+        assert_eq!(events[1].event_index, 1);
+        assert_eq!(events[2].event_type, "turn_complete");
+        assert_eq!(events[2].event_index, 2);
+
+        // Verify EventBus received ExecutionProgress events.
+        let mut progress_count = 0;
+        while let Ok(ev) = rx_events.try_recv() {
+            if let OrchestratorEvent::ExecutionProgress { execution_id, .. } = ev {
+                assert_eq!(execution_id, "exec-1");
+                progress_count += 1;
+            }
+        }
+        assert_eq!(progress_count, 3);
+    }
+
+    #[tokio::test]
+    async fn test_consume_telemetry_unknown_backend_returns_immediately() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(128);
+        tx.send(r#"{"type":"result"}"#.to_string()).unwrap();
+        drop(tx);
+
+        // "gemini" has no parser — should return immediately without storing anything.
+        consume_telemetry(rx, &store, &event_bus, "exec-2", "t-2", "agent-b", "gemini").await;
+
+        let events = store
+            .get_execution_events("exec-2", None, None, None)
+            .await
+            .unwrap();
+        assert!(events.is_empty());
+    }
 }

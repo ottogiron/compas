@@ -30,7 +30,7 @@ pub enum OrchestratorEvent {
         agent_alias: String,
     },
     /// Incremental progress from a running execution.
-    /// TODO(ORCH-EVO-1): Not yet emitted — placeholder for execution telemetry.
+    /// Emitted by `consume_telemetry` in `loop_runner` for each parsed backend event.
     ExecutionProgress {
         execution_id: String,
         thread_id: String,

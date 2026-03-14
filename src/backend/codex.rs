@@ -131,6 +131,7 @@ impl Backend for CodexBackend {
             backend: "codex".into(),
             started_at: Utc::now(),
             resume_session_id: None,
+            stdout_tx: None,
         })
     }
 
@@ -166,7 +167,12 @@ impl Backend for CodexBackend {
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
-        let output = wait_with_timeout(child, Some(timeout), agent.log_path.as_deref());
+        let output = wait_with_timeout(
+            child,
+            Some(timeout),
+            agent.log_path.as_deref(),
+            session.stdout_tx.clone(),
+        );
         self.tracker.untrack(&session.id);
 
         match output {
@@ -203,7 +209,7 @@ impl Backend for CodexBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None) {
+                match wait_with_timeout(child, Some(timeout), None, None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {
@@ -241,6 +247,74 @@ impl Backend for CodexBackend {
             self.tracker.untrack(&session.id);
         }
         Ok(())
+    }
+}
+
+/// Maximum length for the `detail` field (raw JSON) stored per event.
+const MAX_DETAIL_LEN: usize = 2048;
+
+fn truncate_detail(s: &str) -> String {
+    if s.len() <= MAX_DETAIL_LEN {
+        s.to_string()
+    } else {
+        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
+    }
+}
+
+/// Parse a single Codex CLI JSONL line into an `ExecutionEvent`.
+///
+/// Schemas observed from Codex CLI v0.1.x (`--json` output).
+/// Returns `None` for unrecognized or irrelevant event lines.
+pub fn parse_codex_stream_line(line: &str) -> Option<super::ExecutionEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let event_type_str = val.get("type")?.as_str()?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    match event_type_str {
+        "item.completed" => {
+            let item = val.get("item")?;
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            match item_type {
+                "function_call" => {
+                    let name = item
+                        .get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("function_call");
+                    Some(super::ExecutionEvent {
+                        event_type: "tool_call".to_string(),
+                        summary: name.to_string(),
+                        detail: Some(truncate_detail(trimmed)),
+                        timestamp_ms: now_ms,
+                        event_index: 0,
+                    })
+                }
+                "agent_message" => {
+                    let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                    let truncated: String = text.chars().take(60).collect();
+                    Some(super::ExecutionEvent {
+                        event_type: "message".to_string(),
+                        summary: truncated,
+                        detail: Some(truncate_detail(trimmed)),
+                        timestamp_ms: now_ms,
+                        event_index: 0,
+                    })
+                }
+                _ => None,
+            }
+        }
+        "turn.completed" => Some(super::ExecutionEvent {
+            event_type: "turn_complete".to_string(),
+            summary: "turn completed".to_string(),
+            detail: Some(truncate_detail(trimmed)),
+            timestamp_ms: now_ms,
+            event_index: 0,
+        }),
+        _ => None,
     }
 }
 
@@ -389,5 +463,66 @@ mod tests {
             text,
             r#"{"intent":"status-update","to":"lead","body":"Done"}"#
         );
+    }
+
+    // -- parse_codex_stream_line tests --
+    // Schemas observed from Codex CLI v0.1.x (--json output)
+
+    #[test]
+    fn test_parse_codex_function_call() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"function_call","name":"shell","arguments":"{\"command\":\"cargo test\"}"}}"#;
+        let event = parse_codex_stream_line(line).expect("should parse function_call");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "shell");
+    }
+
+    #[test]
+    fn test_parse_codex_agent_message() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"I have completed the implementation of the feature."}}"#;
+        let event = parse_codex_stream_line(line).expect("should parse agent_message");
+        assert_eq!(event.event_type, "message");
+        assert_eq!(
+            event.summary,
+            "I have completed the implementation of the feature."
+        );
+    }
+
+    #[test]
+    fn test_parse_codex_agent_message_truncated() {
+        let long_text = "A".repeat(200);
+        let line = format!(
+            r#"{{"type":"item.completed","item":{{"type":"agent_message","text":"{}"}}}}"#,
+            long_text
+        );
+        let event = parse_codex_stream_line(&line).expect("should parse");
+        assert_eq!(event.summary.len(), 60);
+    }
+
+    #[test]
+    fn test_parse_codex_turn_completed() {
+        let line = r#"{"type":"turn.completed"}"#;
+        let event = parse_codex_stream_line(line).expect("should parse turn.completed");
+        assert_eq!(event.event_type, "turn_complete");
+        assert_eq!(event.summary, "turn completed");
+    }
+
+    #[test]
+    fn test_parse_codex_thread_started_returns_none() {
+        let line = r#"{"type":"thread.started","thread_id":"019c5d27-abc"}"#;
+        assert!(parse_codex_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_codex_command_execution_returns_none() {
+        // command_execution item type is not function_call or agent_message
+        let line = r#"{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"ok","exit_code":0}}"#;
+        assert!(parse_codex_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_codex_empty_and_garbage() {
+        assert!(parse_codex_stream_line("").is_none());
+        assert!(parse_codex_stream_line("not json").is_none());
+        assert!(parse_codex_stream_line(r#"{"no_type":true}"#).is_none());
     }
 }

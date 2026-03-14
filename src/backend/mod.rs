@@ -41,6 +41,21 @@ pub struct BackendOutput {
     pub raw_output: String,
 }
 
+/// A structured event extracted from backend JSONL output during execution.
+#[derive(Debug, Clone)]
+pub struct ExecutionEvent {
+    /// Event type: "tool_call", "tool_result", "message", "turn_complete", "error"
+    pub event_type: String,
+    /// Human-readable summary: "Write to src/events.rs", "cargo test (pass)"
+    pub summary: String,
+    /// Full JSON of the source event (for debugging). Optional.
+    pub detail: Option<String>,
+    /// Unix epoch milliseconds
+    pub timestamp_ms: i64,
+    /// Monotonic index within this execution (for stable ordering)
+    pub event_index: i32,
+}
+
 /// Parse an intent JSON line from agent output text.
 ///
 /// Looks for a JSON object containing `{"intent": "..."}` in the text.
