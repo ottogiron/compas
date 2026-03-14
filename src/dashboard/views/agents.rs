@@ -12,18 +12,16 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
     text::{Line, Span},
-    widgets::{
-        Block, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
-    },
+    widgets::{List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
     Frame,
 };
 
 use crate::config::types::{AgentConfig, AgentRole};
 use crate::dashboard::app::App;
-use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
+use crate::dashboard::theme::{self, *};
+use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -34,13 +32,9 @@ use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_ex
 pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
     let cfg = app.config.load();
     if cfg.agents.is_empty() {
-        let p = Paragraph::new(Line::from("  No agents configured.".dark_gray()))
-            .style(Style::new().bg(Color::Black).fg(Color::White))
-            .block(
-                Block::bordered()
-                    .style(Style::new().bg(Color::Black).fg(Color::White))
-                    .title(" Agents "),
-            );
+        let p = Paragraph::new(Line::from("  No agents configured.".fg(TEXT_DIM)))
+            .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
+            .block(theme::panel("Agents"));
         f.render_widget(p, area);
         return;
     }
@@ -51,7 +45,7 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
     for (idx, agent) in cfg.agents.iter().enumerate() {
         if idx > 0 {
             // Dynamic width: long enough string that ratatui clips to terminal width.
-            items.push(ListItem::new(Line::from("─".repeat(200).dark_gray())));
+            items.push(ListItem::new(Line::from("─".repeat(200).fg(BORDER_DIM))));
         }
         items.push(build_agent_item(app, agent));
     }
@@ -59,19 +53,17 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
     let mut state = ListState::default();
     state.select(Some(selected.saturating_mul(2)));
     let list = List::new(items)
-        .block(
-            Block::bordered()
-                .style(Style::new().bg(Color::Black).fg(Color::White))
-                .title(" Agents "),
-        )
-        .highlight_style(Style::new().bg(Color::DarkGray))
-        .style(Style::new().bg(Color::Black).fg(Color::White));
+        .block(theme::panel("Agents"))
+        .highlight_style(Style::new().bg(BG_HIGHLIGHT))
+        .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL));
     f.render_stateful_widget(list, area, &mut state);
 
     // Account for separator rows between cards: n cards + (n-1) separators
     let mut scrollbar_state =
         ScrollbarState::new((2 * n).saturating_sub(1).max(1)).position(selected.saturating_mul(2));
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(theme::scrollbar_thumb_style())
+        .track_style(theme::scrollbar_track_style());
     f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
@@ -83,8 +75,8 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         .agents_data
         .as_ref()
         .and_then(|d| d.heartbeat_age_secs)
-        .map(|age| if age < 30 { Color::Green } else { Color::Red })
-        .unwrap_or(Color::DarkGray); // no data yet
+        .map(|age| if age < 30 { SUCCESS } else { FAILURE })
+        .unwrap_or(TEXT_DIM); // no data yet
 
     // ── Active execution count for this agent ─────────────────────────────────
     let active_count: i64 = app
@@ -109,9 +101,9 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         })
         .map(|(_, execs)| execs)
     {
-        None => vec![Line::from("  Fetching…".dark_gray())],
+        None => vec![Line::from("  Fetching…".fg(TEXT_DIM))],
         Some(execs) if execs.is_empty() => {
-            vec![Line::from("  No recent executions.".dark_gray())]
+            vec![Line::from("  No recent executions.".fg(TEXT_DIM))]
         }
         Some(execs) => execs
             .iter()
@@ -120,7 +112,7 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
                     .duration_ms
                     .map(format_duration_ms)
                     .unwrap_or_else(|| "-".to_string());
-                let color = exec_status_color(&e.status);
+                let color = theme::exec_status_color(&e.status);
                 Line::from(vec![
                     Span::from("  "),
                     format!("{} ({})", humanize_exec_status(&e.status), dur_label).fg(color),
@@ -142,23 +134,19 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         Line::from(vec![
             Span::from("  "),
             "● ".fg(health_color),
-            format!("{:<12}", agent.alias).white().bold(),
-            "│ ".dark_gray(),
+            format!("{:<12}", agent.alias).fg(TEXT_BRIGHT).bold(),
+            "│ ".fg(BORDER_DIM),
             Span::from(format!("backend: {}  ", agent.backend)),
-            "│ ".dark_gray(),
+            "│ ".fg(BORDER_DIM),
             Span::from(format!("model: {}  ", model_label)),
-            "│ ".dark_gray(),
+            "│ ".fg(BORDER_DIM),
             Span::from(format!("role: {}", role_label)),
         ]),
         // Row 2: active execution count
         Line::from(vec![
             Span::from("  Active: "),
             format!("{active_count}")
-                .fg(if active_count > 0 {
-                    Color::Yellow
-                } else {
-                    Color::DarkGray
-                })
+                .fg(if active_count > 0 { ACCENT } else { TEXT_DIM })
                 .bold(),
         ]),
     ];

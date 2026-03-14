@@ -5,18 +5,18 @@
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::Style,
     text::{Line, Span},
     widgets::{
-        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
-        TableState,
+        Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
     },
     Frame,
 };
 use std::collections::HashMap;
 
 use crate::dashboard::app::App;
-use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
+use crate::dashboard::theme::{self, *};
+use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
 use crate::store::ExecutionRow;
 
 pub const HISTORY_UNBATCHED_KEY: &str = "__UNBATCHED__";
@@ -31,34 +31,35 @@ pub enum HistorySelectable {
 
 /// Render the Executions tab into `area`.
 pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered()
-        .style(Style::new().bg(Color::Black).fg(Color::White))
-        .title(" Executions ")
-        .title_bottom(Line::from(vec![
-            Span::raw(" "),
-            "↑/↓".yellow().bold(),
-            Span::raw(": select  "),
-            "Enter".yellow().bold(),
-            Span::raw(": drill/open "),
-            Span::raw("  "),
-            "L/U".cyan(),
-            Span::raw(": linked/unlinked"),
-        ]));
+    let block = theme::panel_focused("Executions").title_bottom(Line::from(vec![
+        Span::raw(" "),
+        Span::styled("↑/↓", Style::new().fg(ACCENT).bold()),
+        Span::raw(": select  "),
+        Span::styled("Enter", Style::new().fg(ACCENT).bold()),
+        Span::raw(": drill/open "),
+        Span::raw("  "),
+        Span::styled("L/U", Style::new().fg(TEXT_MUTED)),
+        Span::raw(": linked/unlinked"),
+    ]));
 
     // ── No data yet ──────────────────────────────────────────────────────────
     let Some(data) = &app.executions_data else {
-        let p = Paragraph::new(Line::from("  Fetching…".dark_gray()))
-            .style(Style::new().bg(Color::Black).fg(Color::White))
-            .block(block);
+        let p = Paragraph::new(Line::from(Span::styled(
+            "  Fetching…",
+            Style::new().fg(TEXT_DIM),
+        )))
+        .block(block);
         f.render_widget(p, area);
         return;
     };
 
     // ── Empty state ──────────────────────────────────────────────────────────
     if data.executions.is_empty() {
-        let p = Paragraph::new(Line::from("  No executions recorded".dark_gray()))
-            .style(Style::new().bg(Color::Black).fg(Color::White))
-            .block(block);
+        let p = Paragraph::new(Line::from(Span::styled(
+            "  No executions recorded",
+            Style::new().fg(TEXT_DIM),
+        )))
+        .block(block);
         f.render_widget(p, area);
         return;
     }
@@ -89,12 +90,12 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             Span::raw(" "),
             Span::styled(
                 format!("Filter: batch {}", history_batch_display(batch)),
-                Style::new().fg(Color::Cyan).bold(),
+                Style::new().fg(TEXT_MUTED).bold(),
             ),
             Span::raw("  "),
-            "x".yellow().bold(),
+            Span::styled("x", Style::new().fg(ACCENT).bold()),
             Span::raw("/"),
-            "Esc".yellow().bold(),
+            Span::styled("Esc", Style::new().fg(ACCENT).bold()),
             Span::raw(": back"),
         ]));
         f.render_widget(banner, chunks[0]);
@@ -123,15 +124,15 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         };
         rows.push(
             Row::new([
-                Cell::from(batch_label).style(Style::new().fg(Color::Yellow).bold()),
-                Cell::from(hidden_text).style(Style::new().fg(Color::DarkGray)),
+                Cell::from(batch_label).style(Style::new().fg(ACCENT).bold()),
+                Cell::from(hidden_text).style(Style::new().fg(TEXT_DIM)),
                 Cell::default(),
                 Cell::default(),
                 Cell::default(),
                 Cell::default(),
                 Cell::default(),
             ])
-            .style(Style::new().fg(Color::Yellow)),
+            .style(Style::new().fg(ACCENT)),
         );
 
         for &exec_idx in &group.indices {
@@ -141,7 +142,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             selectable_to_row.insert(selectable_slot, rows.len());
             selectable_slot += 1;
 
-            let status_color = exec_status_color(&e.status);
+            let status_color = theme::exec_status_color(&e.status);
             let thread_id = super::truncate(&e.thread_id, 16);
             let duration = e
                 .duration_ms
@@ -153,9 +154,9 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 "U"
             };
             let prov_color = if e.dispatch_message_id.is_some() {
-                Color::Green
+                SUCCESS_DIM
             } else {
-                Color::Red
+                FAILURE
             };
             let exit_code = e
                 .exit_code
@@ -168,14 +169,14 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
                 .unwrap_or_else(|| "-".to_string());
 
             rows.push(Row::new([
-                Cell::from(format!(" {}", e.agent_alias)).style(Style::new().fg(Color::White)),
-                Cell::from(thread_id).style(Style::new().fg(Color::White)),
+                Cell::from(format!(" {}", e.agent_alias)).style(Style::new().fg(TEXT_NORMAL)),
+                Cell::from(thread_id).style(Style::new().fg(TEXT_NORMAL)),
                 Cell::from(humanize_exec_status(&e.status).to_string())
                     .style(Style::new().fg(status_color)),
                 Cell::from(prov_char).style(Style::new().fg(prov_color)),
-                Cell::from(duration).style(Style::new().fg(Color::White)),
-                Cell::from(exit_code).style(Style::new().fg(Color::White)),
-                Cell::from(error_preview).style(Style::new().fg(Color::White)),
+                Cell::from(duration).style(Style::new().fg(TEXT_NORMAL)),
+                Cell::from(exit_code).style(Style::new().fg(TEXT_NORMAL)),
+                Cell::from(error_preview).style(Style::new().fg(TEXT_NORMAL)),
             ]));
         }
 
@@ -185,13 +186,13 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Column header ──────────────────────────────────────────────────────────
     let header = Row::new([
-        Cell::from("Agent").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Thread ID").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Status").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Prov").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Duration").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Exit").style(Style::new().fg(Color::Cyan).bold()),
-        Cell::from("Error").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Agent").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Thread ID").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Status").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Prov").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Duration").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Exit").style(Style::new().fg(TEXT_MUTED).bold()),
+        Cell::from("Error").style(Style::new().fg(TEXT_MUTED).bold()),
     ])
     .style(Style::new().bold());
 
@@ -210,13 +211,15 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
     let table = Table::new(rows, widths)
         .header(header)
-        .style(Style::new().bg(Color::Black).fg(Color::White))
-        .row_highlight_style(Style::new().bg(Color::DarkGray).bold());
+        .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
+        .row_highlight_style(Style::new().bg(BG_HIGHLIGHT).bold());
 
     f.render_stateful_widget(table, table_area, &mut state);
 
     let mut scrollbar_state = ScrollbarState::new(selectables.len().max(1)).position(selected);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(theme::scrollbar_thumb_style())
+        .track_style(theme::scrollbar_track_style());
     f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 

@@ -17,7 +17,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
+    symbols::border,
     text::{Line, Span},
     widgets::{Block, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Tabs, Widget},
     DefaultTerminal, Frame,
@@ -30,6 +31,7 @@ use std::{
 use tokio::runtime::Handle;
 
 use crate::config::ConfigHandle;
+use crate::dashboard::theme;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions::{self, HistorySelectable};
@@ -1301,12 +1303,17 @@ impl App {
         Tabs::new(TABS.iter().copied())
             .block(
                 Block::bordered()
-                    .style(Style::new().bg(Color::Black).fg(Color::White))
-                    .title(" aster-orch dashboard ".cyan().bold()),
+                    .border_set(border::ONE_EIGHTH_WIDE)
+                    .border_style(Style::new().fg(theme::BORDER_DIM))
+                    .title_top(
+                        Line::from(" aster-orch ".fg(theme::TEXT_BRIGHT).bold()).left_aligned(),
+                    )
+                    .style(Style::new().bg(theme::BG_PRIMARY)),
             )
             .select(self.active_tab)
-            .style(Style::new().bg(Color::Black).fg(Color::White))
-            .highlight_style(Style::new().fg(Color::Yellow).bold())
+            .style(Style::new().fg(theme::TEXT_MUTED).bg(theme::BG_PRIMARY))
+            .highlight_style(Style::new().fg(theme::ACCENT).bold())
+            .divider(Span::styled(" │ ", Style::new().fg(theme::BORDER_DIM)))
             .render(area, buf);
     }
 
@@ -1317,21 +1324,18 @@ impl App {
             _ => {
                 let tab_name = TABS[self.active_tab];
                 let body = format!("  {} — coming soon", tab_name);
-                Paragraph::new(Line::from(body.dark_gray()))
-                    .style(Style::new().bg(Color::Black).fg(Color::White))
-                    .block(Block::bordered().style(Style::new().bg(Color::Black)))
+                Paragraph::new(Line::from(body.fg(theme::TEXT_DIM)))
+                    .block(theme::panel(tab_name))
                     .render(area, buf);
             }
         }
     }
 
     fn render_settings_widget(&self, area: Rect, buf: &mut Buffer) {
-        let block = Block::bordered()
-            .style(Style::new().bg(Color::Black).fg(Color::White))
-            .title(" Settings ");
+        let block = theme::panel("Settings");
 
-        let label = |s: &str| s.to_string().cyan().bold();
-        let value = |s: String| s.white();
+        let label = |s: &str| s.to_string().fg(theme::TEXT_MUTED).bold();
+        let value = |s: String| s.fg(theme::TEXT_NORMAL);
 
         let poll_secs = self.poll_interval.as_secs();
         let cfg = self.config.load();
@@ -1365,13 +1369,13 @@ impl App {
         ];
 
         Paragraph::new(lines)
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .block(block)
             .render(area, buf);
     }
 
     fn render_status_bar_widget(&self, area: Rect, buf: &mut Buffer) {
-        let key = |s: &'static str| s.yellow().bold();
+        let key = |s: &'static str| s.fg(theme::ACCENT).bold();
         let sep = || Span::raw("  ");
         let mut spans: Vec<Span> = vec![
             Span::raw(" "),
@@ -1429,18 +1433,19 @@ impl App {
                 notice = format!("{}…", notice.chars().take(63).collect::<String>());
             }
             spans.push(sep());
-            spans.push("last:".cyan());
+            spans.push("last:".fg(theme::ACCENT));
             spans.push(Span::raw(" "));
-            spans.push(notice.white());
+            spans.push(notice.fg(theme::TEXT_MUTED));
         }
 
         if self.show_hint_banner {
             spans.push(sep());
-            spans.push("Tip: press ? for keymap, a for guided actions".cyan());
+            spans.push("Tip:".fg(theme::ACCENT));
+            spans.push(" press ? for keymap, a for guided actions".fg(theme::TEXT_MUTED));
         }
 
         Paragraph::new(Line::from(spans))
-            .style(Style::new().bg(Color::DarkGray).fg(Color::White))
+            .style(Style::new().bg(theme::BG_STATUS_BAR).fg(theme::TEXT_MUTED))
             .render(area, buf);
     }
 
@@ -1451,36 +1456,40 @@ impl App {
 
         let modal = centered_rect(74, 10, area);
         let block = Block::bordered()
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .border_style(Style::new().fg(theme::BORDER_FOCUS))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .title(action.title());
         let inner = block.inner(modal);
         Clear.render(modal, buf);
         block.render(modal, buf);
 
         let lines = vec![
-            Line::from(vec![Span::raw(" "), action.prompt().white()]),
             Line::from(vec![
                 Span::raw(" "),
-                "Impact: ".cyan(),
-                action.impact_summary.clone().white(),
+                action.prompt().fg(theme::TEXT_BRIGHT),
             ]),
             Line::from(vec![
                 Span::raw(" "),
-                "Guardrail: ".cyan(),
-                action.guardrail.clone().dark_gray(),
+                "Impact: ".fg(theme::ACCENT),
+                action.impact_summary.clone().fg(theme::TEXT_NORMAL),
+            ]),
+            Line::from(vec![
+                Span::raw(" "),
+                "Guardrail: ".fg(theme::ACCENT),
+                action.guardrail.clone().fg(theme::TEXT_MUTED),
             ]),
             Line::from(Span::raw("")),
             Line::from(vec![
                 Span::raw(" "),
-                "Enter".yellow().bold(),
-                Span::raw(": confirm  "),
-                "Esc".yellow().bold(),
-                Span::raw(": cancel"),
+                "Enter".fg(theme::ACCENT).bold(),
+                ": confirm  ".fg(theme::TEXT_MUTED),
+                "Esc".fg(theme::ACCENT).bold(),
+                ": cancel".fg(theme::TEXT_MUTED),
             ]),
         ];
 
         Paragraph::new(lines)
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .render(inner, buf);
     }
 
@@ -1491,16 +1500,17 @@ impl App {
 
         let modal = centered_rect(58, 8, area);
         let block = Block::bordered()
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .border_style(Style::new().fg(theme::BORDER_FOCUS))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .title(" Actions ")
             .title_bottom(Line::from(vec![
                 Span::raw(" "),
-                "↑/↓".yellow().bold(),
-                Span::raw(": choose  "),
-                "Enter".yellow().bold(),
-                Span::raw(": continue  "),
-                "Esc".yellow().bold(),
-                Span::raw(": close "),
+                "↑/↓".fg(theme::ACCENT).bold(),
+                ": choose  ".fg(theme::TEXT_MUTED),
+                "Enter".fg(theme::ACCENT).bold(),
+                ": continue  ".fg(theme::TEXT_MUTED),
+                "Esc".fg(theme::ACCENT).bold(),
+                ": close ".fg(theme::TEXT_MUTED),
             ]));
         let inner = block.inner(modal);
         Clear.render(modal, buf);
@@ -1508,14 +1518,14 @@ impl App {
 
         let mut items = vec![ListItem::new(Line::from(vec![
             Span::raw(" "),
-            "Thread: ".cyan(),
-            menu.thread_id.clone().white(),
+            "Thread: ".fg(theme::ACCENT),
+            menu.thread_id.clone().fg(theme::TEXT_NORMAL),
         ]))];
 
         for (idx, action) in menu.options.iter().enumerate() {
             items.push(ListItem::new(Line::from(vec![
                 Span::raw("   "),
-                action_name(*action).white(),
+                action_name(*action).fg(theme::TEXT_NORMAL),
             ])));
             if idx + 1 < menu.options.len() {
                 items.push(ListItem::new(Line::from(Span::raw("   "))));
@@ -1527,15 +1537,16 @@ impl App {
 
         let list = List::new(items)
             .highlight_symbol(" > ")
-            .highlight_style(Style::new().fg(Color::Yellow).bold())
-            .style(Style::new().bg(Color::Black).fg(Color::White));
+            .highlight_style(Style::new().fg(theme::ACCENT).bold())
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL));
         StatefulWidget::render(list, inner, buf, &mut state);
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
         let modal = centered_rect(72, 16, area);
         let block = Block::bordered()
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .border_style(Style::new().fg(theme::BORDER_FOCUS))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .title(" Help ");
         let inner = block.inner(modal);
         Clear.render(modal, buf);
@@ -1565,7 +1576,7 @@ impl App {
         ];
 
         Paragraph::new(lines)
-            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .render(inner, buf);
     }
 }

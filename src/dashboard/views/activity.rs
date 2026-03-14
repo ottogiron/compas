@@ -10,8 +10,7 @@ use ratatui::{
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{
-        Block, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
     },
     Frame,
 };
@@ -19,9 +18,9 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::dashboard::app::{ActivityData, App};
+use crate::dashboard::theme;
 use crate::dashboard::views::{
-    exec_status_color, format_duration_ms, format_duration_secs, humanize_exec_status,
-    humanize_thread_status, thread_status_color,
+    format_duration_ms, format_duration_secs, humanize_exec_status, humanize_thread_status,
 };
 use crate::store::ThreadStatusView;
 
@@ -367,23 +366,23 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
         Span::styled(s.to_string(), Style::new().fg(color))
     };
     let val = |n: i64| -> Span<'static> {
-        Span::styled(format!("{}  ", n), Style::new().fg(Color::White))
+        Span::styled(format!("{}  ", n), Style::new().fg(theme::TEXT_BRIGHT))
     };
 
     Line::from(vec![
         Span::raw(" "),
-        label("Active: ", Color::Yellow),
+        label("Active: ", theme::ACCENT),
         val(active),
-        label("Stale: ", Color::DarkGray),
+        label("Stale: ", theme::TEXT_DIM),
         val(stale),
-        label("Failed: ", Color::Red),
+        label("Failed: ", theme::FAILURE),
         val(failed),
-        label("Completed: ", Color::Green),
+        label("Completed: ", theme::SUCCESS_DIM),
         val(completed),
-        label("Pending: ", Color::Cyan),
+        label("Pending: ", theme::TEXT_MUTED),
         Span::styled(
             format!("{}", data.queue_depth),
-            Style::new().fg(Color::White),
+            Style::new().fg(theme::TEXT_BRIGHT),
         ),
     ])
 }
@@ -400,15 +399,13 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
 
     let (health_str, health_color) = compute_health(&app.activity_data, now_unix);
 
-    let block = Block::bordered()
-        .style(Style::new().bg(Color::Black).fg(Color::White))
-        .title(" Ops ".fg(Color::White).bold())
+    let block = theme::panel_focused("Ops")
         .title_top(Line::from(health_str.fg(health_color)).right_aligned());
 
     let Some(data) = &app.activity_data else {
         f.render_widget(
-            Paragraph::new(Line::from("  Fetching...".dark_gray()))
-                .style(Style::new().bg(Color::Black).fg(Color::White))
+            Paragraph::new(Line::from("  Fetching...".fg(theme::TEXT_DIM)))
+                .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
                 .block(block),
             area,
         );
@@ -462,12 +459,12 @@ fn render_ops_list(
         items.push(ListItem::new(Line::from(vec![
             Span::raw(" "),
             format!("Filter: batch {}", super::truncate(batch, 22))
-                .fg(Color::Cyan)
+                .fg(theme::ACCENT)
                 .bold(),
             Span::raw("  "),
-            "x".fg(Color::Yellow).bold(),
+            "x".fg(theme::ACCENT).bold(),
             Span::raw("/"),
-            "Esc".fg(Color::Yellow).bold(),
+            "Esc".fg(theme::ACCENT).bold(),
             Span::raw(": back"),
         ])));
         items.push(ListItem::new(Line::from(Span::raw(""))));
@@ -477,7 +474,7 @@ fn render_ops_list(
         &mut items,
         "Running",
         classified.running.len(),
-        Color::Yellow,
+        theme::ACCENT,
     );
     if classified.running.is_empty() {
         items.push(empty_line("  none"));
@@ -499,7 +496,7 @@ fn render_ops_list(
             &mut items,
             "Active Batches",
             classified.active_batches.len(),
-            Color::Yellow,
+            theme::ACCENT,
         );
         if classified.active_batches.is_empty() {
             items.push(empty_line("  none"));
@@ -512,7 +509,7 @@ fn render_ops_list(
                     is_selected,
                     now_unix,
                     "A",
-                    Color::Yellow,
+                    theme::ACCENT,
                 )));
                 selectable_slot += 1;
             }
@@ -524,7 +521,7 @@ fn render_ops_list(
         &mut items,
         "Active Threads",
         classified.active_threads.len(),
-        Color::Yellow,
+        theme::ACCENT,
     );
     if classified.active_threads.is_empty() {
         items.push(empty_line("  none"));
@@ -546,7 +543,7 @@ fn render_ops_list(
             &mut items,
             "Other",
             classified.uncategorized.len(),
-            Color::DarkGray,
+            theme::TEXT_DIM,
         );
         if classified.uncategorized.is_empty() {
             items.push(empty_line("  none"));
@@ -565,7 +562,12 @@ fn render_ops_list(
 
     if app.drill_batch.is_none() {
         items.push(ListItem::new(Line::from(Span::raw(""))));
-        push_section_header(&mut items, "Batches", classified.batches.len(), Color::Cyan);
+        push_section_header(
+            &mut items,
+            "Batches",
+            classified.batches.len(),
+            theme::TEXT_MUTED,
+        );
         if classified.batches.is_empty() {
             items.push(empty_line("  none"));
         } else {
@@ -577,7 +579,7 @@ fn render_ops_list(
                     is_selected,
                     now_unix,
                     "B",
-                    Color::Cyan,
+                    theme::TEXT_MUTED,
                 )));
                 selectable_slot += 1;
             }
@@ -589,7 +591,7 @@ fn render_ops_list(
         &mut items,
         "Recently Completed",
         recent_indices.len(),
-        Color::Green,
+        theme::SUCCESS_DIM,
     );
     if recent_indices.is_empty() {
         items.push(empty_line("  none"));
@@ -613,17 +615,19 @@ fn render_ops_list(
     *state.offset_mut() = scroll;
 
     let list = List::new(items)
-        .highlight_style(Style::new().bg(Color::DarkGray))
-        .style(Style::new().bg(Color::Black).fg(Color::White));
+        .highlight_style(Style::new().bg(theme::BG_HIGHLIGHT))
+        .style(Style::new().bg(theme::BG_PRIMARY).fg(theme::TEXT_NORMAL));
     f.render_stateful_widget(list, list_area, &mut state);
 
     let mut scrollbar_state = ScrollbarState::new(selectable_slot.max(1)).position(selected_slot);
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .thumb_style(theme::scrollbar_thumb_style())
+        .track_style(theme::scrollbar_track_style());
     f.render_stateful_widget(scrollbar, list_area, &mut scrollbar_state);
 
     f.render_widget(
         Paragraph::new(build_footer_line(data, now_unix, stale_after_secs))
-            .style(Style::new().bg(Color::Black).fg(Color::DarkGray)),
+            .style(Style::new().bg(theme::BG_PRIMARY).fg(theme::TEXT_DIM)),
         footer_area,
     );
 }
@@ -636,9 +640,7 @@ fn render_context_panel(
     now_unix: i64,
     stale_after_secs: i64,
 ) {
-    let block = Block::bordered()
-        .style(Style::new().bg(Color::Black).fg(Color::White))
-        .title(" Context ");
+    let block = theme::panel("Context");
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -700,7 +702,7 @@ fn render_context_panel(
                 );
 
                 lines.push(Line::from(vec![
-                    "Available Actions".cyan().bold(),
+                    "Available Actions".fg(theme::ACCENT).bold(),
                     Span::raw(":"),
                 ]));
                 lines.push(action_line(
@@ -752,7 +754,7 @@ fn render_context_panel(
             lines.push(kv_line("Completed", &completed.to_string()));
             lines.push(Line::from(Span::raw("")));
             lines.push(Line::from(vec![
-                "Batch Actions".cyan().bold(),
+                "Batch Actions".fg(theme::ACCENT).bold(),
                 Span::raw(":"),
             ]));
             lines.push(action_line(
@@ -764,24 +766,24 @@ fn render_context_panel(
             if app.drill_batch.as_deref() == Some(batch_id.as_str()) {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    "Esc".yellow().bold(),
+                    "Esc".fg(theme::ACCENT).bold(),
                     Span::raw(": back to all batches"),
                 ]));
             } else {
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    "Enter".yellow().bold(),
+                    "Enter".fg(theme::ACCENT).bold(),
                     Span::raw(": drill into this batch"),
                 ]));
             }
         }
         None => {
-            lines.push(Line::from(" No selection".dark_gray()));
+            lines.push(Line::from(" No selection".fg(theme::TEXT_DIM)));
         }
     }
 
     f.render_widget(
-        Paragraph::new(lines).style(Style::new().bg(Color::Black).fg(Color::White)),
+        Paragraph::new(lines).style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL)),
         inner,
     );
 }
@@ -799,9 +801,9 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
     let duration = row_duration(t, now_unix);
 
     let bg = if is_selected {
-        Color::DarkGray
+        theme::BG_HIGHLIGHT
     } else {
-        Color::Black
+        theme::BG_PRIMARY
     };
     let base_mod = if is_selected {
         Modifier::BOLD
@@ -813,7 +815,10 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
         Span::styled(format!(" {} ", icon), Style::new().fg(icon_color).bg(bg)),
         Span::styled(
             format!("{:<18}", thread_id),
-            Style::new().fg(Color::White).bg(bg).add_modifier(base_mod),
+            Style::new()
+                .fg(theme::TEXT_BRIGHT)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
         Span::styled(
             format!("{:<16}", status_text),
@@ -821,19 +826,22 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
         ),
         Span::styled(
             format!("{:<12}", agent),
-            Style::new().fg(Color::White).bg(bg).add_modifier(base_mod),
+            Style::new()
+                .fg(theme::TEXT_NORMAL)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
         Span::styled(
             format!("{:<14}", batch),
             Style::new()
-                .fg(Color::DarkGray)
+                .fg(theme::TEXT_DIM)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
         Span::styled(
             duration,
             Style::new()
-                .fg(Color::DarkGray)
+                .fg(theme::TEXT_DIM)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
@@ -852,16 +860,20 @@ fn make_batch_line(
     } else {
         (batch.completed * 10 / batch.total).min(10)
     };
-    let bar = format!("{}{}", "█".repeat(fill), "░".repeat(10 - fill));
+    let bar = format!(
+        "{}{}",
+        theme::BATCH_PROGRESS_FILLED.repeat(fill),
+        theme::BATCH_PROGRESS_EMPTY.repeat(10 - fill)
+    );
     let age = batch
         .oldest_active_updated_at
         .map(|ts| format_duration_secs((now_unix - ts).max(0)))
         .unwrap_or_else(|| format_duration_secs((now_unix - batch.latest_updated_at).max(0)));
 
     let bg = if is_selected {
-        Color::DarkGray
+        theme::BG_HIGHLIGHT
     } else {
-        Color::Black
+        theme::BG_PRIMARY
     };
     let base_mod = if is_selected {
         Modifier::BOLD
@@ -876,15 +888,24 @@ fn make_batch_line(
         ),
         Span::styled(
             format!("{:<18}", super::truncate(&batch.batch_id, 16)),
-            Style::new().fg(Color::White).bg(bg).add_modifier(base_mod),
+            Style::new()
+                .fg(theme::TEXT_BRIGHT)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
         Span::styled(
             format!("{:<9}", format!("{}/{}", batch.completed, batch.total)),
-            Style::new().fg(Color::White).bg(bg).add_modifier(base_mod),
+            Style::new()
+                .fg(theme::TEXT_NORMAL)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
         Span::styled(
             format!("{:<12}", bar),
-            Style::new().fg(Color::Yellow).bg(bg).add_modifier(base_mod),
+            Style::new()
+                .fg(theme::ACCENT)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
         Span::styled(
             format!(
@@ -893,15 +914,15 @@ fn make_batch_line(
             ),
             Style::new()
                 .fg(if batch.failed > 0 {
-                    Color::Red
+                    theme::FAILURE
                 } else {
-                    Color::DarkGray
+                    theme::TEXT_DIM
                 })
                 .bg(bg),
         ),
         Span::styled(
             format!("  age {}", age),
-            Style::new().fg(Color::DarkGray).bg(bg),
+            Style::new().fg(theme::TEXT_DIM).bg(bg),
         ),
     ])
 }
@@ -914,20 +935,20 @@ fn push_section_header(
 ) {
     items.push(ListItem::new(Line::from(vec![
         Span::raw(" "),
-        title.to_string().fg(Color::White).bold(),
+        title.to_string().fg(theme::TEXT_BRIGHT).bold(),
         Span::raw(" "),
         format!("({count})").fg(color).bold(),
     ])));
 }
 
 fn empty_line(s: &str) -> ListItem<'static> {
-    ListItem::new(Line::from(s.to_string().dark_gray()))
+    ListItem::new(Line::from(s.to_string().fg(theme::TEXT_DIM)))
 }
 
 fn kv_line(label: &str, value: &str) -> Line<'static> {
     Line::from(vec![
-        format!("{}: ", label).cyan().bold(),
-        value.to_string().white(),
+        format!("{}: ", label).fg(theme::TEXT_MUTED).bold(),
+        value.to_string().fg(theme::TEXT_NORMAL),
     ])
 }
 
@@ -937,15 +958,11 @@ fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> L
     } else {
         format!("blocked ({})", disabled_reason)
     };
-    let status_color = if enabled {
-        Color::Green
-    } else {
-        Color::DarkGray
-    };
+    let status_color = if enabled { theme::SUCCESS } else { theme::TEXT_DIM };
 
     Line::from(vec![
         Span::raw("  "),
-        key.to_string().yellow().bold(),
+        key.to_string().fg(theme::ACCENT).bold(),
         Span::raw(format!(": {}  ", name)),
         Span::styled(status, Style::new().fg(status_color)),
     ])
@@ -955,17 +972,17 @@ fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {
     let ts = t.thread_status.as_str();
     let es = t.execution_status.as_deref().unwrap_or("");
     if ts == "Failed" {
-        ("X", Color::Red)
+        (theme::MARKER_FAILED, theme::FAILURE)
     } else if matches!(es, "failed" | "crashed") {
-        ("X", Color::Red)
+        (theme::MARKER_FAILED, theme::FAILURE)
     } else if es == "timed_out" {
-        ("T", Color::Red)
+        (theme::MARKER_TIMEOUT, theme::FAILURE)
     } else if matches!(es, "executing" | "picked_up" | "queued") {
-        (">", Color::Yellow)
+        (theme::MARKER_RUNNING, theme::ACCENT)
     } else if es == "completed" || ts == "Completed" {
-        ("*", Color::Green)
+        (theme::MARKER_COMPLETED, theme::SUCCESS_DIM)
     } else {
-        (" ", Color::White)
+        (" ", theme::TEXT_NORMAL)
     }
 }
 
@@ -973,19 +990,22 @@ fn row_status_display(t: &ThreadStatusView) -> (String, Color) {
     if t.thread_status == "Failed" {
         if let Some(es) = &t.execution_status {
             if matches!(es.as_str(), "executing" | "picked_up" | "queued") {
-                return ("Failed (running)".to_string(), Color::Red);
+                return ("Failed (running)".to_string(), theme::FAILURE);
             }
         }
-        return ("Failed".to_string(), Color::Red);
+        return ("Failed".to_string(), theme::FAILURE);
     }
 
     if let Some(es) = &t.execution_status {
-        (humanize_exec_status(es).to_string(), exec_status_color(es))
+        (
+            humanize_exec_status(es).to_string(),
+            theme::exec_status_color(es),
+        )
     } else {
         let ts = &t.thread_status;
         (
             humanize_thread_status(ts).to_string(),
-            thread_status_color(ts),
+            theme::thread_status_color(ts),
         )
     }
 }
@@ -1023,12 +1043,16 @@ fn compute_health(data: &Option<ActivityData>, now_unix: i64) -> (String, Color)
         Some(d) => match &d.heartbeat {
             Some((_, last_beat_at, _, _)) => {
                 let age = (now_unix - last_beat_at).max(0);
-                let color = if age < 30 { Color::Green } else { Color::Red };
+                let color = if age < 30 {
+                    theme::SUCCESS
+                } else {
+                    theme::FAILURE
+                };
                 (format!(" worker beat: {}s ", age), color)
             }
-            None => (" worker beat: none ".to_string(), Color::DarkGray),
+            None => (" worker beat: none ".to_string(), theme::TEXT_DIM),
         },
-        None => (" ".to_string(), Color::DarkGray),
+        None => (" ".to_string(), theme::TEXT_DIM),
     }
 }
 

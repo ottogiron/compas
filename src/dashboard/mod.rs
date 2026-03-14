@@ -4,4 +4,5 @@
 //!   `aster_orch dashboard`
 
 pub mod app;
+pub mod theme;
 pub mod views;

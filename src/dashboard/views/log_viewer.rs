@@ -7,16 +7,18 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Style, Stylize},
+    symbols::border,
     text::{Line, Span},
-    widgets::{Block, Paragraph},
+    widgets::{Block, Padding, Paragraph},
     Frame,
 };
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
+use crate::dashboard::theme::{self, *};
 use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
-use crate::dashboard::views::{exec_status_color, format_duration_ms, humanize_exec_status};
+use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutlineSection {
@@ -240,12 +242,12 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
     let exec_short = super::truncate(&state.exec_id, 18);
 
     let status_label = humanize_exec_status(&state.status);
-    let status_color = exec_status_color(&state.status);
+    let status_color = theme::exec_status_color(&state.status);
     let duration_label = state
         .duration_ms
         .map(format_duration_ms)
         .unwrap_or_else(|| "-".to_string());
-    let follow_indicator = if state.follow { "  [follow]" } else { "" };
+    let follow_indicator = if state.follow { "  ◉ follow" } else { "" };
     let json_indicator = match state.json_view_mode {
         JsonViewMode::Humanized => "  [humanized]",
         JsonViewMode::RawPretty => "  [raw-json]",
@@ -255,27 +257,6 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
     } else {
         "  [unlinked]"
     };
-
-    let title_spans: Vec<Span> = vec![
-        Span::raw(" "),
-        exec_short.bold().fg(Color::White),
-        Span::raw("  "),
-        state.agent_alias.clone().fg(Color::Cyan),
-        Span::raw("  "),
-        status_label.fg(status_color).bold(),
-        Span::raw("  "),
-        duration_label.fg(Color::DarkGray),
-        follow_indicator.fg(Color::Yellow).bold(),
-        json_indicator.fg(Color::Cyan).bold(),
-        provenance_indicator
-            .fg(if state.input_linked {
-                Color::Green
-            } else {
-                Color::Red
-            })
-            .bold(),
-        Span::raw(" "),
-    ];
 
     let visible_rows = area.height.saturating_sub(2) as usize;
     state.visible_rows = visible_rows;
@@ -302,14 +283,19 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
             .collect()
     };
 
-    let mut display_lines: Vec<String> = Vec::new();
+    // Build display lines as styled Lines so section headers carry per-span colours.
+    let mut display_lines: Vec<Line<'static>> = Vec::new();
     display_lines.push(section_header_line(
         "Input",
         state.section_selected == OutlineSection::Input,
         state.input_expanded,
     ));
     if state.input_expanded {
-        display_lines.extend(input_lines.iter().map(|l| format!("    {}", l)));
+        display_lines.extend(
+            input_lines
+                .iter()
+                .map(|l| Line::from(format!("    {l}")).fg(TEXT_MUTED)),
+        );
     }
     display_lines.push(section_header_line(
         "Output",
@@ -317,7 +303,11 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         state.output_expanded,
     ));
     if state.output_expanded {
-        display_lines.extend(output_lines.iter().map(|l| format!("    {}", l)));
+        display_lines.extend(
+            output_lines
+                .iter()
+                .map(|l| Line::from(format!("    {l}")).fg(TEXT_NORMAL)),
+        );
     }
 
     let max_offset = display_lines.len().saturating_sub(visible_rows).max(0);
@@ -331,47 +321,75 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         format!("  {first}-{last}/{total}  ", total = display_lines.len())
     };
 
-    let key = |s: &'static str| s.fg(Color::Yellow).bold();
+    let title_spans: Vec<Span> = vec![
+        Span::raw(" "),
+        exec_short.bold().fg(TEXT_BRIGHT),
+        Span::raw("  "),
+        state.agent_alias.clone().fg(TEXT_MUTED),
+        Span::raw("  "),
+        status_label.fg(status_color).bold(),
+        Span::raw("  "),
+        duration_label.fg(TEXT_DIM),
+        follow_indicator.fg(ACCENT).bold(),
+        json_indicator.fg(ACCENT).bold(),
+        provenance_indicator
+            .fg(if state.input_linked { SUCCESS } else { FAILURE })
+            .bold(),
+        Span::raw(" "),
+    ];
+
+    let key = |s: &'static str| -> Span<'static> { s.fg(ACCENT).bold() };
 
     let footer_spans: Vec<Span> = vec![
         Span::raw(" "),
         key("Esc"),
-        Span::raw(": back  "),
+        ": back  ".fg(TEXT_MUTED),
         key("↑/↓"),
-        Span::raw(": section  "),
+        ": section  ".fg(TEXT_MUTED),
         key("Enter"),
-        Span::raw(": toggle  "),
+        ": toggle  ".fg(TEXT_MUTED),
         key("g/G"),
-        Span::raw(": top/bottom  "),
+        ": top/bottom  ".fg(TEXT_MUTED),
         key("f"),
-        Span::raw(": follow  "),
+        ": follow  ".fg(TEXT_MUTED),
         key("J"),
-        Span::raw(": view mode"),
-        position_label.fg(Color::DarkGray),
+        ": view mode".fg(TEXT_MUTED),
+        position_label.fg(TEXT_DIM),
     ];
 
     let block = Block::bordered()
-        .style(Style::new().bg(Color::Black).fg(Color::White))
+        .border_set(border::ONE_EIGHTH_WIDE)
+        .border_style(Style::new().fg(BORDER_DIM))
         .title(Line::from(title_spans))
-        .title_bottom(Line::from(footer_spans));
+        .title_bottom(Line::from(footer_spans))
+        .padding(Padding::new(1, 1, 0, 0))
+        .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL));
 
-    let all_lines: Vec<Line> = display_lines
-        .iter()
-        .map(|l| Line::from(format!(" {}", l)))
-        .collect();
-
-    let paragraph = Paragraph::new(all_lines)
+    let paragraph = Paragraph::new(display_lines)
         // Paragraph::scroll takes (u16, u16); clamp to avoid silent wrapping on large logs.
         .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0))
-        .style(Style::new().bg(Color::Black).fg(Color::White))
+        .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
         .block(block);
     f.render_widget(paragraph, area);
 }
 
-fn section_header_line(name: &str, selected: bool, expanded: bool) -> String {
-    let marker = if expanded { "v" } else { ">" };
-    let cursor = if selected { "*" } else { " " };
-    format!("{} {} {}", cursor, marker, name)
+/// Build a themed section-header Line.
+///
+/// - Selected cursor `▸` is rendered in `ACCENT`; unselected is a dim space.
+/// - Expand/collapse chevron (`▾`/`▸`) is rendered in `TEXT_MUTED`.
+/// - Section name is `TEXT_BRIGHT` when selected, `TEXT_NORMAL` otherwise.
+fn section_header_line(name: &str, selected: bool, expanded: bool) -> Line<'static> {
+    let cursor = if selected { "▸" } else { " " };
+    let chevron = if expanded { "▾" } else { "▸" };
+    Line::from(vec![
+        Span::styled(cursor, Style::new().fg(ACCENT)),
+        Span::raw(" "),
+        Span::styled(chevron, Style::new().fg(TEXT_MUTED)),
+        Span::styled(
+            format!(" {name}"),
+            Style::new().fg(if selected { TEXT_BRIGHT } else { TEXT_NORMAL }),
+        ),
+    ])
 }
 
 /// Split `s` into owned lines, preserving empty lines.
@@ -406,6 +424,11 @@ mod tests {
             s.scroll_to_bottom();
         }
         s
+    }
+
+    /// Flatten a `Line`'s spans into a plain string for snapshot assertions.
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
     }
 
     #[test]
@@ -456,7 +479,16 @@ mod tests {
 
     #[test]
     fn test_section_header_line_selected_expanded() {
-        assert_eq!(section_header_line("Input", true, true), "* v Input");
+        // selected=true → cursor "▸" (ACCENT), expanded=true → chevron "▾" (TEXT_MUTED)
+        let line = section_header_line("Input", true, true);
+        assert_eq!(line_text(&line), "▸ ▾ Input");
+    }
+
+    #[test]
+    fn test_section_header_line_unselected_collapsed() {
+        // selected=false → cursor " ", expanded=false → chevron "▸"
+        let line = section_header_line("Output", false, false);
+        assert_eq!(line_text(&line), "  ▸ Output");
     }
 
     #[test]
