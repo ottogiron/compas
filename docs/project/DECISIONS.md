@@ -70,3 +70,16 @@ Extracted aster-orch from aster as a fully independent repository with its own d
 - Embed worker in-process (same tokio runtime) — rejected because dashboard exit always kills the worker, even during long executions.
 
 **Accepted residual risk:** If the dashboard crashes (SIGKILL, panic) before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state; the stale process must be killed manually. This is the same behavior as before — the fix only covers the clean exit path.
+
+## ADR-008: Claude backend uses `stream-json` output format
+
+**Date:** 2026-03
+**Status:** Active
+
+Switched Claude Code CLI from `--output-format json` (single JSON blob after completion) to `--output-format stream-json` (JSONL events during execution). This is a prerequisite for real-time execution telemetry (EVO-1).
+
+**Why:** With `json`, the orchestrator gets no output until the agent finishes — which can be 10+ minutes. With `stream-json`, Claude emits JSONL events (tool calls, content, result) as they happen, enabling mid-execution progress visibility.
+
+**Parsing contract:** The final line of the JSONL stream is `{"type":"result","result":"...","session_id":"..."}`. The `extract_claude_stream_output()` function scans lines from the end for this result line. If no result line is found, raw stdout is used as fallback.
+
+**Success detection:** An execution is considered successful if the exit code is zero OR a result line was found in the output. This matches the previous behavior where success was declared when a valid JSON result object was present, regardless of exit code.
