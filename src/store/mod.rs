@@ -802,6 +802,10 @@ impl Store {
     }
 
     /// Mark orphaned executions (picked_up or executing) as crashed.
+    ///
+    /// **Startup-only**: this marks ALL in-flight executions as crashed.
+    /// Only safe to call before the worker loop starts (when no live
+    /// executions belong to this worker).
     pub async fn mark_orphaned_executions_crashed(&self) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE executions
@@ -810,6 +814,31 @@ impl Store {
                  error_detail = 'worker crashed during execution'
              WHERE status IN ('picked_up', 'executing')",
         )
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Mark executions stuck in `picked_up` or `executing` beyond the
+    /// configured timeout as crashed.
+    ///
+    /// Safe to call during normal worker operation — only affects
+    /// executions whose `started_at` (or `picked_up_at` if never started)
+    /// is older than `timeout_secs`.
+    pub async fn mark_stale_executions_crashed(
+        &self,
+        timeout_secs: u64,
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE executions
+             SET status = 'crashed',
+                 finished_at = strftime('%s','now'),
+                 error_detail = 'execution exceeded timeout (stale)'
+             WHERE status IN ('picked_up', 'executing')
+               AND COALESCE(started_at, picked_up_at, queued_at)
+                   <= strftime('%s','now') - ?",
+        )
+        .bind(timeout_secs as i64)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())

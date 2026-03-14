@@ -46,6 +46,9 @@ const TICK_RATE: Duration = Duration::from_millis(250);
 const ACTIVITY_ROW_LIMIT: i64 = 250;
 const HISTORY_ROW_LIMIT: i64 = 200;
 const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
+/// Maximum time a single refresh query set can block the TUI thread.
+/// If exceeded, the refresh is skipped and `last_refresh_error` is set.
+const REFRESH_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Copy)]
 enum AdminActionKind {
@@ -197,6 +200,9 @@ pub struct App {
     /// Tokio runtime handle — used to drive async store queries from the
     /// synchronous TUI thread via `Handle::block_on`.
     handle: Handle,
+    /// Last refresh error, if any. Displayed in the status bar so operators
+    /// know when the dashboard is showing stale data due to DB issues.
+    pub last_refresh_error: Option<String>,
 }
 
 impl App {
@@ -246,6 +252,7 @@ impl App {
             show_hint_banner: true,
             log_dir,
             handle,
+            last_refresh_error: None,
         }
     }
 
@@ -267,51 +274,62 @@ impl App {
     ///
     /// A single `status_view` call feeds all three sections; supplementary
     /// queries populate the summary footer and worker-health dot.
-    /// Silently swallows errors — stale data is preferable to a panic inside
-    /// the event loop.
+    /// On DB error, retains previous data and sets `last_refresh_error`.
+    /// Queries are bounded by a timeout to prevent TUI freezes.
     pub fn refresh_activity(&mut self) {
         let store = &self.store;
         let handle = &self.handle;
 
-        let data = handle.block_on(async {
-            let rows = store
-                .status_view(None, None, None, ACTIVITY_ROW_LIMIT)
-                .await
-                .unwrap_or_default();
-            let thread_counts = store.thread_counts().await.unwrap_or_default();
-            let queue_depth = store.queue_depth().await.unwrap_or(0);
-            let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
+        let result = handle.block_on(async {
+            tokio::time::timeout(REFRESH_TIMEOUT, async {
+                let rows = store
+                    .status_view(None, None, None, ACTIVITY_ROW_LIMIT)
+                    .await?;
+                let thread_counts = store.thread_counts().await?;
+                let queue_depth = store.queue_depth().await.unwrap_or(0);
+                let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
 
-            ActivityData {
-                rows,
-                thread_counts,
-                queue_depth,
-                heartbeat,
-                fetched_at: Instant::now(),
-            }
+                Ok::<_, sqlx::Error>(ActivityData {
+                    rows,
+                    thread_counts,
+                    queue_depth,
+                    heartbeat,
+                    fetched_at: Instant::now(),
+                })
+            })
+            .await
         });
 
-        // Clamp selection to new selectable count.
-        let count = activity::ops_selectable_count(
-            &data.rows,
-            self.drill_batch.as_deref(),
-            Self::now_unix(),
-            self.stale_active_secs(),
-        );
-        if count > 0 {
-            self.activity_selected = self.activity_selected.min(count - 1);
-        } else {
-            self.activity_selected = 0;
+        match result {
+            Ok(Ok(data)) => {
+                // Clamp selection to new selectable count.
+                let count = activity::ops_selectable_count(
+                    &data.rows,
+                    self.drill_batch.as_deref(),
+                    Self::now_unix(),
+                    self.stale_active_secs(),
+                );
+                if count > 0 {
+                    self.activity_selected = self.activity_selected.min(count - 1);
+                } else {
+                    self.activity_selected = 0;
+                }
+                self.activity_data = Some(data);
+                self.last_refresh_error = None;
+            }
+            Ok(Err(e)) => {
+                self.last_refresh_error = Some(format!("activity refresh: {}", e));
+            }
+            Err(_) => {
+                self.last_refresh_error = Some("activity refresh: timeout".to_string());
+            }
         }
-
-        self.activity_data = Some(data);
     }
 
     /// Fetch fresh per-agent metrics from SQLite and update `agents_data`.
     ///
-    /// Uses `Handle::block_on` to drive async queries from the synchronous
-    /// TUI thread. Silently swallows errors — stale data is preferable to a
-    /// panic inside the event loop.
+    /// On DB error, retains previous data and sets `last_refresh_error`.
+    /// Queries are bounded by a timeout to prevent TUI freezes.
     pub fn refresh_agents(&mut self) {
         // Snapshot live config for this refresh cycle.
         let cfg = self.config.load();
@@ -322,81 +340,106 @@ impl App {
         let store = &self.store;
         let handle = &self.handle;
 
-        let data = handle.block_on(async {
-            let active_counts = store.active_executions_by_agent().await.unwrap_or_default();
+        let result = handle.block_on(async {
+            tokio::time::timeout(REFRESH_TIMEOUT, async {
+                let active_counts = store.active_executions_by_agent().await?;
 
-            let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
-            let now_unix = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            let heartbeat_age_secs =
-                heartbeat.map(|(_, last_beat_at, _, _)| (now_unix - last_beat_at).max(0) as u64);
+                let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
+                let now_unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                let heartbeat_age_secs = heartbeat
+                    .map(|(_, last_beat_at, _, _)| (now_unix - last_beat_at).max(0) as u64);
 
-            let mut executions_by_agent: Vec<(String, Vec<ExecutionSummary>)> = Vec::new();
-            for alias in &aliases {
-                let execs = store
-                    .recent_agent_executions(alias, 3)
-                    .await
-                    .unwrap_or_default();
-                let summaries = execs
-                    .into_iter()
-                    .map(|e| ExecutionSummary {
-                        status: e.status,
-                        duration_ms: e.duration_ms,
-                    })
-                    .collect();
-                executions_by_agent.push((alias.clone(), summaries));
-            }
+                let mut executions_by_agent: Vec<(String, Vec<ExecutionSummary>)> = Vec::new();
+                for alias in &aliases {
+                    let execs = store
+                        .recent_agent_executions(alias, 3)
+                        .await
+                        .unwrap_or_default();
+                    let summaries = execs
+                        .into_iter()
+                        .map(|e| ExecutionSummary {
+                            status: e.status,
+                            duration_ms: e.duration_ms,
+                        })
+                        .collect();
+                    executions_by_agent.push((alias.clone(), summaries));
+                }
 
-            AgentsData {
-                executions_by_agent,
-                active_counts,
-                heartbeat_age_secs,
-                fetched_at: Instant::now(),
-            }
+                Ok::<_, sqlx::Error>(AgentsData {
+                    executions_by_agent,
+                    active_counts,
+                    heartbeat_age_secs,
+                    fetched_at: Instant::now(),
+                })
+            })
+            .await
         });
 
-        self.agents_data = Some(data);
-        let agent_count = cfg.agents.len();
-        if agent_count > 0 {
-            self.agents_selected = self.agents_selected.min(agent_count - 1);
-        } else {
-            self.agents_selected = 0;
+        match result {
+            Ok(Ok(data)) => {
+                self.agents_data = Some(data);
+                let agent_count = cfg.agents.len();
+                if agent_count > 0 {
+                    self.agents_selected = self.agents_selected.min(agent_count - 1);
+                } else {
+                    self.agents_selected = 0;
+                }
+                self.last_refresh_error = None;
+            }
+            Ok(Err(e)) => {
+                self.last_refresh_error = Some(format!("agents refresh: {}", e));
+            }
+            Err(_) => {
+                self.last_refresh_error = Some("agents refresh: timeout".to_string());
+            }
         }
     }
 
     /// Fetch the most recent executions from SQLite and update `executions_data`.
     ///
-    /// Ordered by `queued_at DESC`. Silently swallows errors — stale data is
-    /// preferable to a panic inside the event loop.
+    /// Ordered by `queued_at DESC`. On DB error, retains previous data and
+    /// sets `last_refresh_error`. Bounded by timeout.
     pub fn refresh_executions(&mut self) {
         let store = &self.store;
         let handle = &self.handle;
 
-        let executions = handle.block_on(async {
-            store
-                .recent_executions(HISTORY_ROW_LIMIT)
-                .await
-                .unwrap_or_default()
+        let result = handle.block_on(async {
+            tokio::time::timeout(REFRESH_TIMEOUT, async {
+                let executions = store.recent_executions(HISTORY_ROW_LIMIT).await?;
+                Ok::<_, sqlx::Error>(executions)
+            })
+            .await
         });
 
-        // Clamp the selection to the new row count.
-        let count = executions::history_selectable_count(
-            &executions,
-            self.history_drill_batch.as_deref(),
-            self.history_group_visible_limit(),
-        );
-        if count > 0 {
-            self.executions_selected = self.executions_selected.min(count - 1);
-        } else {
-            self.executions_selected = 0;
+        match result {
+            Ok(Ok(executions)) => {
+                // Clamp the selection to the new row count.
+                let count = executions::history_selectable_count(
+                    &executions,
+                    self.history_drill_batch.as_deref(),
+                    self.history_group_visible_limit(),
+                );
+                if count > 0 {
+                    self.executions_selected = self.executions_selected.min(count - 1);
+                } else {
+                    self.executions_selected = 0;
+                }
+                self.executions_data = Some(ExecutionsData {
+                    executions,
+                    fetched_at: Instant::now(),
+                });
+                self.last_refresh_error = None;
+            }
+            Ok(Err(e)) => {
+                self.last_refresh_error = Some(format!("history refresh: {}", e));
+            }
+            Err(_) => {
+                self.last_refresh_error = Some("history refresh: timeout".to_string());
+            }
         }
-
-        self.executions_data = Some(ExecutionsData {
-            executions,
-            fetched_at: Instant::now(),
-        });
     }
 
     // ── Row selection ─────────────────────────────────────────────────────────
@@ -1018,42 +1061,42 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             }
         }
 
-        // ── Background data refreshes (only when log viewer is closed) ────────
-        if app.viewing_log.is_none() {
-            // Refresh Activity tab data when it is active and stale.
-            if app.active_tab == 0 {
-                let is_stale = app
-                    .activity_data
-                    .as_ref()
-                    .map(|d| d.fetched_at.elapsed() >= interval)
-                    .unwrap_or(true);
-                if is_stale {
-                    app.refresh_activity();
-                }
+        // ── Background data refreshes ──────────────────────────────────────────
+        // Activity data is always refreshed regardless of active tab or log
+        // viewer state — it is the primary operational view and must stay
+        // current so that changes (new executions, crashes) are visible
+        // immediately when switching views.
+        {
+            let is_stale = app
+                .activity_data
+                .as_ref()
+                .map(|d| d.fetched_at.elapsed() >= interval)
+                .unwrap_or(true);
+            if is_stale {
+                app.refresh_activity();
             }
+        }
 
-            // Refresh Agents tab data when it is active and stale.
-            if app.active_tab == 1 {
-                let is_stale = app
-                    .agents_data
-                    .as_ref()
-                    .map(|d| d.fetched_at.elapsed() >= interval)
-                    .unwrap_or(true);
-                if is_stale {
-                    app.refresh_agents();
-                }
+        // Agents and History refresh when their tab is active and stale.
+        if app.active_tab == 1 {
+            let is_stale = app
+                .agents_data
+                .as_ref()
+                .map(|d| d.fetched_at.elapsed() >= interval)
+                .unwrap_or(true);
+            if is_stale {
+                app.refresh_agents();
             }
+        }
 
-            // Refresh History tab data when it is active and stale.
-            if app.active_tab == 2 {
-                let is_stale = app
-                    .executions_data
-                    .as_ref()
-                    .map(|d| d.fetched_at.elapsed() >= interval)
-                    .unwrap_or(true);
-                if is_stale {
-                    app.refresh_executions();
-                }
+        if app.active_tab == 2 {
+            let is_stale = app
+                .executions_data
+                .as_ref()
+                .map(|d| d.fetched_at.elapsed() >= interval)
+                .unwrap_or(true);
+            if is_stale {
+                app.refresh_executions();
             }
         }
 
@@ -1436,6 +1479,16 @@ impl App {
             spans.push("last:".fg(theme::ACCENT));
             spans.push(Span::raw(" "));
             spans.push(notice.fg(theme::TEXT_MUTED));
+        }
+
+        if let Some(err) = &self.last_refresh_error {
+            let mut msg = err.clone();
+            if msg.chars().count() > 48 {
+                msg = format!("{}…", msg.chars().take(47).collect::<String>());
+            }
+            spans.push(sep());
+            spans.push("⚠ ".fg(theme::WARNING));
+            spans.push(msg.fg(theme::WARNING));
         }
 
         if self.show_hint_banner {

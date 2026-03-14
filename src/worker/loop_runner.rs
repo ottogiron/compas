@@ -81,6 +81,10 @@ impl WorkerRunner {
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
         let mut poll_interval =
             tokio::time::interval(Duration::from_secs(poll_interval_secs.max(1)));
+        // Periodic stale execution check: detect executions stuck in
+        // picked_up/executing beyond the trigger timeout. These are
+        // likely from a panicked spawn_blocking task or a hung backend.
+        let mut stale_exec_interval = tokio::time::interval(Duration::from_secs(60));
 
         loop {
             tokio::select! {
@@ -93,6 +97,18 @@ impl WorkerRunner {
                         .await
                     {
                         tracing::warn!(error = %e, "heartbeat write failed");
+                    }
+                }
+                _ = stale_exec_interval.tick() => {
+                    let timeout_secs = self.config.load().orchestration.execution_timeout_secs;
+                    match self.store.mark_stale_executions_crashed(timeout_secs).await {
+                        Ok(count) if count > 0 => {
+                            tracing::warn!(count, timeout_secs, "marked stale executions as crashed");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "stale execution check failed");
+                        }
+                        _ => {}
                     }
                 }
             }
