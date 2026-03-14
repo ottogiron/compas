@@ -5,8 +5,18 @@ Domain guide for orchestrator work under `crates/aster-orch/**`.
 ## Scope and Authority
 
 - This file applies to changes in `crates/aster-orch/**`.
-- Root `AGENTS.md` remains mandatory and authoritative for repo-wide governance.
+- This crate lives in its own repository (`ottogiron/aster-orch`) and is included in the aster workspace as a git submodule.
+- When working from within the aster repo, root `AGENTS.md` remains mandatory and authoritative for repo-wide governance.
 - This file is additive and must not relax root safety, verification, or release rules.
+
+## Git Workflow (Submodule)
+
+This crate is a standalone git repository. When checked out as a submodule inside aster:
+
+1. Commit and push changes here first (`cd crates/aster-orch && git commit && git push`).
+2. Then update the submodule pointer in the parent aster repo (`cd <aster-root> && git add crates/aster-orch && git commit`).
+
+When working on this repo independently (cloned standalone), use normal git workflow.
 
 ## Module Overview
 
