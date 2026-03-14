@@ -902,10 +902,7 @@ fn make_batch_line(
         ),
         Span::styled(
             format!("{:<12}", bar),
-            Style::new()
-                .fg(theme::ACCENT)
-                .bg(bg)
-                .add_modifier(base_mod),
+            Style::new().fg(theme::ACCENT).bg(bg).add_modifier(base_mod),
         ),
         Span::styled(
             format!(
@@ -958,7 +955,11 @@ fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> L
     } else {
         format!("blocked ({})", disabled_reason)
     };
-    let status_color = if enabled { theme::SUCCESS } else { theme::TEXT_DIM };
+    let status_color = if enabled {
+        theme::SUCCESS
+    } else {
+        theme::TEXT_DIM
+    };
 
     Line::from(vec![
         Span::raw("  "),

@@ -1464,10 +1464,7 @@ impl App {
         block.render(modal, buf);
 
         let lines = vec![
-            Line::from(vec![
-                Span::raw(" "),
-                action.prompt().fg(theme::TEXT_BRIGHT),
-            ]),
+            Line::from(vec![Span::raw(" "), action.prompt().fg(theme::TEXT_BRIGHT)]),
             Line::from(vec![
                 Span::raw(" "),
                 "Impact: ".fg(theme::ACCENT),
@@ -1554,9 +1551,7 @@ impl App {
 
         let lines = vec![
             Line::from(" Global"),
-            Line::from(
-                "   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs",
-            ),
+            Line::from("   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs"),
             Line::from("   1-4 jump tabs   r refresh"),
             Line::from(" Navigation"),
             Line::from("   ↑/↓ or j/k move   g/G first/last"),
@@ -1565,9 +1560,7 @@ impl App {
             Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
             Line::from("   Esc back from batch drill"),
             Line::from(" History"),
-            Line::from(
-                "   Enter drill batch/open execution   Esc back from history batch drill",
-            ),
+            Line::from("   Enter drill batch/open execution   Esc back from history batch drill"),
             Line::from(" Execution Detail"),
             Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
             Line::from("   Esc back   f follow   J view mode"),
