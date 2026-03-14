@@ -13,21 +13,17 @@
 //! When `viewing_log` is `Some`, the execution detail view occupies the full
 //! terminal area (tab bar and status bar are hidden for maximum vertical space).
 
-use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    buffer::Buffer,
+    layout::{Constraint, Flex, Layout, Rect},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs},
-    Frame, Terminal,
+    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Tabs, Widget},
+    DefaultTerminal, Frame,
 };
 use std::{
-    io::{self, Stdout},
+    io,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -985,8 +981,7 @@ impl App {
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
-/// Set up the terminal, run the event loop, and restore the terminal on exit
-/// (including on panic).
+/// Set up the terminal, run the event loop, and restore the terminal on exit.
 ///
 /// `handle` is a Tokio runtime handle obtained from the caller's async context
 /// and used to drive async store queries from this synchronous blocking thread.
@@ -999,41 +994,16 @@ pub fn run_tui(
     poll_interval_secs: u64,
 ) -> io::Result<()> {
     let poll_interval = Duration::from_secs(poll_interval_secs);
-
-    // Enter raw mode and alternate screen.
-    enable_raw_mode()?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-
-    // Install a panic hook that restores the terminal before printing the panic.
-    let original_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        // Best-effort restore — ignore errors inside a panic handler.
-        let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
-        original_hook(info);
-    }));
-
+    let mut terminal = ratatui::init();
     let mut app = App::new(store, config, config_path, handle, poll_interval);
     let result = event_loop(&mut terminal, &mut app);
-
-    // Restore terminal unconditionally (panic hook handles the panic path).
-    let _ = disable_raw_mode();
-    let _ = execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    );
-    let _ = terminal.show_cursor();
-
+    ratatui::restore()?;
     result
 }
 
 // ── Event loop ────────────────────────────────────────────────────────────────
 
-fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> io::Result<()> {
+fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     loop {
         let interval = app.poll_interval;
 
@@ -1085,33 +1055,37 @@ fn event_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) 
             }
         }
 
-        terminal.draw(|f| draw(f, app))?;
+        terminal.draw(|frame| {
+            if let Some(ref mut viewer) = app.viewing_log {
+                render_execution_detail(frame, viewer, frame.area());
+            } else {
+                frame.render_widget(&*app, frame.area());
+                app.render_content_with_frame(frame);
+            }
+        })?;
 
         // Poll with a tick timeout so the loop stays responsive to resizes.
         if event::poll(TICK_RATE)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    if key.code == KeyCode::Char('c')
-                        && key.modifiers.contains(KeyModifiers::CONTROL)
-                    {
-                        app.should_quit = true;
-                        continue;
-                    }
-                    if app.viewing_log.is_some() {
-                        handle_log_viewer_key(app, key.code);
-                    } else if app.show_help {
-                        handle_help_key(app, key.code);
-                    } else if app.pending_admin_action.is_some() {
-                        handle_admin_confirm_key(app, key.code);
-                    } else if app.action_menu.is_some() {
-                        handle_action_menu_key(app, key.code);
-                    } else {
-                        handle_list_key(app, key.code);
-                    }
+            let event = event::read()?;
+            if let Event::Key(key) = event {
+                if key.kind != KeyEventKind::Press {
+                    continue;
                 }
-                // Resize is handled automatically by ratatui on the next draw.
-                Event::Resize(_, _) => {}
-                _ => {}
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    app.should_quit = true;
+                    continue;
+                }
+                if app.viewing_log.is_some() {
+                    handle_log_viewer_key(app, key.code);
+                } else if app.show_help {
+                    handle_help_key(app, key.code);
+                } else if app.pending_admin_action.is_some() {
+                    handle_admin_confirm_key(app, key.code);
+                } else if app.action_menu.is_some() {
+                    handle_action_menu_key(app, key.code);
+                } else {
+                    handle_list_key(app, key.code);
+                }
             }
         }
 

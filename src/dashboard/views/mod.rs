@@ -8,11 +8,7 @@ pub mod payload;
 
 use ratatui::style::Color;
 
-/// Convert a raw thread-status string to a human-readable label.
-///
-/// Known snake_case / PascalCase variants are normalised to title-case words;
-/// already-readable values (Active, Completed, Failed, Abandoned) pass through
-/// unchanged.
+/// Pass-through: thread status values are already human-readable.
 pub fn humanize_thread_status(raw: &str) -> &str {
     raw
 }
@@ -75,6 +71,21 @@ pub fn format_duration_ms(ms: i64) -> String {
         format!("{}ms", ms)
     } else {
         format_duration_secs(ms / 1_000)
+    }
+}
+
+// ── Shared string helpers ──────────────────────────────────────────────────────
+
+/// Truncate a string to `max_chars` Unicode scalars, appending "…" if truncated.
+pub fn truncate(s: &str, max_chars: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max_chars {
+        s.to_string()
+    } else if max_chars <= 1 {
+        "…".to_string()
+    } else {
+        let truncated: String = s.chars().take(max_chars - 1).collect();
+        format!("{truncated}…")
     }
 }
 
@@ -327,5 +338,56 @@ mod tests {
     #[test]
     fn test_exec_status_color_unknown() {
         assert_eq!(exec_status_color("other"), Color::White);
+    }
+
+    // truncate
+
+    #[test]
+    fn test_truncate_short_string_passes_through() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_exact_length_passes_through() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_long_string_appends_ellipsis() {
+        let s = "a".repeat(50);
+        let result = truncate(&s, 10);
+        assert!(result.ends_with('…'), "expected trailing ellipsis");
+        // 9 'a' chars + "…" (3 UTF-8 bytes but 1 char)
+        assert_eq!(result, format!("{}…", "a".repeat(9)));
+    }
+
+    #[test]
+    fn test_truncate_empty_string() {
+        assert_eq!(truncate("", 10), "");
+    }
+
+    #[test]
+    fn test_truncate_max_chars_zero_returns_ellipsis() {
+        // max_chars == 0 ≤ 1 → "…"
+        assert_eq!(truncate("hello", 0), "…");
+    }
+
+    #[test]
+    fn test_truncate_max_chars_one_returns_ellipsis() {
+        // max_chars == 1 ≤ 1 → "…"
+        assert_eq!(truncate("hello", 1), "…");
+    }
+
+    #[test]
+    fn test_truncate_max_chars_two_truncates_to_one_char_plus_ellipsis() {
+        assert_eq!(truncate("hello", 2), "h…");
+    }
+
+    #[test]
+    fn test_truncate_non_ascii_chars() {
+        assert_eq!(truncate("héllo", 4), "hél…");
+        assert_eq!(truncate("日本語テスト", 4), "日本語…");
+        assert_eq!(truncate("café", 4), "café"); // exactly 4 chars
+        assert_eq!(truncate("café", 3), "ca…");
     }
 }

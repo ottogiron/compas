@@ -7,9 +7,9 @@
 
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Paragraph},
     Frame,
 };
 use std::io::{Read, Seek, SeekFrom};
@@ -237,11 +237,7 @@ impl ExecutionDetailState {
 
 /// Render the full-screen execution detail view into `area`.
 pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, area: Rect) {
-    let exec_short: String = if state.exec_id.len() > 18 {
-        format!("{}…", &state.exec_id[..18])
-    } else {
-        state.exec_id.clone()
-    };
+    let exec_short = super::truncate(&state.exec_id, 18);
 
     let status_label = humanize_exec_status(&state.status);
     let status_color = exec_status_color(&state.status);
@@ -262,45 +258,22 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
 
     let title_spans: Vec<Span> = vec![
         Span::raw(" "),
-        Span::styled(
-            exec_short,
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
+        exec_short.bold().fg(Color::White),
         Span::raw("  "),
-        Span::styled(state.agent_alias.clone(), Style::default().fg(Color::Cyan)),
+        state.agent_alias.clone().fg(Color::Cyan),
         Span::raw("  "),
-        Span::styled(
-            status_label,
-            Style::default()
-                .fg(status_color)
-                .add_modifier(Modifier::BOLD),
-        ),
+        status_label.fg(status_color).bold(),
         Span::raw("  "),
-        Span::styled(duration_label, Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            follow_indicator,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            json_indicator,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            provenance_indicator,
-            Style::default()
-                .fg(if state.input_linked {
-                    Color::Green
-                } else {
-                    Color::Red
-                })
-                .add_modifier(Modifier::BOLD),
-        ),
+        duration_label.fg(Color::DarkGray),
+        follow_indicator.fg(Color::Yellow).bold(),
+        json_indicator.fg(Color::Cyan).bold(),
+        provenance_indicator
+            .fg(if state.input_linked {
+                Color::Green
+            } else {
+                Color::Red
+            })
+            .bold(),
         Span::raw(" "),
     ];
 
@@ -358,14 +331,7 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         format!("  {first}-{last}/{total}  ", total = display_lines.len())
     };
 
-    let key = |s: &'static str| {
-        Span::styled(
-            s,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
+    let key = |s: &'static str| s.fg(Color::Yellow).bold();
 
     let footer_spans: Vec<Span> = vec![
         Span::raw(" "),
@@ -381,24 +347,23 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         Span::raw(": follow  "),
         key("J"),
         Span::raw(": view mode"),
-        Span::styled(position_label, Style::default().fg(Color::DarkGray)),
+        position_label.fg(Color::DarkGray),
     ];
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
+    let block = Block::bordered()
+        .style(Style::new().bg(Color::Black).fg(Color::White))
         .title(Line::from(title_spans))
         .title_bottom(Line::from(footer_spans));
 
-    let visible_lines: Vec<Line> = display_lines
+    let all_lines: Vec<Line> = display_lines
         .iter()
-        .skip(scroll_offset)
-        .take(visible_rows.max(1))
-        .map(|l| Line::from(Span::raw(format!(" {}", l))))
+        .map(|l| Line::from(format!(" {}", l)))
         .collect();
 
-    let paragraph = Paragraph::new(visible_lines)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
+    let paragraph = Paragraph::new(all_lines)
+        // Paragraph::scroll takes (u16, u16); clamp to avoid silent wrapping on large logs.
+        .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0))
+        .style(Style::new().bg(Color::Black).fg(Color::White))
         .block(block);
     f.render_widget(paragraph, area);
 }

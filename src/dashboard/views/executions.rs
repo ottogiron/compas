@@ -4,12 +4,12 @@
 //! each section. The special "Unbatched" group is pinned first when present.
 
 use ratatui::{
-    layout::Rect,
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Layout, Rect},
+    style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
-        ScrollbarState,
+        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+        TableState,
     },
     Frame,
 };
@@ -31,56 +31,39 @@ pub enum HistorySelectable {
 
 /// Render the Executions tab into `area`.
 pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
+    let block = Block::bordered()
+        .style(Style::new().bg(Color::Black).fg(Color::White))
         .title(" Executions ")
         .title_bottom(Line::from(vec![
             Span::raw(" "),
-            Span::styled(
-                "↑/↓",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            "↑/↓".yellow().bold(),
             Span::raw(": select  "),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            "Enter".yellow().bold(),
             Span::raw(": drill/open "),
             Span::raw("  "),
-            Span::styled("L/U", Style::default().fg(Color::Cyan)),
+            "L/U".cyan(),
             Span::raw(": linked/unlinked"),
         ]));
 
     // ── No data yet ──────────────────────────────────────────────────────────
     let Some(data) = &app.executions_data else {
-        let p = Paragraph::new(Line::from(Span::styled(
-            "  Fetching…",
-            Style::default().fg(Color::DarkGray),
-        )))
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .block(block);
+        let p = Paragraph::new(Line::from("  Fetching…".dark_gray()))
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .block(block);
         f.render_widget(p, area);
         return;
     };
 
     // ── Empty state ──────────────────────────────────────────────────────────
     if data.executions.is_empty() {
-        let p = Paragraph::new(Line::from(Span::styled(
-            "  No executions recorded",
-            Style::default().fg(Color::DarkGray),
-        )))
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .block(block);
+        let p = Paragraph::new(Line::from("  No executions recorded".dark_gray()))
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .block(block);
         f.render_widget(p, area);
         return;
     }
 
-    // ── Build grouped list ────────────────────────────────────────────────────
+    // ── Compute selectables and grouping ──────────────────────────────────────
     let selectables = history_selectable_targets(
         &data.executions,
         app.history_drill_batch.as_deref(),
@@ -94,119 +77,85 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         app.history_drill_batch.as_deref(),
         app.history_group_visible_limit(),
     );
-    let mut items: Vec<ListItem<'static>> = Vec::new();
-    let mut selectable_to_row: HashMap<usize, usize> = HashMap::new();
-    let mut selectable_slot = 0usize;
 
-    if let Some(batch) = app.history_drill_batch.as_deref() {
-        items.push(ListItem::new(Line::from(vec![
+    // ── Render block border; work with inner area ──────────────────────────────
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // ── Optional filter banner when drilling into a batch ──────────────────────
+    let table_area = if let Some(batch) = app.history_drill_batch.as_deref() {
+        let chunks = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).split(inner);
+        let banner = Paragraph::new(Line::from(vec![
             Span::raw(" "),
             Span::styled(
                 format!("Filter: batch {}", history_batch_display(batch)),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
+                Style::new().fg(Color::Cyan).bold(),
             ),
             Span::raw("  "),
-            Span::styled(
-                "x",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            "x".yellow().bold(),
             Span::raw("/"),
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+            "Esc".yellow().bold(),
             Span::raw(": back"),
-        ])));
-        items.push(ListItem::new(Line::from(Span::raw(""))));
-    }
+        ]));
+        f.render_widget(banner, chunks[0]);
+        chunks[1]
+    } else {
+        inner
+    };
 
-    items.push(ListItem::new(Line::from(vec![
-        Span::styled(
-            format!("{:<14}", "Agent"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<19}", "Thread ID"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<13}", "Status"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<6}", "Prov"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<10}", "Duration"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!("{:<6}", "Exit"),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "Error",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ])));
-    items.push(ListItem::new(Line::from(Span::raw(""))));
+    // ── Build table rows ───────────────────────────────────────────────────────
+    let mut rows: Vec<Row<'static>> = Vec::new();
+    let mut selectable_to_row: HashMap<usize, usize> = HashMap::new();
+    let mut selectable_slot = 0usize;
 
     for group in groups {
         if app.history_drill_batch.is_none() {
-            selectable_to_row.insert(selectable_slot, items.len());
+            selectable_to_row.insert(selectable_slot, rows.len());
             selectable_slot += 1;
         }
-        let mut header_spans = vec![Span::styled(
-            format!(" Batch {} ", group.label),
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )];
-        if group.hidden_count > 0 {
-            header_spans.push(Span::styled(
-                format!(" … +{} more", group.hidden_count),
-                Style::default().fg(Color::DarkGray),
-            ));
-        }
-        items.push(ListItem::new(Line::from(header_spans)));
+
+        // Batch header row — label in col 0, optional "+N more" in col 1.
+        let batch_label = format!(" Batch {} ", group.label);
+        let hidden_text = if group.hidden_count > 0 {
+            format!(" … +{} more", group.hidden_count)
+        } else {
+            String::new()
+        };
+        rows.push(
+            Row::new([
+                Cell::from(batch_label).style(Style::new().fg(Color::Yellow).bold()),
+                Cell::from(hidden_text).style(Style::new().fg(Color::DarkGray)),
+                Cell::default(),
+                Cell::default(),
+                Cell::default(),
+                Cell::default(),
+                Cell::default(),
+            ])
+            .style(Style::new().fg(Color::Yellow)),
+        );
 
         for &exec_idx in &group.indices {
             let Some(e) = data.executions.get(exec_idx) else {
                 continue;
             };
-            selectable_to_row.insert(selectable_slot, items.len());
+            selectable_to_row.insert(selectable_slot, rows.len());
             selectable_slot += 1;
+
             let status_color = exec_status_color(&e.status);
-            let thread_id = truncate(&e.thread_id, 16);
+            let thread_id = super::truncate(&e.thread_id, 16);
             let duration = e
                 .duration_ms
                 .map(format_duration_ms)
                 .unwrap_or_else(|| "-".to_string());
-            let provenance = if e.dispatch_message_id.is_some() {
-                "L".to_string()
+            let prov_char = if e.dispatch_message_id.is_some() {
+                "L"
             } else {
-                "U".to_string()
+                "U"
+            };
+            let prov_color = if e.dispatch_message_id.is_some() {
+                Color::Green
+            } else {
+                Color::Red
             };
             let exit_code = e
                 .exit_code
@@ -215,57 +164,56 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             let error_preview = e
                 .error_detail
                 .as_deref()
-                .map(|s| truncate(s, 40))
+                .map(|s| super::truncate(s, 40))
                 .unwrap_or_else(|| "-".to_string());
 
-            items.push(ListItem::new(Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    format!("{:<14}", e.agent_alias),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    format!("{:<19}", thread_id),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    format!("{:<13}", humanize_exec_status(&e.status)),
-                    Style::default().fg(status_color),
-                ),
-                Span::styled(
-                    format!("{:<6}", provenance),
-                    Style::default().fg(if e.dispatch_message_id.is_some() {
-                        Color::Green
-                    } else {
-                        Color::Red
-                    }),
-                ),
-                Span::styled(
-                    format!("{:<10}", duration),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(
-                    format!("{:<6}", exit_code),
-                    Style::default().fg(Color::White),
-                ),
-                Span::styled(error_preview, Style::default().fg(Color::White)),
-            ])));
+            rows.push(Row::new([
+                Cell::from(format!(" {}", e.agent_alias)).style(Style::new().fg(Color::White)),
+                Cell::from(thread_id).style(Style::new().fg(Color::White)),
+                Cell::from(humanize_exec_status(&e.status).to_string())
+                    .style(Style::new().fg(status_color)),
+                Cell::from(prov_char).style(Style::new().fg(prov_color)),
+                Cell::from(duration).style(Style::new().fg(Color::White)),
+                Cell::from(exit_code).style(Style::new().fg(Color::White)),
+                Cell::from(error_preview).style(Style::new().fg(Color::White)),
+            ]));
         }
 
-        items.push(ListItem::new(Line::from(Span::raw(""))));
+        // Blank separator between groups.
+        rows.push(Row::new([""; 7]));
     }
 
+    // ── Column header ──────────────────────────────────────────────────────────
+    let header = Row::new([
+        Cell::from("Agent").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Thread ID").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Status").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Prov").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Duration").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Exit").style(Style::new().fg(Color::Cyan).bold()),
+        Cell::from("Error").style(Style::new().fg(Color::Cyan).bold()),
+    ])
+    .style(Style::new().bold());
+
+    let widths = [
+        Constraint::Length(14),
+        Constraint::Length(19),
+        Constraint::Length(13),
+        Constraint::Length(6),
+        Constraint::Length(10),
+        Constraint::Length(6),
+        Constraint::Fill(1),
+    ];
+
     let selected_row = selectable_to_row.get(&selected).copied().unwrap_or(0);
-    let mut state = ListState::default().with_selected(Some(selected_row));
-    let list = List::new(items)
-        .block(block)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        );
-    f.render_stateful_widget(list, area, &mut state);
+    let mut state = TableState::default().with_selected(Some(selected_row));
+
+    let table = Table::new(rows, widths)
+        .header(header)
+        .style(Style::new().bg(Color::Black).fg(Color::White))
+        .row_highlight_style(Style::new().bg(Color::DarkGray).bold());
+
+    f.render_stateful_widget(table, table_area, &mut state);
 
     let mut scrollbar_state = ScrollbarState::new(selectables.len().max(1)).position(selected);
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
@@ -398,49 +346,11 @@ pub fn history_selected_target(
         .nth(selected)
 }
 
-/// Truncate `s` to at most `max_chars` Unicode scalar values, appending "…"
-/// if truncated.
-fn truncate(s: &str, max_chars: usize) -> String {
-    let mut chars = s.chars();
-    let collected: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() {
-        format!("{}…", collected)
-    } else {
-        collected
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // truncate
-
-    #[test]
-    fn test_executions_truncate_short() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_executions_truncate_exact() {
-        assert_eq!(truncate("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_executions_truncate_long() {
-        let s = "a".repeat(50);
-        let result = truncate(&s, 40);
-        assert!(result.ends_with('…'));
-        // 40 chars + ellipsis
-        assert_eq!(result.chars().count(), 41);
-    }
-
-    #[test]
-    fn test_executions_truncate_empty() {
-        assert_eq!(truncate("", 40), "");
-    }
 
     #[test]
     fn test_group_execution_indices_by_batch_orders_by_latest_queued_at() {
