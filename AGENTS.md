@@ -51,20 +51,40 @@ Primary local modules:
 
 ## Verification for Orchestrator Changes
 
+### CI Pipeline (`.github/workflows/ci.yml`)
+
+CI runs on every push to `main` and every PR. It executes `make verify` which is:
+
+1. `make fmt-check` — `cargo fmt --all -- --check`
+2. `make clippy` — `cargo clippy --all-targets -- -D warnings`
+3. `make test` — `cargo test`
+
+**All three checks must pass locally before pushing.** The most common CI failure is formatting — always run `cargo fmt --all` (or `make fmt`) before committing.
+
 ### Standalone (working directly in `ottogiron/aster-orch`)
 
 ```bash
-make verify        # fmt-check + clippy --all-targets + test
+make fmt           # apply rustfmt (do this before committing)
+make verify        # fmt-check + clippy --all-targets + test (matches CI)
 ```
 
 ### From within the `aster` parent repo
 
 ```bash
-cargo test -p aster-orch   # run aster-orch tests via workspace
-make verify                # full aster workspace quality gate
+cargo fmt --all                    # format from workspace root
+cargo test -p aster-orch           # run aster-orch tests via workspace
+make verify                        # full aster workspace quality gate
 make perf-baseline
 make perf-check
 ```
+
+### Pre-push Checklist
+
+Before pushing to `ottogiron/aster-orch`:
+
+1. `make fmt` — apply formatting
+2. `make verify` — run the full CI gate locally
+3. If working as a submodule, push the submodule first, then update the pointer in aster
 
 Behavioral changes to orchestrator workflows/tools must also run benchmark flow:
 
