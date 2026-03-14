@@ -62,6 +62,7 @@ pub struct ExecutionDetailState {
 
 impl ExecutionDetailState {
     /// Create a new detail view from execution metadata.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         exec_id: String,
         agent_alias: String,

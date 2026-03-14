@@ -51,11 +51,17 @@ Primary local modules:
 
 ## Verification for Orchestrator Changes
 
-Minimum local checks for `crates/aster-orch/**` work:
+### Standalone (working directly in `ottogiron/aster-orch`)
 
 ```bash
-cargo test -p aster-orch
-make verify
+make verify        # fmt-check + clippy --all-targets + test
+```
+
+### From within the `aster` parent repo
+
+```bash
+cargo test -p aster-orch   # run aster-orch tests via workspace
+make verify                # full aster workspace quality gate
 make perf-baseline
 make perf-check
 ```

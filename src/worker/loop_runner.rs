@@ -273,7 +273,7 @@ fn prune_log_files(log_dir: &Path, retention_count: usize) {
     };
     let mut files: Vec<PathBuf> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().map_or(false, |ext| ext == "log"))
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
         .map(|e| e.path())
         .collect();
 

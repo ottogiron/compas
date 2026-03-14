@@ -66,6 +66,7 @@ fn mock_input() -> Vec<String> {
     ]
 }
 
+#[allow(clippy::vec_init_then_push)]
 fn mock_output() -> Vec<String> {
     let mut lines = Vec::new();
 

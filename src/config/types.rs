@@ -163,17 +163,12 @@ fn default_execution_timeout_secs() -> u64 {
 /// Agent role determines worker behavior.
 /// - `Worker`: triggered on matching intents (default).
 /// - `Operator`: coordinator driven via MCP tools, never triggered.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentRole {
+    #[default]
     Worker,
     Operator,
-}
-
-impl Default for AgentRole {
-    fn default() -> Self {
-        AgentRole::Worker
-    }
 }
 
 /// A model entry in the optional model catalog.

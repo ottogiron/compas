@@ -1,4 +1,5 @@
 //! Storage layer backed by SQLite with WAL mode.
+#![allow(clippy::type_complexity)]
 //!
 //! Three core tables:
 //! - `threads`    — unit of work lifecycle

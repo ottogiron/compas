@@ -972,9 +972,7 @@ fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> L
 fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {
     let ts = t.thread_status.as_str();
     let es = t.execution_status.as_deref().unwrap_or("");
-    if ts == "Failed" {
-        (theme::MARKER_FAILED, theme::FAILURE)
-    } else if matches!(es, "failed" | "crashed") {
+    if ts == "Failed" || matches!(es, "failed" | "crashed") {
         (theme::MARKER_FAILED, theme::FAILURE)
     } else if es == "timed_out" {
         (theme::MARKER_TIMEOUT, theme::FAILURE)

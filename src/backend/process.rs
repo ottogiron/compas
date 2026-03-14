@@ -160,17 +160,15 @@ pub fn wait_with_timeout(
         child_stdout.map(|stream| {
             std::thread::spawn(move || {
                 let reader = BufReader::new(stream);
-                for line in reader.lines() {
-                    if let Ok(l) = line {
-                        {
-                            let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
-                            b.extend_from_slice(l.as_bytes());
-                            b.push(b'\n');
-                        }
-                        if let Some(ref f) = lf {
-                            let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
-                            let _ = writeln!(guard, "{}", l);
-                        }
+                for l in reader.lines().map_while(|r| r.ok()) {
+                    {
+                        let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
+                        b.extend_from_slice(l.as_bytes());
+                        b.push(b'\n');
+                    }
+                    if let Some(ref f) = lf {
+                        let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
+                        let _ = writeln!(guard, "{}", l);
                     }
                 }
             })
@@ -184,17 +182,15 @@ pub fn wait_with_timeout(
         child_stderr.map(|stream| {
             std::thread::spawn(move || {
                 let reader = BufReader::new(stream);
-                for line in reader.lines() {
-                    if let Ok(l) = line {
-                        {
-                            let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
-                            b.extend_from_slice(l.as_bytes());
-                            b.push(b'\n');
-                        }
-                        if let Some(ref f) = lf {
-                            let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
-                            let _ = writeln!(guard, "[stderr] {}", l);
-                        }
+                for l in reader.lines().map_while(|r| r.ok()) {
+                    {
+                        let mut b = buf.lock().unwrap_or_else(|e| e.into_inner());
+                        b.extend_from_slice(l.as_bytes());
+                        b.push(b'\n');
+                    }
+                    if let Some(ref f) = lf {
+                        let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
+                        let _ = writeln!(guard, "[stderr] {}", l);
                     }
                 }
             })

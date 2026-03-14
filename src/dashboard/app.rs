@@ -1319,7 +1319,7 @@ impl App {
 
     fn render_content_widget(&self, area: Rect, buf: &mut Buffer) {
         match self.active_tab {
-            0 | 1 | 2 => {} // Stateful tabs rendered by render_content_with_frame
+            0..=2 => {} // Stateful tabs rendered by render_content_with_frame
             3 => self.render_settings_widget(area, buf),
             _ => {
                 let tab_name = TABS[self.active_tab];

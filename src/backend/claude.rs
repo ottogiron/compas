@@ -188,8 +188,8 @@ impl Backend for ClaudeCodeBackend {
                 // Consider the trigger successful if we got valid JSON output
                 // with a result field, even if the exit code was non-zero.
                 // Claude Code can exit non-zero while still producing valid output.
-                let success = out.status.success()
-                    || json.as_ref().map_or(false, |v| v.get("result").is_some());
+                let success =
+                    out.status.success() || json.as_ref().is_ok_and(|v| v.get("result").is_some());
 
                 Ok(TriggerResult {
                     session_id: real_session_id.unwrap_or_else(|| session.id.clone()),

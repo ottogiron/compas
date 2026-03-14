@@ -1516,7 +1516,7 @@ mod query_tests {
         let json = extract_json(&result);
         assert_eq!(json["thread_id"], "t-q-1");
         assert_eq!(json["messages"].as_array().unwrap().len(), 2);
-        assert!(json["executions"].as_array().unwrap().len() >= 1);
+        assert!(!json["executions"].as_array().unwrap().is_empty());
     }
 
     #[tokio::test]
