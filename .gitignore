@@ -3,3 +3,4 @@
 .session
 .claude/
 .DS_Store
+.aster-orch/state/

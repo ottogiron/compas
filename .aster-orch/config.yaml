@@ -1,0 +1,32 @@
+# Development config for aster-orch
+# Uses a local state directory to avoid conflicting with production
+target_repo_root: ..
+state_dir: state
+poll_interval_secs: 2
+
+orchestration:
+  max_concurrent_triggers: 4
+  max_triggers_per_agent: 1
+  trigger_intents:
+    - dispatch
+    - handoff
+    - changes-requested
+  execution_timeout_secs: 900
+  ping_timeout_secs: 30
+
+database:
+  max_connections: 8
+  min_connections: 2
+  acquire_timeout_ms: 15000
+
+agents:
+  - alias: dev
+    backend: claude
+    model: claude-sonnet-4-6
+    prompt: >
+      You are a development agent for aster-orch.
+      Follow AGENTS.md. Run make verify before submitting.
+
+      REPLY PROTOCOL: When your task is complete, end your response with
+      a JSON line on its own line:
+      {"intent":"review-request","to":"operator"}
