@@ -15,7 +15,7 @@ use aster_orch::worker::WorkerRunner;
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use std::path::PathBuf;
-use std::process::ExitCode;
+use std::process::{ExitCode, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -288,33 +288,25 @@ async fn run_dashboard(
     // All consumers share the same handle and see updates atomically.
     let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
 
-    // If requested, spawn the worker in the background.
-    let mut worker_task = None;
-    let mut worker_reporter = None;
+    // If requested, spawn the worker as a separate OS process so its
+    // lifecycle is independent of the dashboard. The dashboard can be
+    // restarted or quit without interrupting running triggers.
+    let mut worker_pid: Option<u32> = None;
     if with_worker {
-        let worker_cfg = config_handle.load().clone();
-        let backend_registry = build_backend_registry(&worker_cfg);
-        let worker_store = store.clone();
-        let worker_config_handle = config_handle.clone();
-
-        let runner = WorkerRunner::new(worker_config_handle, worker_store, backend_registry);
-        let (worker_error_tx, mut worker_error_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        worker_task = Some(tokio::spawn(async move {
-            // Worker logs via tracing. Since we haven't initialized a subscriber
-            // (to avoid corrupting the TUI), these logs will be dropped.
-            // This is intentional.
-            if let Err(e) = runner.run().await {
-                let _ = worker_error_tx.send(e.to_string());
+        let spawned = spawn_worker_process(&store, &config_handle, &config_path).await;
+        match spawned {
+            Ok(Some(pid)) => {
+                worker_pid = Some(pid);
+                eprintln!("spawned worker process (PID: {})", pid);
             }
-        }));
-
-        worker_reporter = Some(tokio::spawn(async move {
-            if let Some(err) = worker_error_rx.recv().await {
-                // Use stderr so we don't corrupt the TUI's stdout rendering.
-                eprintln!("warning: embedded worker exited: {}", err);
+            Ok(None) => {
+                eprintln!("worker already running (recent heartbeat), skipping spawn");
             }
-        }));
+            Err(e) => {
+                eprintln!("warning: failed to spawn worker process: {}", e);
+                eprintln!("dashboard will start without an embedded worker");
+            }
+        }
     }
 
     // Capture the runtime handle before entering the blocking thread.
@@ -337,18 +329,76 @@ async fn run_dashboard(
     })
     .await;
 
-    if let Some(task) = worker_task {
-        task.abort();
-        let _ = task.await;
-    }
-    if let Some(task) = worker_reporter {
-        task.abort();
-        let _ = task.await;
+    // The worker runs as its own process — no cleanup needed here.
+    // Dropping the Child handle (if any) does NOT kill the child process.
+    if let Some(pid) = worker_pid {
+        eprintln!("dashboard exited; worker process (PID: {}) continues running", pid);
+        eprintln!("to stop it: kill {}", pid);
     }
 
     tui_result??;
 
     Ok(())
+}
+
+/// Spawn the worker as a detached child process.
+///
+/// Returns `Ok(Some(pid))` if a new worker was spawned, `Ok(None)` if one is
+/// already running (heartbeat younger than 30 s), or an error on spawn failure.
+///
+/// The child process runs `aster_orch worker --config <path>` with:
+/// - stdin  → /dev/null
+/// - stdout/stderr → `{log_dir}/worker.log`
+///
+/// The child is fully independent: quitting the dashboard does NOT stop it.
+async fn spawn_worker_process(
+    store: &aster_orch::store::Store,
+    config_handle: &aster_orch::config::ConfigHandle,
+    config_path: &PathBuf,
+) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    // Check if a worker is already running via heartbeat.
+    let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let worker_already_running = heartbeat
+        .as_ref()
+        .map(|(_, last_beat_at, _, _)| (now_unix - last_beat_at).abs() < 30)
+        .unwrap_or(false);
+
+    if worker_already_running {
+        return Ok(None);
+    }
+
+    // Resolve paths for the child process.
+    let exe = std::env::current_exe()?;
+    let resolved_config = std::fs::canonicalize(config_path)
+        .unwrap_or_else(|_| config_path.clone());
+
+    // Redirect worker output to a log file.
+    let log_dir = config_handle.load().log_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let worker_log_path = log_dir.join("worker.log");
+    let worker_log = std::fs::File::create(&worker_log_path)?;
+    let worker_log_err = worker_log.try_clone()?;
+
+    let child = std::process::Command::new(exe)
+        .arg("worker")
+        .arg("--config")
+        .arg(&resolved_config)
+        .stdin(Stdio::null())
+        .stdout(worker_log)
+        .stderr(worker_log_err)
+        .spawn()?;
+
+    let pid = child.id();
+    // Dropping the Child handle does not kill the child process.
+    // The worker continues running independently.
+    drop(child);
+
+    Ok(Some(pid))
 }
 
 // ---------------------------------------------------------------------------
