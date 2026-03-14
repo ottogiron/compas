@@ -997,7 +997,7 @@ pub fn run_tui(
     let mut terminal = ratatui::init();
     let mut app = App::new(store, config, config_path, handle, poll_interval);
     let result = event_loop(&mut terminal, &mut app);
-    ratatui::restore()?;
+    ratatui::restore();
     result
 }
 
@@ -1247,396 +1247,327 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
     }
 }
 
-// ── Rendering ─────────────────────────────────────────────────────────────────
+// ── Widget impl ───────────────────────────────────────────────────────────────
 
-fn draw(f: &mut Frame, app: &mut App) {
-    // When the execution detail view is open, render it full-screen for
-    // maximum space.
-    if let Some(ref mut viewer) = app.viewing_log {
-        render_execution_detail(f, viewer, f.area());
-        return;
-    }
-
-    let area = f.area();
-
-    // Vertical split: tab bar | content | status bar.
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3), // tab bar (border + label row + border)
-            Constraint::Min(0),    // content pane
-            Constraint::Length(1), // status bar (no border)
-        ])
-        .split(area);
-
-    render_tab_bar(f, app, chunks[0]);
-    render_content(f, app, chunks[1]);
-    render_status_bar(f, app, chunks[2]);
-
-    if app.show_help {
-        render_help_overlay(f, area);
-    } else if app.action_menu.is_some() {
-        render_action_menu_modal(f, app, area);
-    } else if app.pending_admin_action.is_some() {
-        render_admin_action_modal(f, app, area);
-    }
-}
-
-fn render_tab_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let tab_titles: Vec<Line> = TABS.iter().map(|&t| Line::from(Span::raw(t))).collect();
-
-    let tabs = Tabs::new(tab_titles)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .style(Style::default().bg(Color::Black).fg(Color::White))
-                .title(Span::styled(
-                    " aster-orch dashboard ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        )
-        .select(app.active_tab)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
+impl Widget for &App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Invariant: the draw closure only calls Widget::render when viewing_log is None.
+        // The log viewer is rendered directly via Frame in the draw closure.
+        debug_assert!(
+            self.viewing_log.is_none(),
+            "Widget::render called while viewing_log is Some; draw closure contract broken"
         );
 
-    f.render_widget(tabs, area);
+        let [tab_bar, content, status_bar] = Layout::vertical(MAIN_LAYOUT).areas(area);
+
+        self.render_tab_bar_widget(tab_bar, buf);
+        self.render_content_widget(content, buf);
+        self.render_status_bar_widget(status_bar, buf);
+
+        if self.show_help {
+            self.render_help_overlay_widget(area, buf);
+        } else if self.action_menu.is_some() {
+            self.render_action_menu_widget(area, buf);
+        } else if self.pending_admin_action.is_some() {
+            self.render_admin_action_widget(area, buf);
+        }
+    }
 }
 
-fn render_content(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    match app.active_tab {
-        0 => render_activity(f, app, area),
-        1 => agents::render_agents_tab(f, app, area),
-        2 => executions::render_executions(f, app, area),
-        3 => render_settings(f, app, area),
-        _ => {
-            let tab_name = TABS[app.active_tab];
-            let body = format!("  {} — coming soon", tab_name);
+/// Main layout constraints shared between `Widget for &App` and `render_content_with_frame`.
+const MAIN_LAYOUT: [Constraint; 3] = [
+    Constraint::Length(3),
+    Constraint::Fill(1),
+    Constraint::Length(1),
+];
 
-            let content = Paragraph::new(Line::from(Span::styled(
-                body,
-                Style::default().fg(Color::DarkGray),
-            )))
-            .style(Style::default().bg(Color::Black).fg(Color::White))
+// ── Rendering methods on App ──────────────────────────────────────────────────
+
+impl App {
+    /// Render stateful content that requires `Frame` (external module views).
+    fn render_content_with_frame(&self, frame: &mut Frame) {
+        // Layout must match MAIN_LAYOUT used in impl Widget for &App.
+        let [_, content, _] = Layout::vertical(MAIN_LAYOUT).areas(frame.area());
+
+        match self.active_tab {
+            0 => render_activity(frame, self, content),
+            1 => agents::render_agents_tab(frame, self, content),
+            2 => executions::render_executions(frame, self, content),
+            _ => {} // Settings + fallback handled by Widget impl
+        }
+    }
+
+    fn render_tab_bar_widget(&self, area: Rect, buf: &mut Buffer) {
+        Tabs::new(TABS.iter().copied())
             .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .style(Style::default().bg(Color::Black)),
-            );
-
-            f.render_widget(content, area);
-        }
-    }
-}
-
-fn render_settings(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .title(" Settings ");
-
-    let label = |s: &str| {
-        Span::styled(
-            s.to_string(),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let value = |s: String| Span::styled(s, Style::default().fg(Color::White));
-
-    let poll_secs = app.poll_interval.as_secs();
-    let cfg = app.config.load();
-
-    let lines = vec![
-        Line::from(vec![
-            Span::raw("  "),
-            label("Config:       "),
-            value(app.config_path.display().to_string()),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            label("DB:           "),
-            value(cfg.db_path().display().to_string()),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            label("Poll interval:"),
-            value(format!(" {}s", poll_secs)),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            label("Agents:       "),
-            value(format!(" {}", cfg.agents.len())),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            label("Log dir:      "),
-            value(format!(" {}", app.log_dir.display())),
-        ]),
-    ];
-
-    let p = Paragraph::new(lines)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .block(block);
-    f.render_widget(p, area);
-}
-
-fn render_status_bar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let key = |s: &'static str| {
-        Span::styled(
-            s,
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let sep = || Span::raw("  ");
-    let mut spans: Vec<Span> = vec![
-        Span::raw(" "),
-        key("q"),
-        Span::raw(": quit"),
-        sep(),
-        key("?"),
-        Span::raw(": help"),
-        sep(),
-        key("Tab"),
-        Span::raw(": next"),
-        sep(),
-        key("↑/↓"),
-        Span::raw(": select"),
-        Span::raw(" "),
-    ];
-
-    match app.active_tab {
-        0 => {
-            spans.push(sep());
-            spans.push(key("Enter"));
-            spans.push(Span::raw(": open/drill"));
-            spans.push(sep());
-            spans.push(key("a"));
-            spans.push(Span::raw(": actions"));
-            spans.push(sep());
-            spans.push(key("Esc"));
-            spans.push(Span::raw(": back batch"));
-            spans.push(sep());
-            spans.push(key("s"));
-            spans.push(Span::raw(": stale cleanup"));
-        }
-        2 => {
-            spans.push(sep());
-            spans.push(key("Enter"));
-            spans.push(Span::raw(": drill/open"));
-            spans.push(sep());
-            spans.push(key("Esc"));
-            spans.push(Span::raw(": back batch"));
-            spans.push(sep());
-            spans.push(key("a"));
-            spans.push(Span::raw(": actions"));
-        }
-        1 => {
-            spans.push(sep());
-            spans.push(key("j/k"));
-            spans.push(Span::raw(": select agent"));
-        }
-        _ => {}
+                Block::bordered()
+                    .style(Style::new().bg(Color::Black).fg(Color::White))
+                    .title(" aster-orch dashboard ".cyan().bold()),
+            )
+            .select(self.active_tab)
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .highlight_style(Style::new().fg(Color::Yellow).bold())
+            .render(area, buf);
     }
 
-    if let Some(msg) = &app.admin_notice {
-        let mut notice = msg.clone();
-        if notice.chars().count() > 64 {
-            notice = format!("{}…", notice.chars().take(63).collect::<String>());
-        }
-        spans.push(sep());
-        spans.push(Span::styled("last:", Style::default().fg(Color::Cyan)));
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(notice, Style::default().fg(Color::White)));
-    }
-
-    if app.show_hint_banner {
-        spans.push(sep());
-        spans.push(Span::styled(
-            "Tip: press ? for keymap, a for guided actions",
-            Style::default().fg(Color::Cyan),
-        ));
-    }
-
-    let status = Paragraph::new(Line::from(spans))
-        .style(Style::default().bg(Color::DarkGray).fg(Color::White));
-
-    f.render_widget(status, area);
-}
-
-fn render_admin_action_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let Some(action) = &app.pending_admin_action else {
-        return;
-    };
-
-    let modal = centered_rect(74, 10, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .title(action.title());
-    let inner = block.inner(modal);
-    f.render_widget(Clear, modal);
-    f.render_widget(block, modal);
-
-    let lines = vec![
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(action.prompt(), Style::default().fg(Color::White)),
-        ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Impact: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                action.impact_summary.clone(),
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Guardrail: ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                action.guardrail.clone(),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        Line::from(Span::raw("")),
-        Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": confirm  "),
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": cancel"),
-        ]),
-    ];
-
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
-        inner,
-    );
-}
-
-fn render_action_menu_modal(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
-    let Some(menu) = &app.action_menu else {
-        return;
-    };
-
-    let modal = centered_rect(58, 8, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .title(" Actions ")
-        .title_bottom(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
-                "↑/↓",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": choose  "),
-            Span::styled(
-                "Enter",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": continue  "),
-            Span::styled(
-                "Esc",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw(": close "),
-        ]));
-    let inner = block.inner(modal);
-    f.render_widget(Clear, modal);
-    f.render_widget(block, modal);
-
-    let mut items = vec![ListItem::new(Line::from(vec![
-        Span::raw(" "),
-        Span::styled("Thread: ", Style::default().fg(Color::Cyan)),
-        Span::styled(menu.thread_id.clone(), Style::default().fg(Color::White)),
-    ]))];
-
-    for (idx, action) in menu.options.iter().enumerate() {
-        items.push(ListItem::new(Line::from(vec![
-            Span::raw("   "),
-            Span::styled(
-                action_name(*action).to_string(),
-                Style::default().fg(Color::White),
-            ),
-        ])));
-        if idx + 1 < menu.options.len() {
-            items.push(ListItem::new(Line::from(Span::raw("   "))));
+    fn render_content_widget(&self, area: Rect, buf: &mut Buffer) {
+        match self.active_tab {
+            0 | 1 | 2 => {} // Stateful tabs rendered by render_content_with_frame
+            3 => self.render_settings_widget(area, buf),
+            _ => {
+                let tab_name = TABS[self.active_tab];
+                let body = format!("  {} — coming soon", tab_name);
+                Paragraph::new(Line::from(body.dark_gray()))
+                    .style(Style::new().bg(Color::Black).fg(Color::White))
+                    .block(Block::bordered().style(Style::new().bg(Color::Black)))
+                    .render(area, buf);
+            }
         }
     }
 
-    let mut state = ListState::default();
-    state.select(Some(1 + menu.selected.saturating_mul(2)));
+    fn render_settings_widget(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::bordered()
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .title(" Settings ");
 
-    let list = List::new(items)
-        .highlight_symbol(" > ")
-        .highlight_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        )
-        .style(Style::default().bg(Color::Black).fg(Color::White));
-    f.render_stateful_widget(list, inner, &mut state);
-}
+        let label = |s: &str| s.to_string().cyan().bold();
+        let value = |s: String| s.white();
 
-fn render_help_overlay(f: &mut Frame, area: ratatui::layout::Rect) {
-    let modal = centered_rect(72, 16, area);
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .style(Style::default().bg(Color::Black).fg(Color::White))
-        .title(" Help ");
-    let inner = block.inner(modal);
-    f.render_widget(Clear, modal);
-    f.render_widget(block, modal);
+        let poll_secs = self.poll_interval.as_secs();
+        let cfg = self.config.load();
 
-    let lines = vec![
-        Line::from(" Global"),
-        Line::from("   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs"),
-        Line::from("   1-4 jump tabs   r refresh"),
-        Line::from(" Navigation"),
-        Line::from("   ↑/↓ or j/k move   g/G first/last"),
-        Line::from(" Ops"),
-        Line::from("   Enter open log or drill batch"),
-        Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
-        Line::from("   Esc back from batch drill"),
-        Line::from(" History"),
-        Line::from("   Enter drill batch/open execution   Esc back from history batch drill"),
-        Line::from(" Execution Detail"),
-        Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
-        Line::from("   Esc back   f follow   J view mode"),
-        Line::from(""),
-        Line::from(" Press Esc, Enter, or ? to close this panel."),
-    ];
+        let lines = vec![
+            Line::from(vec![
+                Span::raw("  "),
+                label("Config:       "),
+                value(self.config_path.display().to_string()),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                label("DB:           "),
+                value(cfg.db_path().display().to_string()),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                label("Poll interval:"),
+                value(format!(" {}s", poll_secs)),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                label("Agents:       "),
+                value(format!(" {}", cfg.agents.len())),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                label("Log dir:      "),
+                value(format!(" {}", self.log_dir.display())),
+            ]),
+        ];
 
-    f.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(Color::Black).fg(Color::White)),
-        inner,
-    );
+        Paragraph::new(lines)
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .block(block)
+            .render(area, buf);
+    }
+
+    fn render_status_bar_widget(&self, area: Rect, buf: &mut Buffer) {
+        let key = |s: &'static str| s.yellow().bold();
+        let sep = || Span::raw("  ");
+        let mut spans: Vec<Span> = vec![
+            Span::raw(" "),
+            key("q"),
+            Span::raw(": quit"),
+            sep(),
+            key("?"),
+            Span::raw(": help"),
+            sep(),
+            key("Tab"),
+            Span::raw(": next"),
+            sep(),
+            key("↑/↓"),
+            Span::raw(": select"),
+            Span::raw(" "),
+        ];
+
+        match self.active_tab {
+            0 => {
+                spans.push(sep());
+                spans.push(key("Enter"));
+                spans.push(Span::raw(": open/drill"));
+                spans.push(sep());
+                spans.push(key("a"));
+                spans.push(Span::raw(": actions"));
+                spans.push(sep());
+                spans.push(key("Esc"));
+                spans.push(Span::raw(": back batch"));
+                spans.push(sep());
+                spans.push(key("s"));
+                spans.push(Span::raw(": stale cleanup"));
+            }
+            2 => {
+                spans.push(sep());
+                spans.push(key("Enter"));
+                spans.push(Span::raw(": drill/open"));
+                spans.push(sep());
+                spans.push(key("Esc"));
+                spans.push(Span::raw(": back batch"));
+                spans.push(sep());
+                spans.push(key("a"));
+                spans.push(Span::raw(": actions"));
+            }
+            1 => {
+                spans.push(sep());
+                spans.push(key("j/k"));
+                spans.push(Span::raw(": select agent"));
+            }
+            _ => {}
+        }
+
+        if let Some(msg) = &self.admin_notice {
+            let mut notice = msg.clone();
+            if notice.chars().count() > 64 {
+                notice = format!("{}…", notice.chars().take(63).collect::<String>());
+            }
+            spans.push(sep());
+            spans.push("last:".cyan());
+            spans.push(Span::raw(" "));
+            spans.push(notice.white());
+        }
+
+        if self.show_hint_banner {
+            spans.push(sep());
+            spans.push("Tip: press ? for keymap, a for guided actions".cyan());
+        }
+
+        Paragraph::new(Line::from(spans))
+            .style(Style::new().bg(Color::DarkGray).fg(Color::White))
+            .render(area, buf);
+    }
+
+    fn render_admin_action_widget(&self, area: Rect, buf: &mut Buffer) {
+        let Some(action) = &self.pending_admin_action else {
+            return;
+        };
+
+        let modal = centered_rect(74, 10, area);
+        let block = Block::bordered()
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .title(action.title());
+        let inner = block.inner(modal);
+        Clear.render(modal, buf);
+        block.render(modal, buf);
+
+        let lines = vec![
+            Line::from(vec![Span::raw(" "), action.prompt().white()]),
+            Line::from(vec![
+                Span::raw(" "),
+                "Impact: ".cyan(),
+                action.impact_summary.clone().white(),
+            ]),
+            Line::from(vec![
+                Span::raw(" "),
+                "Guardrail: ".cyan(),
+                action.guardrail.clone().dark_gray(),
+            ]),
+            Line::from(Span::raw("")),
+            Line::from(vec![
+                Span::raw(" "),
+                "Enter".yellow().bold(),
+                Span::raw(": confirm  "),
+                "Esc".yellow().bold(),
+                Span::raw(": cancel"),
+            ]),
+        ];
+
+        Paragraph::new(lines)
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .render(inner, buf);
+    }
+
+    fn render_action_menu_widget(&self, area: Rect, buf: &mut Buffer) {
+        let Some(menu) = &self.action_menu else {
+            return;
+        };
+
+        let modal = centered_rect(58, 8, area);
+        let block = Block::bordered()
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .title(" Actions ")
+            .title_bottom(Line::from(vec![
+                Span::raw(" "),
+                "↑/↓".yellow().bold(),
+                Span::raw(": choose  "),
+                "Enter".yellow().bold(),
+                Span::raw(": continue  "),
+                "Esc".yellow().bold(),
+                Span::raw(": close "),
+            ]));
+        let inner = block.inner(modal);
+        Clear.render(modal, buf);
+        block.render(modal, buf);
+
+        let mut items = vec![ListItem::new(Line::from(vec![
+            Span::raw(" "),
+            "Thread: ".cyan(),
+            menu.thread_id.clone().white(),
+        ]))];
+
+        for (idx, action) in menu.options.iter().enumerate() {
+            items.push(ListItem::new(Line::from(vec![
+                Span::raw("   "),
+                action_name(*action).white(),
+            ])));
+            if idx + 1 < menu.options.len() {
+                items.push(ListItem::new(Line::from(Span::raw("   "))));
+            }
+        }
+
+        let mut state = ListState::default();
+        state.select(Some(1 + menu.selected.saturating_mul(2)));
+
+        let list = List::new(items)
+            .highlight_symbol(" > ")
+            .highlight_style(Style::new().fg(Color::Yellow).bold())
+            .style(Style::new().bg(Color::Black).fg(Color::White));
+        StatefulWidget::render(list, inner, buf, &mut state);
+    }
+
+    fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
+        let modal = centered_rect(72, 16, area);
+        let block = Block::bordered()
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .title(" Help ");
+        let inner = block.inner(modal);
+        Clear.render(modal, buf);
+        block.render(modal, buf);
+
+        let lines = vec![
+            Line::from(" Global"),
+            Line::from(
+                "   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs",
+            ),
+            Line::from("   1-4 jump tabs   r refresh"),
+            Line::from(" Navigation"),
+            Line::from("   ↑/↓ or j/k move   g/G first/last"),
+            Line::from(" Ops"),
+            Line::from("   Enter open log or drill batch"),
+            Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
+            Line::from("   Esc back from batch drill"),
+            Line::from(" History"),
+            Line::from(
+                "   Enter drill batch/open execution   Esc back from history batch drill",
+            ),
+            Line::from(" Execution Detail"),
+            Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
+            Line::from("   Esc back   f follow   J view mode"),
+            Line::from(""),
+            Line::from(" Press Esc, Enter, or ? to close this panel."),
+        ];
+
+        Paragraph::new(lines)
+            .style(Style::new().bg(Color::Black).fg(Color::White))
+            .render(inner, buf);
+    }
 }
 
 fn action_name(kind: AdminActionKind) -> &'static str {
@@ -1647,31 +1578,13 @@ fn action_name(kind: AdminActionKind) -> &'static str {
     }
 }
 
-fn centered_rect(
-    percent_x: u16,
-    height_rows: u16,
-    r: ratatui::layout::Rect,
-) -> ratatui::layout::Rect {
-    let modal_height = height_rows.min(r.height.max(1));
-    let top_pad = r.height.saturating_sub(modal_height) / 2;
-    let pct = percent_x.clamp(1, 100);
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(top_pad),
-            Constraint::Length(modal_height),
-            Constraint::Min(0),
-        ])
-        .split(r);
-
-    let horizontal = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - pct) / 2),
-            Constraint::Percentage(pct),
-            Constraint::Min(0),
-        ])
-        .split(vertical[1]);
-
-    horizontal[1]
+fn centered_rect(percent_x: u16, height_rows: u16, r: Rect) -> Rect {
+    let height = height_rows.min(r.height);
+    let [area] = Layout::vertical([Constraint::Length(height)])
+        .flex(Flex::Center)
+        .areas(r);
+    let [area] = Layout::horizontal([Constraint::Percentage(percent_x)])
+        .flex(Flex::Center)
+        .areas(area);
+    area
 }
