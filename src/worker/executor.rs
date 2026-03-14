@@ -156,7 +156,7 @@ pub async fn execute_trigger(
             let parsed_intent = parse_intent_from_output(&output_text);
 
             if result.success {
-                let _ = store
+                match store
                     .complete_execution(
                         &exec_id,
                         Some(0),
@@ -164,9 +164,21 @@ pub async fn execute_trigger(
                         parsed_intent.as_deref(),
                         duration_ms,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(0) => {
+                        tracing::warn!(
+                            exec_id = %exec_id,
+                            "complete_execution was a no-op — execution already in terminal state (stale check race)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(exec_id = %exec_id, error = %e, "complete_execution failed");
+                    }
+                    _ => {}
+                }
             } else {
-                let _ = store
+                match store
                     .fail_execution(
                         &exec_id,
                         &truncate(&output_text, 4096),
@@ -174,7 +186,19 @@ pub async fn execute_trigger(
                         duration_ms,
                         ExecutionStatus::Failed,
                     )
-                    .await;
+                    .await
+                {
+                    Ok(0) => {
+                        tracing::warn!(
+                            exec_id = %exec_id,
+                            "fail_execution was a no-op — execution already in terminal state (stale check race)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(exec_id = %exec_id, error = %e, "fail_execution failed");
+                    }
+                    _ => {}
+                }
                 let _ = store.mark_thread_failed_if_active(&thread_id).await;
             }
 

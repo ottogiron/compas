@@ -84,7 +84,12 @@ impl WorkerRunner {
         // Periodic stale execution check: detect executions stuck in
         // picked_up/executing beyond the trigger timeout. These are
         // likely from a panicked spawn_blocking task or a hung backend.
-        let mut stale_exec_interval = tokio::time::interval(Duration::from_secs(60));
+        // First tick deferred by 60s to avoid duplicating the startup
+        // orphan check that already ran above.
+        let mut stale_exec_interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + Duration::from_secs(60),
+            Duration::from_secs(60),
+        );
 
         loop {
             tokio::select! {

@@ -200,9 +200,12 @@ pub struct App {
     /// Tokio runtime handle — used to drive async store queries from the
     /// synchronous TUI thread via `Handle::block_on`.
     handle: Handle,
-    /// Last refresh error, if any. Displayed in the status bar so operators
-    /// know when the dashboard is showing stale data due to DB issues.
-    pub last_refresh_error: Option<String>,
+    /// Per-component refresh errors. Each refresh method only clears its
+    /// own field on success, so a failing activity query is not masked by
+    /// a successful agents refresh.
+    pub activity_refresh_error: Option<String>,
+    pub agents_refresh_error: Option<String>,
+    pub executions_refresh_error: Option<String>,
 }
 
 impl App {
@@ -252,7 +255,9 @@ impl App {
             show_hint_banner: true,
             log_dir,
             handle,
-            last_refresh_error: None,
+            activity_refresh_error: None,
+            agents_refresh_error: None,
+            executions_refresh_error: None,
         }
     }
 
@@ -315,20 +320,27 @@ impl App {
                     self.activity_selected = 0;
                 }
                 self.activity_data = Some(data);
-                self.last_refresh_error = None;
+                self.activity_refresh_error = None;
             }
             Ok(Err(e)) => {
-                self.last_refresh_error = Some(format!("activity refresh: {}", e));
+                self.activity_refresh_error = Some(format!("activity: {}", e));
+                // Update fetched_at to prevent tight-loop retries on persistent error.
+                if let Some(ref mut d) = self.activity_data {
+                    d.fetched_at = Instant::now();
+                }
             }
             Err(_) => {
-                self.last_refresh_error = Some("activity refresh: timeout".to_string());
+                self.activity_refresh_error = Some("activity: timeout".to_string());
+                if let Some(ref mut d) = self.activity_data {
+                    d.fetched_at = Instant::now();
+                }
             }
         }
     }
 
     /// Fetch fresh per-agent metrics from SQLite and update `agents_data`.
     ///
-    /// On DB error, retains previous data and sets `last_refresh_error`.
+    /// On DB error, retains previous data and sets `agents_refresh_error`.
     /// Queries are bounded by a timeout to prevent TUI freezes.
     pub fn refresh_agents(&mut self) {
         // Snapshot live config for this refresh cycle.
@@ -387,13 +399,19 @@ impl App {
                 } else {
                     self.agents_selected = 0;
                 }
-                self.last_refresh_error = None;
+                self.agents_refresh_error = None;
             }
             Ok(Err(e)) => {
-                self.last_refresh_error = Some(format!("agents refresh: {}", e));
+                self.agents_refresh_error = Some(format!("agents: {}", e));
+                if let Some(ref mut d) = self.agents_data {
+                    d.fetched_at = Instant::now();
+                }
             }
             Err(_) => {
-                self.last_refresh_error = Some("agents refresh: timeout".to_string());
+                self.agents_refresh_error = Some("agents: timeout".to_string());
+                if let Some(ref mut d) = self.agents_data {
+                    d.fetched_at = Instant::now();
+                }
             }
         }
     }
@@ -401,7 +419,7 @@ impl App {
     /// Fetch the most recent executions from SQLite and update `executions_data`.
     ///
     /// Ordered by `queued_at DESC`. On DB error, retains previous data and
-    /// sets `last_refresh_error`. Bounded by timeout.
+    /// sets `executions_refresh_error`. Bounded by timeout.
     pub fn refresh_executions(&mut self) {
         let store = &self.store;
         let handle = &self.handle;
@@ -431,13 +449,19 @@ impl App {
                     executions,
                     fetched_at: Instant::now(),
                 });
-                self.last_refresh_error = None;
+                self.executions_refresh_error = None;
             }
             Ok(Err(e)) => {
-                self.last_refresh_error = Some(format!("history refresh: {}", e));
+                self.executions_refresh_error = Some(format!("history: {}", e));
+                if let Some(ref mut d) = self.executions_data {
+                    d.fetched_at = Instant::now();
+                }
             }
             Err(_) => {
-                self.last_refresh_error = Some("history refresh: timeout".to_string());
+                self.executions_refresh_error = Some("history: timeout".to_string());
+                if let Some(ref mut d) = self.executions_data {
+                    d.fetched_at = Instant::now();
+                }
             }
         }
     }
@@ -625,8 +649,13 @@ impl App {
     }
 
     /// Close the detail view and return to the list view.
+    ///
+    /// Forces an immediate activity refresh so data is current when the
+    /// operator returns to the Ops tab (background refreshes are paused
+    /// while the log viewer is open to avoid unnecessary DB queries).
     pub fn close_log_viewer(&mut self) {
         self.viewing_log = None;
+        self.refresh_activity();
     }
 
     // ── Admin actions ────────────────────────────────────────────────────────
@@ -1062,11 +1091,11 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         }
 
         // ── Background data refreshes ──────────────────────────────────────────
-        // Activity data is always refreshed regardless of active tab or log
-        // viewer state — it is the primary operational view and must stay
-        // current so that changes (new executions, crashes) are visible
-        // immediately when switching views.
-        {
+        // Activity data refreshes regardless of active tab so changes are
+        // visible immediately when switching views. Paused while the log
+        // viewer is open to avoid unnecessary DB queries — an immediate
+        // refresh fires when the viewer is closed (see close_log_viewer).
+        if app.viewing_log.is_none() {
             let is_stale = app
                 .activity_data
                 .as_ref()
@@ -1481,14 +1510,24 @@ impl App {
             spans.push(notice.fg(theme::TEXT_MUTED));
         }
 
-        if let Some(err) = &self.last_refresh_error {
-            let mut msg = err.clone();
-            if msg.chars().count() > 48 {
-                msg = format!("{}…", msg.chars().take(47).collect::<String>());
+        {
+            let errors: Vec<&str> = [
+                self.activity_refresh_error.as_deref(),
+                self.agents_refresh_error.as_deref(),
+                self.executions_refresh_error.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !errors.is_empty() {
+                let mut msg = errors.join("; ");
+                if msg.chars().count() > 48 {
+                    msg = format!("{}…", msg.chars().take(47).collect::<String>());
+                }
+                spans.push(sep());
+                spans.push("⚠ ".fg(theme::WARNING));
+                spans.push(msg.fg(theme::WARNING));
             }
-            spans.push(sep());
-            spans.push("⚠ ".fg(theme::WARNING));
-            spans.push(msg.fg(theme::WARNING));
         }
 
         if self.show_hint_banner {

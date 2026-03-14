@@ -745,6 +745,10 @@ impl Store {
     }
 
     /// Mark execution completed with results.
+    ///
+    /// Returns the number of rows affected (0 if the execution was already
+    /// in a terminal state, e.g., marked crashed by the stale execution
+    /// check before the backend returned).
     pub async fn complete_execution(
         &self,
         id: &str,
@@ -752,8 +756,8 @@ impl Store {
         output_preview: Option<&str>,
         parsed_intent: Option<&str>,
         duration_ms: i64,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
             "UPDATE executions
              SET status = 'completed',
                  finished_at = strftime('%s','now'),
@@ -761,7 +765,8 @@ impl Store {
                  output_preview = ?,
                  parsed_intent = ?,
                  duration_ms = ?
-             WHERE id = ?",
+             WHERE id = ?
+               AND status IN ('picked_up', 'executing')",
         )
         .bind(exit_code)
         .bind(output_preview)
@@ -770,10 +775,14 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Mark execution failed with error details.
+    ///
+    /// Returns the number of rows affected (0 if the execution was already
+    /// in a terminal state, e.g., marked crashed by the stale execution
+    /// check before the backend returned).
     pub async fn fail_execution(
         &self,
         id: &str,
@@ -781,15 +790,16 @@ impl Store {
         exit_code: Option<i32>,
         duration_ms: i64,
         status: ExecutionStatus,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
+    ) -> Result<u64, sqlx::Error> {
+        let result = sqlx::query(
             "UPDATE executions
              SET status = ?,
                  finished_at = strftime('%s','now'),
                  error_detail = ?,
                  exit_code = ?,
                  duration_ms = ?
-             WHERE id = ?",
+             WHERE id = ?
+               AND status IN ('picked_up', 'executing')",
         )
         .bind(status.as_str())
         .bind(error_detail)
@@ -798,7 +808,7 @@ impl Store {
         .bind(id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(result.rows_affected())
     }
 
     /// Mark orphaned executions (picked_up or executing) as crashed.
@@ -823,8 +833,13 @@ impl Store {
     /// configured timeout as crashed.
     ///
     /// Safe to call during normal worker operation — only affects
-    /// executions whose `started_at` (or `picked_up_at` if never started)
-    /// is older than `timeout_secs`.
+    /// executions whose age exceeds `timeout_secs`. Age is computed from
+    /// `COALESCE(started_at, picked_up_at, queued_at)`:
+    /// - `started_at` for executions in `executing` status (normal path).
+    /// - `picked_up_at` for executions stuck in `picked_up` that never
+    ///   transitioned to `executing`.
+    /// - `queued_at` as a last resort for data-repaired or manually
+    ///   inserted rows where both timestamps are NULL.
     pub async fn mark_stale_executions_crashed(
         &self,
         timeout_secs: u64,
@@ -838,7 +853,7 @@ impl Store {
                AND COALESCE(started_at, picked_up_at, queued_at)
                    <= strftime('%s','now') - ?",
         )
-        .bind(timeout_secs as i64)
+        .bind(timeout_secs.min(i64::MAX as u64) as i64)
         .execute(&self.pool)
         .await?;
         Ok(result.rows_affected())
@@ -1412,6 +1427,72 @@ mod tests {
 
         let exec = store.latest_execution("t-1").await.unwrap().unwrap();
         assert_eq!(exec.status, "crashed");
+    }
+
+    #[tokio::test]
+    async fn test_stale_execution_marked_crashed() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+
+        // Backdate started_at to simulate an execution that has been
+        // running far longer than the timeout.
+        sqlx::query("UPDATE executions SET started_at = strftime('%s','now') - 9999 WHERE id = ?")
+            .bind(&exec_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        let count = store.mark_stale_executions_crashed(600).await.unwrap();
+        assert_eq!(count, 1);
+
+        let exec = store.latest_execution("t-1").await.unwrap().unwrap();
+        assert_eq!(exec.status, "crashed");
+    }
+
+    #[tokio::test]
+    async fn test_fresh_execution_not_marked_crashed() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+
+        // started_at is set to now by mark_execution_executing — well within timeout.
+        let count = store.mark_stale_executions_crashed(600).await.unwrap();
+        assert_eq!(count, 0);
+
+        let exec = store.latest_execution("t-1").await.unwrap().unwrap();
+        assert_eq!(exec.status, "executing");
+    }
+
+    #[tokio::test]
+    async fn test_terminal_execution_not_marked_stale() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .complete_execution(&exec_id, Some(0), Some("ok"), None, 5000)
+            .await
+            .unwrap();
+
+        // Backdate to ensure time check would fire if status matched.
+        sqlx::query("UPDATE executions SET started_at = strftime('%s','now') - 9999 WHERE id = ?")
+            .bind(&exec_id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+
+        // Already completed — should not be touched.
+        let count = store.mark_stale_executions_crashed(600).await.unwrap();
+        assert_eq!(count, 0);
+
+        let exec = store.latest_execution("t-1").await.unwrap().unwrap();
+        assert_eq!(exec.status, "completed");
     }
 
     #[tokio::test]
