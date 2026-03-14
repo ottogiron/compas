@@ -25,6 +25,16 @@ Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/de
 
 ---
 
+## Session Continuity
+
+Follow-up dispatches to the **same thread + same agent** automatically resume the agent's prior CLI session. The agent retains full conversational context — what it did, what files it changed, what the reviewer said. This happens transparently: no extra flags or parameters needed.
+
+This means the `changes-requested` → rework loop (Step 8 → Step 3) is significantly more effective: the agent can make targeted fixes instead of re-reading the entire codebase. Always prefer continuing a thread over creating a new one for related work.
+
+**New thread = fresh session.** Only close a thread and open a new one when you want the agent to start with a clean slate.
+
+---
+
 ## Mode A — Worker Delegation
 
 ### Step 1 — Health check
