@@ -1,118 +1,126 @@
-# AGENTS.md - Aster Orchestrator (`crates/aster-orch`)
+# AGENTS.md — Aster Orchestrator
 
-Domain guide for orchestrator work under `crates/aster-orch/**`.
+Operational guide for agents working in this repository.
 
-## Scope and Authority
+## Project Overview
 
-- This file applies to changes in `crates/aster-orch/**`.
-- This crate lives in its own repository (`ottogiron/aster-orch`) and is included in the aster workspace as a git submodule.
-- When working from within the aster repo, root `AGENTS.md` remains mandatory and authoritative for repo-wide governance.
-- This file is additive and must not relax root safety, verification, or release rules.
+Aster Orchestrator is a multi-agent orchestration system for AI-assisted software development. It dispatches work to AI coding agents (Claude, Codex, Gemini, OpenCode), manages execution lifecycle, and provides a TUI dashboard for monitoring.
 
-## Git Workflow (Submodule)
+This is a standalone repository (`ottogiron/aster-orch`). It is also included as a git submodule in the aster compiler repo (`ottogiron/aster`).
 
-This crate is a standalone git repository. When checked out as a submodule inside aster:
+## Project Principles
 
-1. Commit and push changes here first (`cd crates/aster-orch && git commit && git push`).
-2. Then update the submodule pointer in the parent aster repo (`cd <aster-root> && git add crates/aster-orch && git commit`).
-
-When working on this repo independently (cloned standalone), use normal git workflow.
+- Prioritize correctness, consistency, and maintainability.
+- **AX (Agent Experience).** Tools and APIs must serve agents as primary consumers — diagnostic errors, resilient contracts, no escape hatches. See `docs/project/AX.md`.
+- **Active development, no backward-compatibility burden.** Pre-v1, rapid iteration. The only stability contract is passing tests and verification gates.
 
 ## Module Overview
-
-Primary local modules:
 
 - `src/mcp/*` — MCP tools and handlers
 - `src/worker/*` — background trigger execution loop
 - `src/store/*` — SQLite persistence and lifecycle state
 - `src/backend/*` — backend integrations (`claude`, `codex`, `gemini`, `opencode`)
 - `src/config/*` — orchestrator configuration schema and validation
+- `src/dashboard/*` — TUI dashboard (ratatui)
 - `src/bin/aster_orch.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`)
 - `tests/integration_tests.rs` — orchestrator integration tests
 
+## Build Commands
+
+```bash
+make build          # cargo build
+make test           # cargo test
+make fmt            # cargo fmt --all
+make verify         # fmt-check + clippy + test (matches CI)
+make setup-hooks    # install pre-commit hook
+make worker         # run worker
+make dashboard      # run dashboard
+make mcp-server     # run MCP server
+```
+
+## Code Style
+
+- Follow `rustfmt` defaults.
+- Use `Result<T, String>` for recoverable errors.
+- Use `unwrap()` only in tests.
+- All clippy warnings are errors (`-D warnings`).
+- Test naming: `test_<component>_<feature>`.
+
 ## Architecture Constraints
 
-- Two-process model is required:
-  - MCP server process (`mcp-server`)
-  - worker process (`worker`)
-- Both processes use the same SQLite database at `{state_dir}/jobs.sqlite`.
-- WAL mode and safe concurrent read/write behavior must be preserved.
-- Thread, message, and execution lifecycle consistency is required for all MCP workflows.
+- Two-process model: MCP server + worker. Both share SQLite via WAL mode.
+- Thread, message, and execution lifecycle consistency is required.
+- All AI backends are CLI subprocess invocations via the `Backend` trait.
 
-## Operational Policy
+## Ticket Workflow
 
-- Use MCP tools (`orch_*`) for instant operations.
-- Use CLI wait for blocking waits:
-  - `aster_orch wait --config .aster-orch/config.yaml ...`
-- Keep lifecycle transitions coherent:
-  - close should finalize threads with explicit terminal status
-  - abandon should cancel queued/running executions
-  - reopen should only apply to terminal threads
-
-## Verification for Orchestrator Changes
-
-### CI Pipeline (`.github/workflows/ci.yml`)
-
-CI runs on every push to `main` and every PR. It executes `make verify` which is:
-
-1. `make fmt-check` — `cargo fmt --all -- --check`
-2. `make clippy` — `cargo clippy --all-targets -- -D warnings`
-3. `make test` — `cargo test`
-
-**All three checks must pass locally before pushing.** The most common CI failure is formatting — always run `cargo fmt --all` (or `make fmt`) before committing.
-
-### Standalone (working directly in `ottogiron/aster-orch`)
+This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for backlog governance.
 
 ```bash
-make fmt           # apply rustfmt (do this before committing)
-make verify        # fmt-check + clippy --all-targets + test (matches CI)
+ticket start <ticket-id>           # start a ticket session
+ticket start <batch-id> --batch    # start a batch session
+ticket done <ticket-id>            # close a ticket
+ticket done <batch-id> --batch     # close a batch
+ticket status                      # show active sessions
+ticket blocked <id> "<reason>"     # mark as blocked
+ticket note <id> "<note>"          # add tracking note
 ```
 
-### From within the `aster` parent repo
+Backlogs live in `docs/project/backlog/`. See `docs/project/backlog/template.md` for the required format.
+
+**Never bypass the pre-commit hook with `--no-verify`.** Run `make setup-hooks` after cloning to install the hook.
+
+## Quality Gates (Required Before Merge)
 
 ```bash
-cargo fmt --all                    # format from workspace root
-cargo test -p aster-orch           # run aster-orch tests via workspace
-make verify                        # full aster workspace quality gate
-make perf-baseline
-make perf-check
+make verify    # always — fmt-check + clippy + test
 ```
+
+This matches the CI pipeline (`.github/workflows/ci.yml`). All three checks must pass locally before pushing.
 
 ### Pre-push Checklist
 
-Before pushing to `ottogiron/aster-orch`:
-
 1. `make fmt` — apply formatting
 2. `make verify` — run the full CI gate locally
-3. If working as a submodule, push the submodule first, then update the pointer in aster
+3. If working as a submodule, push here first, then update the pointer in aster
 
-Behavioral changes to orchestrator workflows/tools must also run benchmark flow:
+## Impact Update Matrix
 
-- apply `/orch-benchmark`
-- update benchmark evidence in `docs/project/benchmarks/orchestrator/` when appropriate
+If you change a layer, update/review the paired artifacts in the same commit set.
 
-## Required Documentation Parity
+- MCP tools (`src/mcp/*`): `README.md`, integration tests
+- Worker/executor (`src/worker/*`): integration tests, `docs/project/DECISIONS.md` for behavioral changes
+- Dashboard (`src/dashboard/*`): visual verification
+- Backends (`src/backend/*`): backend-specific tests, `README.md`
+- Config (`src/config/*`): validation tests, `README.md`
+- Store/DB (`src/store/*`): migration handling, integration tests
 
-When orchestrator behavior changes, update impacted docs in the same change set:
+## Git Workflow
 
-- `crates/aster-orch/README.md` (tooling/architecture/commands)
-- `docs/project/DECISIONS.md` (ADR for meaningful behavioral/policy changes)
-- `docs/project/known-issues/` when operational risks or constraints change
-- relevant skill docs in `skills/` if operator workflow expectations change
+### Standalone (normal development)
+
+Standard git workflow. Commit, push, PR.
+
+### As submodule in aster
+
+1. Commit and push changes here first.
+2. Then update the submodule pointer in aster: `cd <aster-root> && git add crates/aster-orch && git commit`
 
 ## Failure and Recovery Guidance
 
-- Diagnose stuck threads with:
-  - `orch_diagnose`
-  - `orch_tasks`
-  - `orch_health`
-- Stale state reset procedure:
-  - stop worker/MCP processes
-  - remove SQLite DB files under state dir (`<state_dir>/jobs.sqlite*`)
-  - restart worker and MCP server
+- Diagnose stuck threads: `orch_diagnose`, `orch_tasks`, `orch_health`
+- Stale state reset: stop processes → remove `<state_dir>/jobs.sqlite*` → restart
 
 ## Design Bias
 
 - Prefer clear, machine-parseable diagnostics over implicit behavior.
 - Preserve AX principles: resilient contracts, actionable failures, explicit operator guidance.
 - Favor small, composable MCP/CLI contracts over hidden convenience behavior.
+
+## Skills
+
+Available skills in `skills/`:
+
+- `dev-workflow` — Ticket-driven development lifecycle
+- `backlog-setup` — Create backlog artifacts before implementation
+- `stop-and-think` — Behavioral guardrail (always active)

@@ -1,4 +1,4 @@
-.PHONY: build release test fmt fmt-check clippy check clean verify worker dashboard mcp-server
+.PHONY: build release test fmt fmt-check clippy check clean verify worker dashboard mcp-server setup-hooks
 
 # ── Build ────────────────────────────────────────────────────────────
 build:
@@ -28,6 +28,13 @@ clippy:
 
 # ── Quality gate (fmt-check + clippy + test) ─────────────────────────
 verify: fmt-check clippy test
+
+# ── Setup ────────────────────────────────────────────────────────────
+setup-hooks:
+	mkdir -p .git/hooks
+	ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+	chmod +x scripts/hooks/pre-commit
+	@echo "Pre-commit hook installed."
 
 # ── Runtime convenience ──────────────────────────────────────────────
 worker:

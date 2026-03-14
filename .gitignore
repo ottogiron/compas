@@ -1,1 +1,5 @@
 /target/
+.sessions/
+.session
+.claude/
+.DS_Store
