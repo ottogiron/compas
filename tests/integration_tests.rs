@@ -2437,25 +2437,9 @@ mod evo2_event_bus_tests {
     use aster_orch::worker::WorkerRunner;
     use tokio::sync::Semaphore;
 
-    #[tokio::test]
-    async fn test_event_bus_basic_subscribe_emit() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-
-        bus.emit(OrchestratorEvent::ExecutionStarted {
-            execution_id: "test-exec-1".to_string(),
-            thread_id: "test-thread-1".to_string(),
-            agent_alias: "focused".to_string(),
-        });
-
-        let event = rx.recv().await.unwrap();
-        match event {
-            OrchestratorEvent::ExecutionStarted { execution_id, .. } => {
-                assert_eq!(execution_id, "test-exec-1");
-            }
-            _ => panic!("unexpected event"),
-        }
-    }
+    // NOTE: Basic emit/subscribe tests live in src/events.rs as unit tests.
+    // This module only contains integration-level tests that exercise the
+    // full worker → event bus → subscriber flow.
 
     #[tokio::test]
     async fn test_worker_emits_events_on_dispatch_cycle() {
@@ -2501,13 +2485,29 @@ mod evo2_event_bus_tests {
         let semaphore = Arc::new(Semaphore::new(4));
         runner.poll_once(&semaphore).await;
 
-        // Give the spawned task time to complete.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-        // Collect all events from the channel.
+        // Wait for the spawned task to complete by polling for MessageReceived
+        // (the last event emitted in the dispatch cycle) with a timeout.
         let mut events = Vec::new();
-        while let Ok(event) = rx.try_recv() {
-            events.push(event);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut saw_message = false;
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(event)) => {
+                    if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                        saw_message = true;
+                    }
+                    events.push(event);
+                    if saw_message {
+                        // Drain any remaining buffered events.
+                        while let Ok(event) = rx.try_recv() {
+                            events.push(event);
+                        }
+                        break;
+                    }
+                }
+                Ok(Err(_)) => break, // channel closed
+                Err(_) => break,     // deadline exceeded
+            }
         }
 
         let has_started = events

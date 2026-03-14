@@ -282,7 +282,9 @@ impl App {
     /// Force all data to be considered stale, triggering refresh on next tick.
     pub(crate) fn invalidate_data(&mut self) {
         // Reset fetched_at to a past instant so staleness check passes immediately.
-        let old = Instant::now() - self.poll_interval - Duration::from_secs(1);
+        let old = Instant::now()
+            .checked_sub(self.poll_interval + Duration::from_secs(1))
+            .unwrap_or_else(Instant::now);
         if let Some(ref mut d) = self.activity_data {
             d.fetched_at = old;
         } else {
@@ -1233,6 +1235,11 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         // Drain pending orchestrator events and force an immediate refresh
         // if any state-changing event was received. This gives push-based
         // updates when the worker runs in the same process (or in tests).
+        //
+        // NOTE: All event types collapse to a single full SQLite refresh.
+        // When high-frequency variants (e.g., ExecutionProgress from ORCH-EVO-1)
+        // are added, per-variant filtering will be needed to avoid excessive
+        // SQLite pressure.
         if let Some(ref mut rx) = app.event_rx {
             let mut got_event = false;
             loop {

@@ -17,7 +17,11 @@ use tokio::sync::broadcast;
 const BROADCAST_CAPACITY: usize = 256;
 
 /// All significant orchestrator state-change events.
+///
+/// New variants may be added in future releases — use a wildcard arm
+/// when matching if you don't need exhaustive coverage.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum OrchestratorEvent {
     /// A claimed execution has been handed off to the backend trigger.
     ExecutionStarted {
@@ -25,7 +29,8 @@ pub enum OrchestratorEvent {
         thread_id: String,
         agent_alias: String,
     },
-    /// Incremental progress from a running execution (placeholder for ORCH-EVO-1).
+    /// Incremental progress from a running execution.
+    /// TODO(ORCH-EVO-1): Not yet emitted — placeholder for execution telemetry.
     ExecutionProgress {
         execution_id: String,
         thread_id: String,
@@ -49,12 +54,14 @@ pub enum OrchestratorEvent {
         new_status: String,
     },
     /// Progress update for a batch of related threads.
+    /// TODO(ORCH-EVO-3): Not yet emitted — placeholder for batch progress tracking.
     BatchProgress {
         batch_id: String,
         completed: u32,
         total: u32,
     },
     /// An agent's health/liveness status has changed.
+    /// TODO(ORCH-EVO-3): Not yet emitted — placeholder for agent health events.
     AgentHealthChanged { agent_alias: String, healthy: bool },
     /// A new message has been inserted into a thread.
     MessageReceived {

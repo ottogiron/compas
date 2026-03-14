@@ -414,13 +414,17 @@ async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &Tri
         duration_ms: output.duration_ms,
     });
 
-    // Emit ThreadStatusChanged for failures (best-effort — thread may already be terminal).
-    if !output.success {
-        event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
-            thread_id: output.thread_id.clone(),
-            new_status: "Failed".to_string(),
-        });
-    }
+    // Emit ThreadStatusChanged for both success and failure paths so all
+    // consumers get push notification regardless of outcome.
+    let thread_status = if output.success {
+        "Active" // thread stays Active after a successful execution; operator closes it
+    } else {
+        "Failed"
+    };
+    event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+        thread_id: output.thread_id.clone(),
+        new_status: thread_status.to_string(),
+    });
 
     // Insert the reply message and emit MessageReceived on success.
     match store
