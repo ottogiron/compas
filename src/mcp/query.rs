@@ -198,14 +198,22 @@ impl OrchestratorMcpServer {
             active_by_agent: Vec<(String, i64)>,
         }
 
-        let thread_counts = self.store.thread_counts().await.unwrap_or_default();
-        let total_messages = self.store.message_count().await.unwrap_or(0);
-        let queue_depth = self.store.queue_depth().await.unwrap_or(0);
-        let active_by_agent = self
-            .store
-            .active_executions_by_agent()
-            .await
-            .unwrap_or_default();
+        let thread_counts = match self.store.thread_counts().await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
+        };
+        let total_messages = match self.store.message_count().await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
+        };
+        let queue_depth = match self.store.queue_depth().await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
+        };
+        let active_by_agent = match self.store.active_executions_by_agent().await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
+        };
 
         Ok(json_text(&Metrics {
             thread_counts,

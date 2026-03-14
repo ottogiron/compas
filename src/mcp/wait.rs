@@ -19,7 +19,7 @@ impl OrchestratorMcpServer {
             intent: params.intent,
             since_reference: params.since_reference,
             strict_new: params.strict_new.unwrap_or(false),
-            timeout: Duration::from_secs(params.timeout_secs.unwrap_or(15)),
+            timeout: Duration::from_secs(params.timeout_secs.unwrap_or(120)),
             trigger_intents: config.orchestration.trigger_intents.clone(),
         };
 

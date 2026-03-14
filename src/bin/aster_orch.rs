@@ -23,7 +23,7 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_CONFIG_PATH: &str = ".aster-orch/config.yaml";
 
 #[derive(Parser)]
-#[command(name = "aster-orch", about = "Agent orchestrator")]
+#[command(name = "aster-orch", version, about = "Agent orchestrator")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

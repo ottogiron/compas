@@ -92,7 +92,7 @@ pub struct WaitParams {
     pub since_reference: Option<String>,
     /// If true, only consider messages newer than the cursor/call start.
     pub strict_new: Option<bool>,
-    /// Timeout in seconds (default 15)
+    /// Timeout in seconds (default 120)
     pub timeout_secs: Option<u64>,
 }
 

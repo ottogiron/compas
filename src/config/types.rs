@@ -157,7 +157,7 @@ fn default_stale_active_secs() -> u64 {
 }
 
 fn default_execution_timeout_secs() -> u64 {
-    30
+    600
 }
 
 /// Agent role determines worker behavior.

@@ -193,7 +193,11 @@ impl OrchestratorMcpServer {
             thread_status: String,
             message_count: usize,
             execution_count: usize,
+            latest_execution_id: Option<String>,
             latest_execution_status: Option<String>,
+            latest_execution_agent: Option<String>,
+            latest_execution_error: Option<String>,
+            latest_execution_duration_ms: Option<i64>,
             blockers: Vec<String>,
             suggestions: Vec<String>,
         }
@@ -203,7 +207,11 @@ impl OrchestratorMcpServer {
             thread_status: thread.status,
             message_count: messages.len(),
             execution_count: executions.len(),
+            latest_execution_id: latest_exec.map(|e| e.id.clone()),
             latest_execution_status: latest_exec.map(|e| e.status.clone()),
+            latest_execution_agent: latest_exec.map(|e| e.agent_alias.clone()),
+            latest_execution_error: latest_exec.and_then(|e| e.error_detail.clone()),
+            latest_execution_duration_ms: latest_exec.and_then(|e| e.duration_ms),
             blockers,
             suggestions,
         }))

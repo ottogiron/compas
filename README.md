@@ -274,7 +274,7 @@ Path resolution rules:
 | `models` | *(optional)* | Informational model catalog (metadata only) |
 | `orchestration.max_concurrent_triggers` | worker count | Global concurrent execution limit |
 | `orchestration.max_triggers_per_agent` | 1 | Per-agent concurrent execution limit |
-| `orchestration.execution_timeout_secs` | 30 | Per-trigger timeout |
+| `orchestration.execution_timeout_secs` | 600 | Per-trigger timeout |
 | `orchestration.stale_active_secs` | 3600 | Staleness threshold for non-running Active threads |
 | `orchestration.trigger_intents` | dispatch, handoff | Intents that trigger worker execution |
 | `orchestration.ping_timeout_secs` | 15 | Backend ping liveness timeout |
