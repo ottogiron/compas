@@ -4,19 +4,31 @@ Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to
 
 Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — point it at any repository.
 
+## Prerequisites
+
+- **Rust** toolchain (`cargo`)
+- At least one backend CLI installed and authenticated:
+
+| Backend | Install | Authenticate |
+|---------|---------|-------------|
+| Claude Code | `npm install -g @anthropic-ai/claude-code` | `claude login` |
+| Codex | `npm install -g @openai/codex` | `codex login` |
+| Gemini CLI | `npm install -g @google/gemini-cli` | `gemini auth` |
+| OpenCode | See [opencode.ai](https://opencode.ai) | varies by provider |
+
 ## Install
 
 ```bash
 cargo install --git https://github.com/ottogiron/aster-orch
 ```
 
-Or build from source:
+This puts `aster_orch` on your PATH. Or build from source:
 
 ```bash
 git clone git@github.com:ottogiron/aster-orch.git
 cd aster-orch
 cargo build --release
-# Binary at target/release/aster_orch
+# Binary at target/release/aster_orch — add to PATH or use the full path below
 ```
 
 ## Quick Start
@@ -33,7 +45,7 @@ poll_interval_secs: 1
 orchestration:
   trigger_intents: [dispatch, handoff]
   execution_timeout_secs: 600
-  max_concurrent_triggers: 4
+  max_concurrent_triggers: 4       # adjust based on your API budget
   max_triggers_per_agent: 1
 
 agents:
@@ -50,18 +62,18 @@ Supported backends: `claude`, `codex`, `gemini`, `opencode`.
 
 ### 2. Connect your coding CLI
 
-Add the MCP server to your preferred tool:
+Add the MCP server to your preferred tool. If you used `cargo install`, you can use `aster_orch` directly. For source builds, use the full path to `target/release/aster_orch`.
 
 **Claude Code:**
 ```bash
 claude mcp add --scope user --transport stdio aster-orch -- \
-  /path/to/aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
+  aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
 ```
 
 **Codex:**
 ```bash
 codex mcp add aster-orch -- \
-  /path/to/aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
+  aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
 ```
 
 **OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
@@ -70,36 +82,70 @@ codex mcp add aster-orch -- \
   "mcp": {
     "aster-orch": {
       "type": "local",
-      "command": ["/path/to/aster_orch", "mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
+      "command": ["aster_orch", "mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
     }
   }
 }
 ```
 
-### 3. Start the dashboard
+**Gemini CLI** — add to `.gemini/settings.json`:
+```json
+{
+  "mcpServers": {
+    "aster-orch": {
+      "command": "aster_orch",
+      "args": ["mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
+    }
+  }
+}
+```
+
+### 3. Start the worker
+
+The worker is the background process that picks up dispatched tasks and runs your agents. The dashboard is a TUI for monitoring — optional but recommended.
 
 ```bash
-# Dashboard + worker (recommended for getting started)
+# Dashboard + worker together (recommended for getting started)
 aster_orch dashboard --with-worker --config .aster-orch/config.yaml
 
-# Or run worker and dashboard separately
+# Or run them separately
 aster_orch worker --config .aster-orch/config.yaml &
 aster_orch dashboard --config .aster-orch/config.yaml
 ```
 
+The worker continues running after the dashboard exits. Without a running worker, dispatched tasks will queue but not execute.
+
 ### 4. Dispatch your first task
 
-From your coding CLI (Claude Code, Codex, or OpenCode), use the MCP tools:
+From your coding CLI (Claude Code, Codex, Gemini CLI, or OpenCode), just ask it to dispatch work:
 
-```
-orch_dispatch(from="operator", to="dev", body="Add a hello world endpoint to the API", intent="dispatch")
-```
+> "Dispatch to dev: Add a health check endpoint that returns the current version"
 
-Watch the agent work in the dashboard. When it responds, review and close:
+Your CLI uses `orch_dispatch` behind the scenes. You can let it infer the dispatch intent, or name the orchestrator explicitly — both work:
 
-```
-orch_close(thread_id="<id>", from="operator", status="completed")
-```
+> "Use orch to dispatch to the dev agent: refactor the error handling in src/api.rs to use proper error types"
+
+The agent works in your repo while the dashboard shows progress in real time. When the agent finishes, it sends a review request. Review the work in the dashboard log viewer (`Enter` on the execution) or ask your CLI:
+
+> "Check the status of my dispatch to dev"
+
+> "Show me the transcript for that thread"
+
+Once you're satisfied with the result:
+
+> "Close that thread as completed"
+
+For multi-step work, continue a conversation on the same thread:
+
+> "Dispatch a follow-up to dev on that thread: now add tests for the health check endpoint"
+
+Group related tasks with batches:
+
+> "Dispatch to dev with batch API-CLEANUP: rename all endpoint handlers to follow the new naming convention"
+
+Check batch progress:
+
+> "Show me the batch status for API-CLEANUP"
 
 ## Dashboard
 
@@ -191,27 +237,26 @@ agents:
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
 
-## Typical Workflow
+## How It Works
 
-```
-1. Operator dispatches task    →  orch_dispatch(to="dev", body="...", intent="dispatch")
-2. Worker picks up execution   →  visible in dashboard as "executing"
-3. Agent works in the repo     →  backend CLI runs with the prompt
-4. Agent responds              →  reply message with intent (e.g., review-request)
-5. Operator reviews            →  orch_transcript or dashboard log viewer
-6. Operator closes thread      →  orch_close(status="completed")
-```
+1. **You dispatch** — ask your CLI to send a task to an agent
+2. **Worker claims it** — the background worker picks up the queued execution
+3. **Agent executes** — the backend CLI (Claude Code, Codex, Gemini, OpenCode) runs in your repo
+4. **Agent replies** — sends a structured response (review-request, status-update, etc.)
+5. **You review** — read the output in the dashboard or via `orch_transcript`
+6. **You close** — mark the thread as completed, or dispatch follow-up work
 
-For multi-step work, dispatch follow-ups to the same thread by passing `thread_id`. Use `batch` to group related threads.
+The dashboard shows all of this in real time. For the full architecture, see [docs/project/architecture.md](docs/project/architecture.md).
 
 ## Troubleshooting
 
-**Agent not responding:**
-```
-orch_health()              # Check worker heartbeat and backend pings
-orch_diagnose(thread_id=…) # Thread-level diagnostics with suggestions
-orch_tasks()               # Check execution status and errors
-```
+**Agent not responding?** Ask your CLI:
+
+> "Run orch_health to check the worker"
+
+> "Diagnose that thread"
+
+> "Show me recent tasks and their status"
 
 **Stale state / corrupted DB:**
 ```bash
@@ -222,9 +267,9 @@ aster_orch dashboard --with-worker --config .aster-orch/config.yaml
 ```
 
 **Worker not picking up work:**
-- Check `orch_health()` — is there a recent heartbeat?
-- Check `orch_metrics()` — is `queue_depth > 0`?
-- Verify the agent's backend CLI is installed and authenticated
+- Ask *"Run orch_health"* — is there a recent heartbeat?
+- Ask *"Check orch_metrics"* — is `queue_depth > 0`?
+- Verify the agent's backend CLI is installed and authenticated (see Prerequisites)
 
 ## More Information
 
