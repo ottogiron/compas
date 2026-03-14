@@ -2426,3 +2426,118 @@ mod diagnose_tests {
         assert!(is_error(&result));
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORCH-EVO-2: Event Broadcast Channel Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod evo2_event_bus_tests {
+    use super::*;
+    use aster_orch::events::{EventBus, OrchestratorEvent};
+    use aster_orch::worker::WorkerRunner;
+    use tokio::sync::Semaphore;
+
+    #[tokio::test]
+    async fn test_event_bus_basic_subscribe_emit() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+
+        bus.emit(OrchestratorEvent::ExecutionStarted {
+            execution_id: "test-exec-1".to_string(),
+            thread_id: "test-thread-1".to_string(),
+            agent_alias: "focused".to_string(),
+        });
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            OrchestratorEvent::ExecutionStarted { execution_id, .. } => {
+                assert_eq!(execution_id, "test-exec-1");
+            }
+            _ => panic!("unexpected event"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_emits_events_on_dispatch_cycle() {
+        // Set up in-memory DB and store.
+        let store = test_store().await;
+
+        // Register stub backend.
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        // Build config and handle.
+        let config = test_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        // Create event bus and subscribe before the runner is created.
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let runner = WorkerRunner::new(config_handle, store.clone(), registry, event_bus);
+
+        // Seed: insert a dispatch message and a queued execution.
+        let agent_alias = config.agents[0].alias.clone();
+        let thread_id = "evo2-test-thread";
+
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                &agent_alias,
+                "dispatch",
+                "do something",
+                None,
+            )
+            .await
+            .unwrap();
+
+        store
+            .insert_execution_with_dispatch(thread_id, &agent_alias, Some(msg_id))
+            .await
+            .unwrap();
+
+        // Run poll_once to claim and spawn the execution.
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Give the spawned task time to complete.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+        // Collect all events from the channel.
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+
+        let has_started = events
+            .iter()
+            .any(|e| matches!(e, OrchestratorEvent::ExecutionStarted { .. }));
+        let has_completed = events.iter().any(|e| {
+            matches!(
+                e,
+                OrchestratorEvent::ExecutionCompleted { success: true, .. }
+            )
+        });
+        let has_message = events
+            .iter()
+            .any(|e| matches!(e, OrchestratorEvent::MessageReceived { .. }));
+
+        let event_names: Vec<String> = events.iter().map(|e| format!("{:?}", e)).collect();
+        assert!(
+            has_started,
+            "expected ExecutionStarted event, got: {:?}",
+            event_names
+        );
+        assert!(
+            has_completed,
+            "expected ExecutionCompleted(success=true), got: {:?}",
+            event_names
+        );
+        assert!(
+            has_message,
+            "expected MessageReceived event, got: {:?}",
+            event_names
+        );
+    }
+}

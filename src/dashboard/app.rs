@@ -29,6 +29,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Handle;
+use tokio::sync::broadcast;
 
 use crate::config::ConfigHandle;
 use crate::dashboard::theme;
@@ -36,6 +37,7 @@ use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
+use crate::events::{EventBus, OrchestratorEvent};
 use crate::lifecycle::LifecycleService;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
@@ -212,6 +214,10 @@ pub struct App {
     last_activity_attempt: Option<Instant>,
     last_agents_attempt: Option<Instant>,
     last_executions_attempt: Option<Instant>,
+    /// Optional broadcast receiver for worker events. When `Some`, incoming
+    /// events trigger an immediate data refresh instead of waiting for the next
+    /// poll interval.
+    event_rx: Option<broadcast::Receiver<OrchestratorEvent>>,
 }
 
 impl App {
@@ -236,8 +242,10 @@ impl App {
         config_path: PathBuf,
         handle: Handle,
         poll_interval: Duration,
+        event_bus: Option<EventBus>,
     ) -> Self {
         let log_dir = config.load().log_dir();
+        let event_rx = event_bus.map(|bus| bus.subscribe());
         Self {
             active_tab: 0,
             should_quit: false,
@@ -267,6 +275,28 @@ impl App {
             last_activity_attempt: None,
             last_agents_attempt: None,
             last_executions_attempt: None,
+            event_rx,
+        }
+    }
+
+    /// Force all data to be considered stale, triggering refresh on next tick.
+    pub(crate) fn invalidate_data(&mut self) {
+        // Reset fetched_at to a past instant so staleness check passes immediately.
+        let old = Instant::now() - self.poll_interval - Duration::from_secs(1);
+        if let Some(ref mut d) = self.activity_data {
+            d.fetched_at = old;
+        } else {
+            self.last_activity_attempt = None;
+        }
+        if let Some(ref mut d) = self.agents_data {
+            d.fetched_at = old;
+        } else {
+            self.last_agents_attempt = None;
+        }
+        if let Some(ref mut d) = self.executions_data {
+            d.fetched_at = old;
+        } else {
+            self.last_executions_attempt = None;
         }
     }
 
@@ -1075,10 +1105,11 @@ pub fn run_tui(
     config_path: PathBuf,
     handle: Handle,
     poll_interval_secs: u64,
+    event_bus: Option<EventBus>,
 ) -> io::Result<()> {
     let poll_interval = Duration::from_secs(poll_interval_secs);
     let mut terminal = ratatui::init();
-    let mut app = App::new(store, config, config_path, handle, poll_interval);
+    let mut app = App::new(store, config, config_path, handle, poll_interval, event_bus);
     let result = event_loop(&mut terminal, &mut app);
     ratatui::restore();
     result
@@ -1196,6 +1227,37 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 } else {
                     handle_list_key(app, key.code);
                 }
+            }
+        }
+
+        // Drain pending orchestrator events and force an immediate refresh
+        // if any state-changing event was received. This gives push-based
+        // updates when the worker runs in the same process (or in tests).
+        if let Some(ref mut rx) = app.event_rx {
+            let mut got_event = false;
+            loop {
+                match rx.try_recv() {
+                    Ok(_event) => {
+                        got_event = true;
+                    }
+                    Err(broadcast::error::TryRecvError::Empty) => break,
+                    Err(broadcast::error::TryRecvError::Lagged(n)) => {
+                        tracing::debug!(
+                            skipped = n,
+                            "dashboard event receiver lagged; forcing refresh"
+                        );
+                        got_event = true;
+                        // Continue draining after a lag.
+                        continue;
+                    }
+                    Err(broadcast::error::TryRecvError::Closed) => {
+                        app.event_rx = None;
+                        break;
+                    }
+                }
+            }
+            if got_event {
+                app.invalidate_data();
             }
         }
 
