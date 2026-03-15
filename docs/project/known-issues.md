@@ -64,7 +64,7 @@ This happens frequently during development: deploy a new binary, restart the das
 
 **Workaround:** Manually clear heartbeats: `sqlite3 <state_dir>/jobs.sqlite "DELETE FROM worker_heartbeats;"` then restart the dashboard.
 
-**Planned fix:** The heartbeat guard should validate that the worker process is actually alive (e.g., `kill(pid, 0)` check) before deciding not to spawn. If the process doesn't exist, the stale heartbeat should be cleared automatically. Alternatively, the heartbeat should include a TTL — if no heartbeat update within 30s (2x the 10s heartbeat interval), consider the worker dead.
+**Status update:** Fixed — `is_worker_alive()` now checks both heartbeat freshness AND process liveness via `kill(pid, 0)`. A stale heartbeat from a dead process is correctly detected and a new worker is spawned.
 
 ## Dashboard: Active threads section always appears empty
 
@@ -72,6 +72,20 @@ This happens frequently during development: deploy a new binary, restart the das
 **Status:** Open
 
 The Ops tab "Active" section shows no threads. Threads in Active state with no running execution don't appear — only "Running" (executing) and completed threads are visible. Active threads waiting for operator action (review, re-dispatch) should show in the Active section.
+
+## Desktop notifications lack task context
+
+**Severity:** Low
+**Status:** Open
+
+Notifications say "aster-orch: focused completed / Execution completed in 2m 15s" but don't include **what** the agent was working on. The dispatch body (task description) or batch ID would make notifications actionable without switching to the dashboard.
+
+**Root cause:** `ExecutionCompleted` event only carries `agent_alias`, `success`, `duration_ms` — no task description. Including context requires a store lookup by `thread_id` to fetch the original dispatch message, adding a store dependency to the notification consumer.
+
+**Options:**
+- Add `batch_id` and/or a short `description` field to `ExecutionCompleted` event (enriches the event at emission time)
+- Notification consumer does a store lookup on each completion (adds coupling)
+- Include first N chars of the dispatch body in `ExecutionStarted` and carry forward
 
 ## Dashboard: No mouse support
 
