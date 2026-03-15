@@ -178,7 +178,8 @@ impl Backend for GeminiBackend {
                 let success = out.status.success();
 
                 let error_category = if !success {
-                    Some(classify_error(false, false, &result_text))
+                    let has_result_output = json.is_ok();
+                    Some(classify_error(false, has_result_output, &result_text))
                 } else {
                     None
                 };

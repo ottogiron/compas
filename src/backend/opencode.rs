@@ -230,7 +230,7 @@ impl Backend for OpenCodeBackend {
                 let success = out.status.success();
 
                 let error_category = if !success {
-                    Some(classify_error(false, false, &result_text))
+                    Some(classify_error(false, !result_text.is_empty(), &result_text))
                 } else {
                     None
                 };
