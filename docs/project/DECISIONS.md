@@ -139,7 +139,7 @@ Backend stdout lines are streamed through a `sync_channel(128)` from the reader 
 
 **Architecture:** `sync_channel` bridges the blocking reader thread and the async consumer without blocking the tokio runtime. Channel bound of 128 provides backpressure — if the consumer falls behind, the reader blocks until space is available.
 
-**Backend-specific parsers:** Each backend (currently Claude via `stream-json`) has its own JSONL parser. The parser extracts typed events: tool calls, file edits, content blocks, and result lines. Other backends emit raw text lines until a parser is implemented.
+**Backend-specific parsers:** Claude, Codex, and OpenCode backends each have JSONL parsers that extract typed events (tool calls, file edits, content blocks, result lines). Gemini has no parser (single JSON output, no streaming). The consumer silently returns for unsupported backends.
 
 **Storage:** Batch SQLite inserts reduce write amplification. Events are queryable via `orch_execution_events` MCP tool, enabling mid-execution progress inspection without waiting for the agent to finish.
 

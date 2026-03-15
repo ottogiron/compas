@@ -226,7 +226,7 @@ orchestration:
   max_triggers_per_agent: 2             # Per-agent concurrency limit
   stale_active_secs: 3600              # Staleness threshold for idle threads
   ping_timeout_secs: 15                # Backend health check timeout
-  # log_retention_count: 200      # Max execution log files to retain
+  # log_retention_count: 100      # Max execution log files to retain (default: 100)
 
 notifications:
   desktop: false                       # macOS desktop notifications (requires worker restart)
@@ -274,7 +274,7 @@ agents:
     workspace: shared      # Default — reads files directly, no isolation needed
 ```
 
-Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `aster-orch/{thread_id}`. They're automatically cleaned up when the thread is closed or abandoned. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
+Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `aster-orch/{thread_id}`. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
 
 ### Retry on Transient Failure
 

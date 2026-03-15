@@ -15,7 +15,7 @@ orchestration:
   max_concurrent_triggers: 4
   max_triggers_per_agent: 1
   ping_timeout_secs: 30
-  # log_retention_count: 200      # Max execution log files to retain
+  # log_retention_count: 100      # Max execution log files to retain (default: 100)
 
 models:
   - id: claude-sonnet-4-6
