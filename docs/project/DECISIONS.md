@@ -83,3 +83,19 @@ Switched Claude Code CLI from `--output-format json` (single JSON blob after com
 **Parsing contract:** The final line of the JSONL stream is `{"type":"result","result":"...","session_id":"..."}`. The `extract_claude_stream_output()` function scans lines from the end for this result line. If no result line is found, raw stdout is used as fallback.
 
 **Success detection:** An execution is considered successful if the exit code is zero OR a result line was found in the output. This matches the previous behavior where success was declared when a valid JSON result object was present, regardless of exit code.
+
+## ADR-009: Desktop notifications via osascript
+
+**Date:** 2026-03
+**Status:** Active
+
+macOS desktop notifications on execution completion/failure via `osascript -e 'display notification ...'`. Consumer subscribes to EventBus in the worker process.
+
+**Key decisions:**
+- `osascript` over `notify-rust` crate or `terminal-notifier` — zero dependencies, built into macOS
+- Consumer in worker process (always running) rather than dashboard (interactive, may be closed)
+- Only notifies on `ExecutionCompleted` — other events are too noisy
+- Fire-and-forget via nested `tokio::spawn` — hung `osascript` can't block the consumer loop
+- Simple `notifications.desktop: bool` config — no granular per-event toggles
+- `#[cfg(target_os = "macos")]` compile-time conditional with no-op on other platforms
+- Notification toggle requires worker restart (not live-reloadable)

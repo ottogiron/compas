@@ -220,6 +220,7 @@ mod tests {
             }],
             orchestration: Default::default(),
             database: Default::default(),
+            notifications: Default::default(),
         }
     }
 

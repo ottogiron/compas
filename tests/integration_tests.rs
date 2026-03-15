@@ -122,6 +122,7 @@ fn test_config() -> OrchestratorConfig {
         ],
         orchestration: OrchestrationConfig::default(),
         database: DatabaseConfig::default(),
+        notifications: Default::default(),
     }
 }
 

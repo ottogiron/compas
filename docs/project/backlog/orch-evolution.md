@@ -105,7 +105,7 @@ Created: 2026-03-14
 - Verification:
   - Manual: enable desktop notifications, run an execution, verify notification appears
   - Unit test: notification formatting produces expected title/body
-- Status: Todo
+- Status: In Progress
 
 ## Ticket ORCH-EVO-5 — Thread Conversation View in Dashboard
 
@@ -434,6 +434,9 @@ Created: 2026-03-14
 - End:
 - Duration:
 - Notes:
+
+
+- Start: 2026-03-15 11:24 UTC
 
 - Ticket: ORCH-EVO-5
 - Owner: TBD

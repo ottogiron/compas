@@ -2,6 +2,10 @@ target_repo_root: /path/to/your-repo
 state_dir: ~/.aster/orch
 poll_interval_secs: 1
 
+# Desktop notifications (macOS only, requires worker restart to toggle)
+# notifications:
+#   desktop: false
+
 orchestration:
   trigger_intents:
     - dispatch

@@ -24,6 +24,9 @@ pub struct OrchestratorConfig {
     /// SQLite connection pool settings for MCP + worker.
     #[serde(default, alias = "apalis")]
     pub database: DatabaseConfig,
+    /// Desktop notification settings.
+    #[serde(default)]
+    pub notifications: NotificationConfig,
 }
 
 impl OrchestratorConfig {
@@ -80,6 +83,14 @@ impl Default for DatabaseConfig {
             acquire_timeout_ms: default_db_acquire_timeout_ms(),
         }
     }
+}
+
+/// Desktop notification configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct NotificationConfig {
+    /// Enable macOS desktop notifications for execution completion/failure.
+    #[serde(default)]
+    pub desktop: bool,
 }
 
 fn default_db_max_connections() -> u32 {

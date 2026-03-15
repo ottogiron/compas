@@ -229,6 +229,14 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     // Start config file watcher and get a live-reloadable handle.
     let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
     let event_bus = aster_orch::events::EventBus::new();
+
+    // Note: notification toggle is evaluated once at startup.
+    // Changing notifications.desktop in config requires worker restart.
+    if config_handle.load().notifications.desktop {
+        aster_orch::notifications::spawn_notification_consumer(&event_bus);
+        tracing::info!("desktop notifications enabled");
+    }
+
     let runner = WorkerRunner::new(
         config_handle,
         store,
