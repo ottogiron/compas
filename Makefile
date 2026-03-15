@@ -1,4 +1,4 @@
-.PHONY: build release test fmt fmt-check clippy check clean verify worker dashboard dashboard-dev mcp-server setup-hooks
+.PHONY: build release test fmt fmt-check clippy check clean verify install worker dashboard dashboard-dev mcp-server setup-hooks
 
 # ── Build ────────────────────────────────────────────────────────────
 build:
@@ -28,6 +28,11 @@ clippy:
 
 # ── Quality gate (fmt-check + clippy + test) ─────────────────────────
 verify: fmt-check clippy test
+
+# ── Install ──────────────────────────────────────────────────────────
+install:
+	cargo install --path .
+	@echo "Installed aster_orch to ~/.cargo/bin/"
 
 # ── Setup ────────────────────────────────────────────────────────────
 setup-hooks:
