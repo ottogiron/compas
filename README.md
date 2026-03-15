@@ -147,6 +147,16 @@ Check batch progress:
 
 > "Show me the batch status for API-CLEANUP"
 
+### 5. Install the orchestration skill (recommended)
+
+A skill teaches your coding CLI the full dispatch-review-complete workflow. Copy the example skill into your project and install it following your tool's instructions:
+
+```bash
+cp -r /path/to/aster-orch/examples/skills/orch-dispatch your-project/skills/
+```
+
+The skill covers: worker delegation, reviewer routing, session continuity, worktree isolation, retry behavior, and failure handling. See [examples/skills/orch-dispatch/SKILL.md](examples/skills/orch-dispatch/SKILL.md) for the full reference.
+
 ## Dashboard
 
 The TUI dashboard shows real-time orchestrator state across four tabs:
