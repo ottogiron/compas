@@ -396,6 +396,8 @@ Created: 2026-03-14
 - EVO-10 (webhooks) moved before EVO-8 (HTTP API) — outbound webhooks are 10x simpler and more immediately useful than a full API layer.
 - EVO-9 (web dashboard) deferred per orch-architect review — HTTP API (EVO-8) enables web UIs without committing to maintaining a React app. Build the API, let the UI emerge.
 - All work happens in the aster-orch standalone repo.
+- **Sessions concept deferred.** Orch-architect recommended promoting batches to first-class entities (with description, lifecycle, tags) instead of adding a session layer above them. See architect review thread from 2026-03-15. When batches need cross-batch grouping, add tags. Revisit full sessions at TEAM-scale if multi-batch campaigns become a real pattern.
+- **Batch promotion (future ticket):** Create a `batches` table with description, status (active/paused/completed), created_at/completed_at, and tags. Auto-created on first dispatch. `orch_batch_create`/`orch_batch_close` for explicit lifecycle. Not yet scheduled — defer until cost tracking (TEAM-1) or multi-project (TEAM-6) work begins.
 
 ## Execution Metrics
 

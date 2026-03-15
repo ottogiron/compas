@@ -99,3 +99,18 @@ macOS desktop notifications on execution completion/failure via `osascript -e 'd
 - Simple `notifications.desktop: bool` config — no granular per-event toggles
 - `#[cfg(target_os = "macos")]` compile-time conditional with no-op on other platforms
 - Notification toggle requires worker restart (not live-reloadable)
+
+## ADR-010: Per-agent workdir as interim multi-repo solution
+
+**Date:** 2026-03
+**Status:** Active
+
+Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in different repositories without changing the global `target_repo_root`. Combined with `workspace: worktree | shared` for git worktree isolation per-thread.
+
+**Why:** The `target_repo_root` is global — all agents share it. When orchestrating work across multiple repos (e.g., aster compiler + aster-orch), agents need different working directories. The original workaround was prompt-based `cd` instructions, which was fragile.
+
+**Design:** Per-agent `workdir` is the low-level primitive. It sets the `current_dir` for the backend CLI process. `workspace: worktree` creates git worktrees from the agent's base workdir. Both are optional — omitting them preserves the existing shared-workspace behavior.
+
+**Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) was deferred to ORCH-TEAM-6. Per-agent `workdir` is the interim solution that solves the immediate need. When project-based config is implemented, it would set `workdir` on its agents, making `workdir` the underlying primitive either way.
+
+**Config lives in the aster repo:** The production orch config is at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. It defines agents for both the aster repo (via `target_repo_root: ..`) and the aster-orch repo (via per-agent `workdir`). The aster-orch repo has its own dev config at `.aster-orch/config.yaml` for testing MCP changes.

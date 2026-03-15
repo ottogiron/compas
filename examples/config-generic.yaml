@@ -28,6 +28,8 @@ agents:
   - alias: implementer
     backend: claude
     model: claude-sonnet-4-6
+    # workdir: /path/to/other-repo    # Per-agent repo override (default: target_repo_root)
+    # workspace: worktree             # "worktree" for git isolation, "shared" (default)
     prompt: >
       You implement changes in this repository and report verification results.
       End with a JSON line: {"intent":"status-update","to":"operator"}.
@@ -37,3 +39,11 @@ agents:
     prompt: >
       You investigate issues and return status updates with clear next steps.
       End with a JSON line: {"intent":"status-update","to":"operator"}.
+
+  # Example: agent working in a different repository
+  # - alias: infra-dev
+  #   backend: claude
+  #   model: claude-sonnet-4-6
+  #   workdir: /path/to/infra-repo     # Works in a different repo than target_repo_root
+  #   workspace: worktree              # Each thread gets its own worktree
+  #   prompt: "You work on infrastructure..."

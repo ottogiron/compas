@@ -100,12 +100,17 @@ If you change a layer, update/review the paired artifacts in the same commit set
 
 ### Two MCP server instances
 
-Both are configured globally (user scope) in Claude Code, Codex, and OpenCode:
-
 | MCP Server | Points to | State dir | Use for |
 |---|---|---|---|
-| `aster-orch` | Production release binary | `~/.aster/orch/` | Dispatching agents, daily orchestration |
-| `aster-orch-dev` | `cargo run` (latest build) | `.aster-orch/state/` | Testing MCP changes during development |
+| `aster-orch` | `aster_orch` (installed via `cargo install`, on PATH) | `~/.aster/orch/` | Dispatching agents, daily orchestration |
+| `aster-orch-dev` | `cargo run` (repo-level config, latest build) | `.aster-orch/state/` | Testing MCP changes during development |
+
+`aster-orch` is configured globally (user scope) in Claude Code, Codex, and OpenCode.
+`aster-orch-dev` is configured at repo level (`.mcp.json`, `opencode.json`) — only available when working in this repo.
+
+### Production config
+
+The production orch config lives in the **aster repo** at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. It defines agents for both the aster repo (via `target_repo_root: ..`) and the aster-orch repo (via per-agent `workdir`). See ADR-010 in `docs/project/DECISIONS.md` for the rationale.
 
 ### Dev config
 

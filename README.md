@@ -225,6 +225,9 @@ orchestration:
   stale_active_secs: 3600              # Staleness threshold for idle threads
   ping_timeout_secs: 15                # Backend health check timeout
 
+notifications:
+  desktop: false                       # macOS desktop notifications (requires worker restart)
+
 agents:
   - alias: dev                         # Unique name for dispatching
     backend: claude                    # claude | codex | gemini | opencode
@@ -232,11 +235,41 @@ agents:
     prompt: "..."                      # System prompt for the agent
     # prompt_file: prompts/dev.md      # Or load prompt from file
     # backend_args: ["--flag"]         # Extra CLI args for the backend
+    # workdir: /path/to/other/repo     # Per-agent repo override (default: target_repo_root)
+    # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
 ```
 
 **Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
+
+### Per-Agent Working Directory
+
+By default, all agents work in `target_repo_root`. To have an agent work in a different repository, set `workdir`:
+
+```yaml
+agents:
+  - alias: orch-dev
+    backend: claude
+    workdir: /path/to/aster-orch       # Works in a different repo
+    workspace: worktree                # Optional: isolated worktree per thread
+```
+
+### Workspace Isolation
+
+When `workspace: worktree` is set, each thread dispatched to that agent gets its own git worktree. This prevents concurrent agents from stepping on each other's files:
+
+```yaml
+agents:
+  - alias: agent-a
+    workspace: worktree    # Each thread gets its own worktree
+  - alias: agent-b
+    workspace: worktree    # Independent worktree, no file conflicts with agent-a
+  - alias: reviewer
+    workspace: shared      # Default — reads files directly, no isolation needed
+```
+
+Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `aster-orch/{thread_id}`. They're automatically cleaned up when the thread is closed or abandoned. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
 
 ## How It Works
 
