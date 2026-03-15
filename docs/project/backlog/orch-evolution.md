@@ -436,8 +436,8 @@ Created: 2026-03-14
 - Complexity: S
 - Risk: Low
 - Start: 2026-03-15 11:35 UTC
-- End: 2026-03-15 11:35 UTC
-- Duration: ~00:20:00
+- End: 2026-03-15 21:23 UTC
+- Duration: 09:59:16
 - Notes: macOS osascript notifications. Notifications lack task context (known issue).
 
 - Ticket: ORCH-EVO-5
