@@ -161,6 +161,14 @@ Based on reviewer response:
 
   Then loop back to Step 3. Use the `reference` from the `changes-requested` dispatch as the new `--since` value.
 
+- **Blocking findings → operator fixes directly:**
+
+  If the fixes are straightforward (the reviewer gave clear instructions), the operator may apply them directly instead of sending back to the worker. After applying fixes:
+
+  1. Run verification: `make verify`
+  2. Send the updated diff to the reviewer for a second pass (Mode B Step 3)
+  3. Do NOT skip review just because the operator made the fix — reviewer must confirm the findings are addressed
+
 - **Unclear findings → ask reviewer for clarification:**
 
   ```
