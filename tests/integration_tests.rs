@@ -103,6 +103,8 @@ fn test_config() -> OrchestratorConfig {
                 timeout_secs: Some(30),
                 backend_args: None,
                 env: None,
+                workdir: None,
+                workspace: None,
             },
             AgentConfig {
                 alias: "spark".to_string(),
@@ -114,6 +116,8 @@ fn test_config() -> OrchestratorConfig {
                 timeout_secs: None,
                 backend_args: None,
                 env: None,
+                workdir: None,
+                workspace: None,
             },
         ],
         orchestration: OrchestrationConfig::default(),
@@ -825,6 +829,8 @@ mod registry_tests {
             timeout_secs: None,
             backend_args: None,
             env: None,
+            workdir: None,
+            workspace: None,
         };
 
         let backend = registry.get(&agent_cfg);
@@ -846,6 +852,8 @@ mod registry_tests {
             timeout_secs: None,
             backend_args: None,
             env: None,
+            workdir: None,
+            workspace: None,
         };
 
         let result = registry.get(&agent_cfg);
@@ -2432,6 +2440,187 @@ mod diagnose_tests {
 // ORCH-EVO-2: Event Broadcast Channel Tests
 // ═══════════════════════════════════════════════════════════════════════════
 
+mod worktree_tests {
+    use super::*;
+    use aster_orch::worktree::WorktreeManager;
+    use std::process::Command;
+
+    #[tokio::test]
+    async fn test_execute_trigger_with_worktree_mode() {
+        let store = test_store().await;
+
+        // Create a real git repo for the worktree source
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo_path = repo_dir.path();
+        let init = Command::new("git")
+            .args(["init", &repo_path.to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        // Need at least one commit for HEAD to exist
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &repo_path.to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed");
+
+        let state_dir = tempfile::tempdir().unwrap();
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new(state_dir.path()));
+
+        // Configure agent with worktree mode
+        let agent_configs = vec![AgentConfig {
+            alias: "focused".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("You are a test agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: Some("worktree".to_string()),
+        }];
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let registry = Arc::new(registry);
+
+        // Create a thread and execution
+        store.ensure_thread("t-wt-1", None).await.unwrap();
+        let msg_id = store
+            .insert_message("t-wt-1", "operator", "focused", "dispatch", "do work", None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-wt-1", "focused", Some(msg_id))
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Claim the execution
+        let execution = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution.id, exec_id);
+
+        // Execute with worktree mode
+        let output = aster_orch::worker::execute_trigger(
+            &execution,
+            &store,
+            &registry,
+            &agent_configs,
+            "do work",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+        )
+        .await;
+
+        assert!(output.success, "execution should succeed");
+
+        // Verify worktree was created
+        let wt_path = state_dir.path().join("worktrees").join("t-wt-1");
+        assert!(wt_path.exists(), "worktree directory should exist");
+
+        // Verify worktree path was stored in DB
+        let stored_path = store.get_thread_worktree_path("t-wt-1").await.unwrap();
+        assert!(
+            stored_path.is_some(),
+            "worktree path should be stored in DB"
+        );
+        assert_eq!(stored_path.unwrap(), wt_path);
+
+        // Cleanup
+        worktree_manager
+            .remove_worktree(repo_path, "t-wt-1")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_execute_trigger_shared_mode_no_worktree() {
+        let store = test_store().await;
+
+        let agent_configs = vec![AgentConfig {
+            alias: "focused".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("You are a test agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: None, // shared (default)
+        }];
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let registry = Arc::new(registry);
+
+        let state_dir = tempfile::tempdir().unwrap();
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new(state_dir.path()));
+
+        // Create a thread and execution
+        store.ensure_thread("t-shared-1", None).await.unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-shared-1",
+                "operator",
+                "focused",
+                "dispatch",
+                "do work",
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-shared-1", "focused", Some(msg_id))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let execution = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution.id, exec_id);
+
+        let output = aster_orch::worker::execute_trigger(
+            &execution,
+            &store,
+            &registry,
+            &agent_configs,
+            "do work",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            std::path::Path::new("/tmp"),
+        )
+        .await;
+
+        assert!(output.success, "execution should succeed");
+
+        // No worktree should be created in shared mode
+        let stored_path = store.get_thread_worktree_path("t-shared-1").await.unwrap();
+        assert!(
+            stored_path.is_none(),
+            "no worktree path should be stored for shared mode"
+        );
+    }
+}
+
 mod evo2_event_bus_tests {
     use super::*;
     use aster_orch::events::{EventBus, OrchestratorEvent};
@@ -2459,7 +2648,14 @@ mod evo2_event_bus_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let runner = WorkerRunner::new(config_handle, store.clone(), registry, event_bus);
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
 
         // Seed: insert a dispatch message and a queued execution.
         let agent_alias = config.agents[0].alias.clone();

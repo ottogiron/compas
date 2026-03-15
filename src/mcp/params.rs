@@ -125,6 +125,12 @@ pub struct ReopenParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WorktreesParams {
+    /// Optional thread ID filter
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ExecutionEventsParams {
     /// Execution ID to fetch events for
     pub execution_id: String,

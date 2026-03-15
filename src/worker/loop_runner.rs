@@ -23,6 +23,7 @@ use crate::config::types::AgentRole;
 use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::store::Store;
+use crate::worktree::WorktreeManager;
 
 use super::executor::{execute_trigger, TriggerOutput};
 
@@ -50,6 +51,7 @@ pub struct WorkerRunner {
     backend_registry: Arc<BackendRegistry>,
     worker_id: String,
     event_bus: EventBus,
+    worktree_manager: Arc<WorktreeManager>,
 }
 
 impl WorkerRunner {
@@ -58,6 +60,7 @@ impl WorkerRunner {
         store: Store,
         backend_registry: BackendRegistry,
         event_bus: EventBus,
+        worktree_manager: WorktreeManager,
     ) -> Self {
         let worker_id = format!("worker-{}", std::process::id());
 
@@ -67,6 +70,7 @@ impl WorkerRunner {
             backend_registry: Arc::new(backend_registry),
             worker_id,
             event_bus,
+            worktree_manager: Arc::new(worktree_manager),
         }
     }
 
@@ -158,6 +162,28 @@ impl WorkerRunner {
                             tracing::warn!(error = %e, "stale execution check failed");
                         }
                         _ => {}
+                    }
+
+                    // Worktree cleanup for terminal threads
+                    match self.store.threads_with_stale_worktrees().await {
+                        Ok(stale) => {
+                            for (thread_id, _worktree_path, repo_root) in &stale {
+                                let repo_root = std::path::PathBuf::from(repo_root);
+                                if let Err(e) = self.worktree_manager.remove_worktree(&repo_root, thread_id) {
+                                    tracing::warn!(thread_id = %thread_id, error = %e, "worktree cleanup failed");
+                                }
+                                // If clear_thread_worktree_path fails after a successful
+                                // remove_worktree, the next cleanup cycle safely retries:
+                                // remove_worktree returns Ok(()) when the directory is
+                                // already gone.
+                                if let Err(e) = self.store.clear_thread_worktree_path(thread_id).await {
+                                    tracing::warn!(thread_id = %thread_id, error = %e, "failed to clear worktree path");
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to query stale worktrees");
+                        }
                     }
                 }
                 _ = &mut shutdown => {
@@ -254,6 +280,9 @@ impl WorkerRunner {
                         .map(|a| a.backend.clone())
                         .unwrap_or_default();
 
+                    let worktree_manager = self.worktree_manager.clone();
+                    let target_repo_root = trigger_config.target_repo_root.clone();
+
                     // Create telemetry channel for real-time stdout line forwarding.
                     let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel::<String>(128);
                     let stdout_tx = std::sync::Arc::new(stdout_tx);
@@ -335,6 +364,8 @@ impl WorkerRunner {
                             execution_timeout_secs,
                             log_dir,
                             Some(stdout_tx),
+                            &worktree_manager,
+                            &target_repo_root,
                         )
                         .await;
 

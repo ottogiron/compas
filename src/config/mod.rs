@@ -40,6 +40,9 @@ fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
         if let Some(ref prompt_file) = agent.prompt_file {
             agent.prompt_file = Some(resolve_path(&base, prompt_file));
         }
+        if let Some(ref workdir) = agent.workdir {
+            agent.workdir = Some(resolve_path(&base, workdir));
+        }
     }
 }
 

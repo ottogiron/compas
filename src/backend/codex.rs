@@ -145,11 +145,12 @@ impl Backend for CodexBackend {
 
         // Resume the prior Codex session when the DB provided a thread_id from
         // a previous completed execution for this thread+agent.
+        let effective_workdir = agent.execution_workdir.clone().or(self.workdir.clone());
         let args = Self::build_args(
             agent,
             instruction,
             session.resume_session_id.as_deref(),
-            self.workdir.as_ref(),
+            effective_workdir.as_ref(),
         );
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
 
@@ -162,7 +163,7 @@ impl Backend for CodexBackend {
             "codex",
             &arg_refs,
             agent.env.as_ref(),
-            self.workdir.as_deref(),
+            effective_workdir.as_deref(),
         )?;
         let pid = child.id();
         self.tracker.track(&session.id, pid);
@@ -334,6 +335,7 @@ mod tests {
             backend_args: None,
             env: None,
             log_path: None,
+            execution_workdir: None,
         }
     }
 

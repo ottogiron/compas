@@ -77,6 +77,14 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 )));
             }
         }
+        if let Some(ref ws) = agent.workspace {
+            if ws != "worktree" && ws != "shared" {
+                return Err(OrchestratorError::Config(format!(
+                    "agent '{}' workspace must be \"worktree\" or \"shared\", got \"{}\"",
+                    agent.alias, ws
+                )));
+            }
+        }
     }
 
     // ORCHV3-15: validate poll_interval bounds
@@ -207,6 +215,8 @@ mod tests {
 
                 backend_args: None,
                 env: None,
+                workdir: None,
+                workspace: None,
             }],
             orchestration: Default::default(),
             database: Default::default(),
@@ -284,6 +294,8 @@ mod tests {
 
             backend_args: None,
             env: None,
+            workdir: None,
+            workspace: None,
         });
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("duplicate agent alias"));
@@ -462,6 +474,8 @@ agents:
 
             backend_args: None,
             env: None,
+            workdir: None,
+            workspace: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -477,6 +491,8 @@ agents:
 
             backend_args: None,
             env: None,
+            workdir: None,
+            workspace: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 

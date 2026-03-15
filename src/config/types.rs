@@ -243,4 +243,10 @@ pub struct AgentConfig {
     pub backend_args: Option<Vec<String>>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+    /// Optional per-agent repository root. If omitted, uses global `target_repo_root`.
+    #[serde(default)]
+    pub workdir: Option<PathBuf>,
+    /// Workspace isolation mode: `"worktree"` for git worktree isolation, `"shared"` (default).
+    #[serde(default)]
+    pub workspace: Option<String>,
 }

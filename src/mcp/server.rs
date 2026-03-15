@@ -224,6 +224,17 @@ impl OrchestratorMcpServer {
     }
 
     #[tool(
+        name = "orch_worktrees",
+        description = "List active git worktrees for agent isolation."
+    )]
+    async fn orch_worktrees(
+        &self,
+        Parameters(params): Parameters<WorktreesParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.worktrees_impl(params).await
+    }
+
+    #[tool(
         name = "orch_execution_events",
         description = "Get real-time execution telemetry events (tool calls, messages, turn completions) for a running or completed execution."
     )]

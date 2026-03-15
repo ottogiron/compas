@@ -396,6 +396,30 @@ impl OrchestratorMcpServer {
         }
     }
 
+    // ── orch_worktrees ────────────────────────────────────────────────────
+
+    pub async fn worktrees_impl(
+        &self,
+        params: WorktreesParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let config = self.config.load();
+        let mgr = crate::worktree::WorktreeManager::new(&config.state_dir);
+        match mgr.list_worktrees() {
+            Ok(worktrees) => {
+                let filtered: Vec<_> = if let Some(ref tid) = params.thread_id {
+                    worktrees
+                        .into_iter()
+                        .filter(|w| w.thread_id == *tid)
+                        .collect()
+                } else {
+                    worktrees
+                };
+                Ok(json_text(&filtered))
+            }
+            Err(e) => Ok(err_text(format!("worktree list failed: {}", e))),
+        }
+    }
+
     // ── orch_tasks ───────────────────────────────────────────────────────
 
     pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {

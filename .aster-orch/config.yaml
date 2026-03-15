@@ -11,7 +11,7 @@ orchestration:
     - dispatch
     - handoff
     - changes-requested
-  execution_timeout_secs: 900
+  execution_timeout_secs: 1000
   ping_timeout_secs: 30
 
 database:

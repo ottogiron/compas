@@ -201,12 +201,11 @@ impl Backend for OpenCodeBackend {
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(300));
 
-        let child = spawn_cli(
-            "opencode",
-            &arg_refs,
-            agent.env.as_ref(),
-            self.workdir.as_deref(),
-        )?;
+        let workdir = agent
+            .execution_workdir
+            .as_deref()
+            .or(self.workdir.as_deref());
+        let child = spawn_cli("opencode", &arg_refs, agent.env.as_ref(), workdir)?;
         let pid = child.id();
         self.tracker.track(&session.id, pid);
 
@@ -376,6 +375,7 @@ mod tests {
             backend_args: None,
             env: None,
             log_path: None,
+            execution_workdir: None,
         }
     }
 

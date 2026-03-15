@@ -377,6 +377,24 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // ORCH-EVO-7: worktree path tracking
+        let thread_columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(threads)")
+                .fetch_all(&self.pool)
+                .await?;
+        let has_worktree_path = thread_columns.iter().any(|c| c.1 == "worktree_path");
+        if !has_worktree_path {
+            sqlx::query("ALTER TABLE threads ADD COLUMN worktree_path TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_worktree_repo_root = thread_columns.iter().any(|c| c.1 == "worktree_repo_root");
+        if !has_worktree_repo_root {
+            sqlx::query("ALTER TABLE threads ADD COLUMN worktree_repo_root TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
         Ok(())
     }
 
@@ -495,6 +513,71 @@ impl Store {
                 updated_at: r.4,
             })
             .collect())
+    }
+
+    // ── Worktree operations ──────────────────────────────────────────────
+
+    /// Store the worktree path and originating repo root for a thread.
+    pub async fn set_thread_worktree_path(
+        &self,
+        thread_id: &str,
+        path: &std::path::Path,
+        repo_root: &std::path::Path,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE threads SET worktree_path = ?, worktree_repo_root = ? WHERE thread_id = ?",
+        )
+        .bind(path.to_string_lossy().as_ref())
+        .bind(repo_root.to_string_lossy().as_ref())
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("set_thread_worktree_path failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Get the worktree path for a thread, if set.
+    pub async fn get_thread_worktree_path(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<std::path::PathBuf>, String> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT worktree_path FROM threads WHERE thread_id = ?")
+                .bind(thread_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| format!("get_thread_worktree_path failed: {}", e))?;
+        Ok(row.and_then(|(p,)| p).map(std::path::PathBuf::from))
+    }
+
+    /// Find threads with worktrees that have reached terminal state and need cleanup.
+    ///
+    /// Returns `(thread_id, worktree_path, worktree_repo_root)` tuples.
+    pub async fn threads_with_stale_worktrees(
+        &self,
+    ) -> Result<Vec<(String, String, String)>, String> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as(
+            "SELECT thread_id, worktree_path, worktree_repo_root FROM threads
+             WHERE worktree_path IS NOT NULL
+             AND worktree_repo_root IS NOT NULL
+             AND status IN ('Completed', 'Failed', 'Abandoned')",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("threads_with_stale_worktrees failed: {}", e))?;
+        Ok(rows)
+    }
+
+    /// Clear the worktree path and repo root for a thread after cleanup.
+    pub async fn clear_thread_worktree_path(&self, thread_id: &str) -> Result<(), String> {
+        sqlx::query(
+            "UPDATE threads SET worktree_path = NULL, worktree_repo_root = NULL WHERE thread_id = ?",
+        )
+        .bind(thread_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("clear_thread_worktree_path failed: {}", e))?;
+        Ok(())
     }
 
     // ── Message operations ───────────────────────────────────────────────

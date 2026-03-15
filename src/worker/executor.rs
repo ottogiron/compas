@@ -12,6 +12,7 @@ use crate::backend::BackendOutput;
 use crate::config::types::AgentConfig;
 use crate::model::agent::Agent;
 use crate::store::{ExecutionRow, ExecutionStatus, Store};
+use crate::worktree::WorktreeManager;
 
 /// Result of running a trigger execution.
 #[derive(Debug)]
@@ -49,6 +50,8 @@ pub async fn execute_trigger(
     execution_timeout_secs: u64,
     log_dir: Option<PathBuf>,
     stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
+    worktree_manager: &Arc<WorktreeManager>,
+    target_repo_root: &std::path::Path,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
     let thread_id = execution.thread_id.clone();
@@ -126,6 +129,50 @@ pub async fn execute_trigger(
     let log_path = log_dir
         .as_ref()
         .map(|dir| dir.join(format!("{}.log", exec_id)));
+    // Resolve effective working directory for this execution.
+    // Worktree creation runs blocking git subprocesses, so we use
+    // spawn_blocking to avoid starving the tokio runtime.
+    let agent_workdir = agent_config
+        .workdir
+        .clone()
+        .unwrap_or_else(|| target_repo_root.to_path_buf());
+    let execution_workdir = if agent_config.workspace.as_deref() == Some("worktree") {
+        let wt_thread_id = execution.thread_id.clone();
+        let wt_agent_workdir = agent_workdir.clone();
+        let wt_result = {
+            let wt_mgr = worktree_manager.clone();
+            tokio::task::spawn_blocking(move || {
+                wt_mgr.ensure_worktree(&wt_agent_workdir, &wt_thread_id)
+            })
+            .await
+            .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)))
+        };
+        match wt_result {
+            Ok(Some(path)) => {
+                if let Err(e) = store
+                    .set_thread_worktree_path(&execution.thread_id, &path, &agent_workdir)
+                    .await
+                {
+                    tracing::warn!(error = %e, "failed to store worktree path");
+                }
+                Some(path)
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    thread_id = %execution.thread_id,
+                    "worktree mode requested but repo is not git — falling back to shared"
+                );
+                Some(agent_workdir)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create worktree — falling back to shared");
+                Some(agent_workdir)
+            }
+        }
+    } else {
+        agent_config.workdir.clone()
+    };
+
     let agent = Agent {
         alias: agent_config.alias.clone(),
         backend: agent_config.backend.clone(),
@@ -136,6 +183,7 @@ pub async fn execute_trigger(
         backend_args: agent_config.backend_args.clone(),
         env: agent_config.env.clone(),
         log_path,
+        execution_workdir,
     };
 
     // Look up the last backend session ID for this thread+agent so the backend

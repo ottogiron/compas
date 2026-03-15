@@ -23,4 +23,8 @@ pub struct Agent {
     /// Not persisted; always `None` when deserialized.
     #[serde(skip)]
     pub log_path: Option<PathBuf>,
+    /// Per-execution working directory set by the worker at runtime.
+    /// Not persisted; always `None` when deserialized.
+    #[serde(skip)]
+    pub execution_workdir: Option<PathBuf>,
 }

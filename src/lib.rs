@@ -9,3 +9,4 @@ pub mod model;
 pub mod store;
 pub mod wait;
 pub mod worker;
+pub mod worktree;

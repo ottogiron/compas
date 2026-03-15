@@ -224,12 +224,18 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
+    let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
 
     // Start config file watcher and get a live-reloadable handle.
     let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
-
     let event_bus = aster_orch::events::EventBus::new();
-    let runner = WorkerRunner::new(config_handle, store, backend_registry, event_bus);
+    let runner = WorkerRunner::new(
+        config_handle,
+        store,
+        backend_registry,
+        event_bus,
+        worktree_manager,
+    );
 
     tracing::info!(
         db = %db_path.display(),

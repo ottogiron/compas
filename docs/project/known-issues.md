@@ -50,3 +50,17 @@ If a persisted backend session ID has expired or been pruned by the provider (ov
 Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `execution_timeout_secs`) then exits cleanly. The dashboard waits up to 10s for the worker to exit before returning.
 
 **Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state, but the stale worker process must be killed manually.
+
+## Dashboard: Active threads section always appears empty
+
+**Severity:** Medium
+**Status:** Open
+
+The Ops tab "Active" section shows no threads. Threads in Active state with no running execution don't appear — only "Running" (executing) and completed threads are visible. Active threads waiting for operator action (review, re-dispatch) should show in the Active section.
+
+## Dashboard: No mouse support
+
+**Severity:** Low
+**Status:** Open
+
+The TUI dashboard is keyboard-only. Mouse support for clicking list items, drilling down into threads, and selecting tabs would improve ergonomics, especially for operators used to GUI tools. Ratatui supports mouse events via crossterm.
