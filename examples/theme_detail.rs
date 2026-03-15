@@ -102,7 +102,7 @@ fn mock_output() -> Vec<String> {
     lines.push("[14:32:15]   Created render_content_widget(area, buf)".into());
     lines.push("[14:32:15]   Created render_status_bar_widget(area, buf)".into());
     lines.push("[14:32:16]   Created render_help_overlay_widget(area, buf)".into());
-    lines.push("[14:32:16]   Created render_admin_action_widget(area, buf)".into());
+    lines.push("[14:32:16]   Created render_ops_list(frame, area)".into());
     lines.push("[14:32:17]   Hybrid approach: Widget for static, Frame for stateful".into());
     lines.push("".into());
     lines.push("[14:32:18] Applying Stylize shorthand...".into());

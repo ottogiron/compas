@@ -34,16 +34,6 @@ const SUCCESS_DIM: Color = Color::Rgb(50, 130, 75);
 const FAILURE: Color = Color::Rgb(200, 60, 60);
 const WARNING: Color = Color::Rgb(200, 170, 50);
 
-fn panel(title: &str) -> Block<'_> {
-    Block::bordered()
-        .border_set(border::ONE_EIGHTH_WIDE)
-        .border_style(Style::new().fg(BORDER_DIM))
-        .title_top(Line::from(format!(" {title} ")).left_aligned())
-        .title_style(Style::new().fg(TEXT_MUTED))
-        .padding(Padding::proportional(1))
-        .style(Style::new().bg(BG_PANEL))
-}
-
 fn panel_focused(title: &str) -> Block<'_> {
     Block::bordered()
         .border_set(border::ONE_EIGHTH_WIDE)
@@ -386,51 +376,6 @@ fn render_ops_list(frame: &mut Frame, area: Rect, selected: usize) {
     frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
 }
 
-fn render_context_panel(area: Rect, buf: &mut Buffer) {
-    let block = panel("Context");
-
-    let inner = block.inner(area);
-    block.render(area, buf);
-
-    let lines = vec![
-        Line::from(vec![
-            "  Thread: ".fg(TEXT_MUTED),
-            "01KKN1XF5BSQRHQ…".fg(TEXT_BRIGHT),
-        ]),
-        Line::from(vec![
-            "  Batch:  ".fg(TEXT_MUTED),
-            "DASH-MODERNIZE".fg(TEXT_NORMAL),
-        ]),
-        Line::from(vec!["  Agent:  ".fg(TEXT_MUTED), "focused".fg(ACCENT)]),
-        Line::from(vec![
-            "  Status: ".fg(TEXT_MUTED),
-            "Executing".fg(ACCENT).bold(),
-        ]),
-        Line::from(vec!["  Time:   ".fg(TEXT_MUTED), "2m 14s".fg(TEXT_NORMAL)]),
-        Line::raw(""),
-        Line::from("  Actions".fg(TEXT_MUTED).bold()),
-        Line::from(vec![
-            "    b".fg(ACCENT),
-            " abandon".fg(TEXT_MUTED),
-            "   ready".fg(Color::Rgb(70, 70, 80)),
-        ]),
-        Line::from(vec![
-            "    o".fg(ACCENT),
-            " reopen".fg(TEXT_MUTED),
-            "    blocked".fg(Color::Rgb(55, 55, 62)),
-        ]),
-        Line::from(vec![
-            "    a".fg(ACCENT),
-            " menu".fg(TEXT_MUTED),
-            "      ready".fg(Color::Rgb(70, 70, 80)),
-        ]),
-    ];
-
-    Paragraph::new(lines)
-        .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
-        .render(inner, buf);
-}
-
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 fn main() -> io::Result<()> {
@@ -456,12 +401,8 @@ fn main() -> io::Result<()> {
             render_tab_bar(tab_bar, frame.buffer_mut(), app.active_tab);
             render_status_bar(status_bar, frame.buffer_mut());
 
-            // Ops content: 62% list / 38% context
-            let [list_area, context_area] =
-                Layout::horizontal([Constraint::Fill(62), Constraint::Fill(38)]).areas(content);
-
-            render_ops_list(frame, list_area, app.selected);
-            render_context_panel(context_area, frame.buffer_mut());
+            // Ops content: full-width list (context panel removed in OPS-1)
+            render_ops_list(frame, content, app.selected);
         })?;
 
         if let crossterm::event::Event::Key(key) = crossterm::event::read()? {

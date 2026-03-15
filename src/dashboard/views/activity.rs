@@ -285,39 +285,6 @@ pub fn ops_selectable_count(
     ops_selectable_targets(rows, drill_batch, now_unix, stale_after_secs).len()
 }
 
-pub fn stale_active_thread_ids(
-    rows: &[ThreadStatusView],
-    drill_batch: Option<&str>,
-    now_unix: i64,
-    stale_after_secs: i64,
-) -> Vec<String> {
-    rows.iter()
-        .filter(|r| match drill_batch {
-            Some(batch) => r.batch_id.as_deref() == Some(batch),
-            None => true,
-        })
-        .filter(|r| r.thread_status == "Active")
-        .filter(|r| !is_running_now(r))
-        .filter(|r| (now_unix - r.thread_updated_at).max(0) >= stale_after_secs)
-        .map(|r| r.thread_id.clone())
-        .collect()
-}
-
-// Compatibility helpers retained for existing call sites/tests.
-pub fn selectable_indices(rows: &[ThreadStatusView]) -> Vec<usize> {
-    let ClassifiedRows {
-        running,
-        active_threads,
-        recently_completed,
-        ..
-    } = classify_rows(rows, None, 0, 3600);
-    running
-        .into_iter()
-        .chain(active_threads)
-        .chain(recently_completed)
-        .collect()
-}
-
 fn footer_counts(
     data: &ActivityData,
     now_unix: i64,
@@ -372,10 +339,6 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
             Style::new().fg(theme::TEXT_BRIGHT),
         ),
     ])
-}
-
-pub fn selectable_count(rows: &[ThreadStatusView]) -> usize {
-    selectable_indices(rows).len()
 }
 
 pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
@@ -523,7 +486,7 @@ fn render_ops_list(
                     theme::ACCENT,
                 )];
                 if is_selected {
-                    lines.push(make_batch_detail_line(batch, app.drill_batch.as_deref()));
+                    lines.push(make_batch_detail_line(batch));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -605,7 +568,7 @@ fn render_ops_list(
                     theme::TEXT_MUTED,
                 )];
                 if is_selected {
-                    lines.push(make_batch_detail_line(batch, app.drill_batch.as_deref()));
+                    lines.push(make_batch_detail_line(batch));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -640,7 +603,15 @@ fn render_ops_list(
 
     let visible_height = list_area.height as usize;
     let selected_display_idx = sel_to_row.get(selected_slot).copied().unwrap_or(0);
-    let scroll = compute_scroll(selected_display_idx, visible_height, items.len());
+    // Compute total display rows (sum of lines per ListItem) — items can be multi-line
+    // (e.g. selected items with inline detail, running items with progress summary).
+    let total_display_rows: usize = items.iter().map(|item| item.height()).sum();
+    // Compute the display-row offset of the selected item (sum of heights of preceding items).
+    let selected_row_offset: usize = items[..selected_display_idx]
+        .iter()
+        .map(|item| item.height())
+        .sum();
+    let scroll = compute_scroll(selected_row_offset, visible_height, total_display_rows);
 
     let mut state = ListState::default().with_selected(Some(selected_display_idx));
     *state.offset_mut() = scroll;
@@ -674,13 +645,10 @@ fn make_thread_detail_line(row: &ThreadStatusView) -> Line<'static> {
     ])
 }
 
-fn make_batch_detail_line(batch: &BatchProgress, drill_batch: Option<&str>) -> Line<'static> {
-    let is_drilled = drill_batch == Some(batch.batch_id.as_str());
-    let (key, label) = if is_drilled {
-        ("[Esc]", " back")
-    } else {
-        ("[Enter]", " drill")
-    };
+fn make_batch_detail_line(batch: &BatchProgress) -> Line<'static> {
+    // Batch rows only appear when drill_batch is None (Batches/Active Batches sections
+    // are guarded by `if app.drill_batch.is_none()`), so always show [Enter] drill.
+    let (key, label) = ("[Enter]", " drill");
     Line::from(vec![
         Span::raw("     \u{2514}\u{2500} "),
         Span::styled(
@@ -1020,24 +988,6 @@ mod tests {
             })
             .collect();
         assert_eq!(active_thread_ids[0], "newer");
-    }
-
-    #[test]
-    fn test_stale_active_thread_ids_filters_running_and_fresh() {
-        let rows = vec![
-            make_row("stale", Some("b1"), "Active", None, 100),
-            make_row("running", Some("b1"), "Active", Some("executing"), 100),
-            make_row("done", Some("b1"), "Active", Some("completed"), 100),
-            make_row("fresh", Some("b1"), "Active", None, 990),
-        ];
-        let ids = stale_active_thread_ids(&rows, Some("b1"), 1000, 300);
-        // "stale" and "done" are both Active, not running, and old enough.
-        // "running" is excluded (executing). "fresh" is excluded (too recent).
-        assert!(ids.contains(&"stale".to_string()));
-        assert!(ids.contains(&"done".to_string()));
-        assert!(!ids.contains(&"running".to_string()));
-        assert!(!ids.contains(&"fresh".to_string()));
-        assert_eq!(ids.len(), 2);
     }
 
     #[test]
