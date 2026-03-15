@@ -224,7 +224,17 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
-    let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+    let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+
+    // Log legacy worktree directory if it exists.
+    let legacy_worktree_dir = config.state_dir.join("worktrees");
+    if legacy_worktree_dir.exists() {
+        tracing::warn!(
+            "legacy worktree directory found at {}; worktrees now live at {{repo_root}}/../.aster-worktrees/. Remove manually: rm -rf {}",
+            legacy_worktree_dir.display(),
+            legacy_worktree_dir.display()
+        );
+    }
 
     // Start config file watcher and get a live-reloadable handle.
     let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;

@@ -60,6 +60,7 @@ pub async fn execute_trigger(
     stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
     worktree_manager: &Arc<WorktreeManager>,
     target_repo_root: &std::path::Path,
+    worktree_override_dir: Option<PathBuf>,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
     let thread_id = execution.thread_id.clone();
@@ -160,10 +161,11 @@ pub async fn execute_trigger(
     let execution_workdir = if agent_config.workspace.as_deref() == Some("worktree") {
         let wt_thread_id = execution.thread_id.clone();
         let wt_agent_workdir = agent_workdir.clone();
+        let wt_override = worktree_override_dir.clone();
         let wt_result = {
             let wt_mgr = worktree_manager.clone();
             tokio::task::spawn_blocking(move || {
-                wt_mgr.ensure_worktree(&wt_agent_workdir, &wt_thread_id)
+                wt_mgr.ensure_worktree(&wt_agent_workdir, &wt_thread_id, wt_override.as_deref())
             })
             .await
             .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)))

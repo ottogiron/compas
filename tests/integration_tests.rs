@@ -125,6 +125,7 @@ fn test_config() -> OrchestratorConfig {
                 retry_backoff_secs: 30,
             },
         ],
+        worktree_dir: None,
         orchestration: OrchestrationConfig::default(),
         database: DatabaseConfig::default(),
         notifications: Default::default(),
@@ -2491,8 +2492,7 @@ mod worktree_tests {
             .unwrap();
         assert!(commit.status.success(), "git commit failed");
 
-        let state_dir = tempfile::tempdir().unwrap();
-        let worktree_manager = std::sync::Arc::new(WorktreeManager::new(state_dir.path()));
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
 
         // Configure agent with worktree mode
         let agent_configs = vec![AgentConfig {
@@ -2543,13 +2543,18 @@ mod worktree_tests {
             None,
             &worktree_manager,
             repo_path,
+            None,
         )
         .await;
 
         assert!(output.success, "execution should succeed");
 
-        // Verify worktree was created
-        let wt_path = state_dir.path().join("worktrees").join("t-wt-1");
+        // Verify worktree was created at the new default location
+        let wt_path = repo_path
+            .parent()
+            .unwrap()
+            .join(".aster-worktrees")
+            .join("t-wt-1");
         assert!(wt_path.exists(), "worktree directory should exist");
 
         // Verify worktree path was stored in DB
@@ -2562,8 +2567,11 @@ mod worktree_tests {
 
         // Cleanup
         worktree_manager
-            .remove_worktree(repo_path, "t-wt-1")
+            .remove_worktree(repo_path, "t-wt-1", None)
             .unwrap();
+        // Also clean up the .aster-worktrees directory
+        let wt_root = repo_path.parent().unwrap().join(".aster-worktrees");
+        let _ = std::fs::remove_dir_all(&wt_root);
     }
 
     #[tokio::test]
@@ -2590,8 +2598,7 @@ mod worktree_tests {
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
         let registry = Arc::new(registry);
 
-        let state_dir = tempfile::tempdir().unwrap();
-        let worktree_manager = std::sync::Arc::new(WorktreeManager::new(state_dir.path()));
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
 
         // Create a thread and execution
         store.ensure_thread("t-shared-1", None).await.unwrap();
@@ -2626,6 +2633,7 @@ mod worktree_tests {
             None,
             &worktree_manager,
             std::path::Path::new("/tmp"),
+            None,
         )
         .await;
 
@@ -2667,7 +2675,7 @@ mod evo2_event_bus_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -2788,7 +2796,7 @@ mod prompt_hash_tests {
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
 
         let event_bus = EventBus::new();
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle.clone(),
             store.clone(),
@@ -2892,7 +2900,7 @@ mod prompt_hash_tests {
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
 
         let event_bus = EventBus::new();
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),

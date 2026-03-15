@@ -19,6 +19,10 @@ pub struct OrchestratorConfig {
     #[serde(default)]
     pub models: Option<Vec<ModelEntry>>,
     pub agents: Vec<AgentConfig>,
+    /// Optional override for worktree parent directory.
+    /// Default: `{repo_root}/../.aster-worktrees/`
+    #[serde(default)]
+    pub worktree_dir: Option<PathBuf>,
     #[serde(default)]
     pub orchestration: OrchestrationConfig,
     /// SQLite connection pool settings for MCP + worker.

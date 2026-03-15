@@ -179,6 +179,12 @@ pub struct ThreadRow {
     pub updated_at: i64,
 }
 
+/// A thread with an active worktree path (from the threads table).
+pub struct ThreadWorktreeEntry {
+    pub thread_id: String,
+    pub worktree_path: String,
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 /// Store wraps the shared SQLite pool.
@@ -591,6 +597,23 @@ impl Store {
                 .await
                 .map_err(|e| format!("get_thread_worktree_path failed: {}", e))?;
         Ok(row.and_then(|(p,)| p).map(std::path::PathBuf::from))
+    }
+
+    /// Return all threads with a worktree path set (may include threads pending cleanup).
+    pub async fn threads_with_worktree_paths(&self) -> Result<Vec<ThreadWorktreeEntry>, String> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT thread_id, worktree_path FROM threads WHERE worktree_path IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| format!("threads_with_worktree_paths failed: {}", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|(thread_id, worktree_path)| ThreadWorktreeEntry {
+                thread_id,
+                worktree_path,
+            })
+            .collect())
     }
 
     /// Find threads with worktrees that have reached terminal state and need cleanup.

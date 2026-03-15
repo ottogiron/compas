@@ -406,19 +406,26 @@ impl OrchestratorMcpServer {
         &self,
         params: WorktreesParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        let config = self.config.load();
-        let mgr = crate::worktree::WorktreeManager::new(&config.state_dir);
-        match mgr.list_worktrees() {
-            Ok(worktrees) => {
+        // Query worktree paths from the threads table (DB is the source of truth
+        // since worktrees can live in different locations per-agent workdir).
+        match self.store.threads_with_worktree_paths().await {
+            Ok(entries) => {
                 let filtered: Vec<_> = if let Some(ref tid) = params.thread_id {
-                    worktrees
+                    entries
                         .into_iter()
                         .filter(|w| w.thread_id == *tid)
                         .collect()
                 } else {
-                    worktrees
+                    entries
                 };
-                Ok(json_text(&filtered))
+                let infos: Vec<crate::worktree::WorktreeInfo> = filtered
+                    .into_iter()
+                    .map(|e| crate::worktree::WorktreeInfo {
+                        thread_id: e.thread_id,
+                        path: std::path::PathBuf::from(e.worktree_path),
+                    })
+                    .collect();
+                Ok(json_text(&infos))
             }
             Err(e) => Ok(err_text(format!("worktree list failed: {}", e))),
         }
