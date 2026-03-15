@@ -860,10 +860,11 @@ impl Store {
             return Ok(None);
         }
 
-        let row: Option<ExecutionRowBase> = sqlx::query_as(
+        let row: Option<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -873,25 +874,7 @@ impl Store {
         .await?;
 
         tx.commit().await?;
-        match row {
-            Some(base) => {
-                let mut exec = row_to_execution(base);
-                // Fetch retry fields (attempt_number) within the same connection scope.
-                let extra: Option<(i32, Option<i64>, Option<String>)> = sqlx::query_as(
-                    "SELECT attempt_number, retry_after, error_category FROM executions WHERE id = ?",
-                )
-                .bind(&exec_id)
-                .fetch_optional(&self.pool)
-                .await?;
-                if let Some((attempt, retry, cat)) = extra {
-                    exec.attempt_number = attempt;
-                    exec.retry_after = retry;
-                    exec.error_category = cat;
-                }
-                Ok(Some(exec))
-            }
-            None => Ok(None),
-        }
+        Ok(row.map(row_to_execution))
     }
 
     /// Update execution to 'executing' status.
@@ -1042,10 +1025,11 @@ impl Store {
         &self,
         thread_id: &str,
     ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
+        let rows: Vec<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1062,10 +1046,11 @@ impl Store {
         &self,
         thread_id: &str,
     ) -> Result<Option<ExecutionRow>, sqlx::Error> {
-        let row: Option<ExecutionRowBase> = sqlx::query_as(
+        let row: Option<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1091,10 +1076,11 @@ impl Store {
         agent_alias: &str,
         limit: i64,
     ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
+        let rows: Vec<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.agent_alias = ?
@@ -1109,10 +1095,11 @@ impl Store {
 
     /// Get the most recent executions across all agents, newest first.
     pub async fn recent_executions(&self, limit: i64) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
+        let rows: Vec<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              ORDER BY e.queued_at DESC LIMIT ?",
@@ -1263,10 +1250,11 @@ impl Store {
     }
 
     pub async fn get_execution(&self, id: &str) -> Result<Option<ExecutionRow>, sqlx::Error> {
-        let row: Option<ExecutionRowBase> = sqlx::query_as(
+        let row: Option<ExecutionRowDb> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1275,25 +1263,7 @@ impl Store {
         .fetch_optional(&self.pool)
         .await?;
 
-        match row {
-            Some(r) => {
-                let mut exec = row_to_execution(r);
-                // Fetch retry-specific fields separately (avoids 19-element tuple).
-                let extra: Option<(i32, Option<i64>, Option<String>)> = sqlx::query_as(
-                    "SELECT attempt_number, retry_after, error_category FROM executions WHERE id = ?",
-                )
-                .bind(id)
-                .fetch_optional(&self.pool)
-                .await?;
-                if let Some((attempt, retry, cat)) = extra {
-                    exec.attempt_number = attempt;
-                    exec.retry_after = retry;
-                    exec.error_category = cat;
-                }
-                Ok(Some(exec))
-            }
-            None => Ok(None),
-        }
+        Ok(row.map(row_to_execution))
     }
 
     /// Retrieve the backend-specific session ID from the most recent completed
@@ -1555,49 +1525,54 @@ fn row_to_message(
     }
 }
 
-/// Raw row type for execution queries (sqlx tuple derivation limited to 16 elements).
-/// Split into base (16) + extra (3) tuples to stay within sqlx limits.
-type ExecutionRowBase = (
-    String,
-    String,
-    Option<String>,
-    String,
-    Option<i64>,
-    String,
-    i64,
-    Option<i64>,
-    Option<i64>,
-    Option<i64>,
-    Option<i64>,
-    Option<i32>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-);
+/// Raw row struct for execution queries.
+///
+/// Uses `#[derive(sqlx::FromRow)]` instead of tuple derivation to avoid
+/// the 16-element tuple limit. Column aliases must match field names exactly.
+#[derive(sqlx::FromRow)]
+struct ExecutionRowDb {
+    id: String,
+    thread_id: String,
+    batch_id: Option<String>,
+    agent_alias: String,
+    dispatch_message_id: Option<i64>,
+    status: String,
+    queued_at: i64,
+    picked_up_at: Option<i64>,
+    started_at: Option<i64>,
+    finished_at: Option<i64>,
+    duration_ms: Option<i64>,
+    exit_code: Option<i32>,
+    output_preview: Option<String>,
+    error_detail: Option<String>,
+    parsed_intent: Option<String>,
+    prompt_hash: Option<String>,
+    attempt_number: i32,
+    retry_after: Option<i64>,
+    error_category: Option<String>,
+}
 
-fn row_to_execution(r: ExecutionRowBase) -> ExecutionRow {
+fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
     ExecutionRow {
-        id: r.0,
-        thread_id: r.1,
-        batch_id: r.2,
-        agent_alias: r.3,
-        dispatch_message_id: r.4,
-        status: r.5,
-        queued_at: r.6,
-        picked_up_at: r.7,
-        started_at: r.8,
-        finished_at: r.9,
-        duration_ms: r.10,
-        exit_code: r.11,
-        output_preview: r.12,
-        error_detail: r.13,
-        parsed_intent: r.14,
-        prompt_hash: r.15,
-        // Default values — populated by separate query when needed
-        attempt_number: 0,
-        retry_after: None,
-        error_category: None,
+        id: r.id,
+        thread_id: r.thread_id,
+        batch_id: r.batch_id,
+        agent_alias: r.agent_alias,
+        dispatch_message_id: r.dispatch_message_id,
+        status: r.status,
+        queued_at: r.queued_at,
+        picked_up_at: r.picked_up_at,
+        started_at: r.started_at,
+        finished_at: r.finished_at,
+        duration_ms: r.duration_ms,
+        exit_code: r.exit_code,
+        output_preview: r.output_preview,
+        error_detail: r.error_detail,
+        parsed_intent: r.parsed_intent,
+        prompt_hash: r.prompt_hash,
+        attempt_number: r.attempt_number,
+        retry_after: r.retry_after,
+        error_category: r.error_category,
     }
 }
 
