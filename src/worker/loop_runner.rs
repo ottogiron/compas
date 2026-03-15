@@ -625,9 +625,12 @@ async fn handle_trigger_output(
             let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
             let backoff_secs = agent_config.map(|a| a.retry_backoff_secs).unwrap_or(30);
             let next_attempt = output.attempt_number + 1;
-            // Exponential backoff: base * 2^attempt (capped at 1 hour)
-            let delay_secs =
-                (backoff_secs * 2u64.saturating_pow(output.attempt_number as u32)).min(3600);
+            // Exponential backoff: base * 2^attempt (capped at 1 hour).
+            // Cap exponent at 31 to prevent saturating_pow from overflowing u64.
+            let exponent = (output.attempt_number as u32).min(31);
+            let delay_secs = backoff_secs
+                .saturating_mul(2u64.saturating_pow(exponent))
+                .min(3600);
             let retry_after = chrono::Utc::now().timestamp() + delay_secs as i64;
 
             // Look up prompt_hash from the failed execution for continuity.
