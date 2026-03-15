@@ -622,7 +622,7 @@ mod store_tests {
 
         // Create execution linked to this message — marks it as triggered.
         store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -713,14 +713,14 @@ mod store_tests {
 
         // First insert succeeds
         let first = store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
         assert!(first.is_some());
 
         // Second insert with same dispatch_message_id is silently ignored
         let second = store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
         assert!(second.is_none());
@@ -1165,7 +1165,7 @@ mod lifecycle_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-abandon", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-abandon", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -1281,7 +1281,12 @@ mod lifecycle_tests {
         // Manually create execution (dispatch is now insert-only).
         server
             .store
-            .insert_execution_with_dispatch("t-full-lifecycle", "focused", Some(dispatch_msg_id))
+            .insert_execution_with_dispatch(
+                "t-full-lifecycle",
+                "focused",
+                Some(dispatch_msg_id),
+                None,
+            )
             .await
             .unwrap();
 
@@ -1425,7 +1430,7 @@ mod query_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-q-1", "focused", Some(msg1))
+            .insert_execution_with_dispatch("t-q-1", "focused", Some(msg1), None)
             .await
             .unwrap();
         let msg2 = server
@@ -1436,7 +1441,7 @@ mod query_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-q-2", "spark", Some(msg2))
+            .insert_execution_with_dispatch("t-q-2", "spark", Some(msg2), None)
             .await
             .unwrap();
     }
@@ -2261,7 +2266,7 @@ mod diagnose_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-diag-q", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-diag-q", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -2309,7 +2314,7 @@ mod diagnose_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-diag-hb", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-diag-hb", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -2506,7 +2511,7 @@ mod worktree_tests {
             .await
             .unwrap();
         let exec_id = store
-            .insert_execution_with_dispatch("t-wt-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-wt-1", "focused", Some(msg_id), None)
             .await
             .unwrap()
             .unwrap();
@@ -2589,7 +2594,7 @@ mod worktree_tests {
             .await
             .unwrap();
         let exec_id = store
-            .insert_execution_with_dispatch("t-shared-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-shared-1", "focused", Some(msg_id), None)
             .await
             .unwrap()
             .unwrap();
@@ -2675,7 +2680,7 @@ mod evo2_event_bus_tests {
             .unwrap();
 
         store
-            .insert_execution_with_dispatch(thread_id, &agent_alias, Some(msg_id))
+            .insert_execution_with_dispatch(thread_id, &agent_alias, Some(msg_id), None)
             .await
             .unwrap();
 

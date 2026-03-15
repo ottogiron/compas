@@ -1090,6 +1090,7 @@ mod tests {
             duration_ms: None,
             error_detail: None,
             parsed_intent: None,
+            prompt_hash: None,
         }
     }
 

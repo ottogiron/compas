@@ -449,6 +449,7 @@ impl OrchestratorMcpServer {
             finished_at: Option<i64>,
             duration_ms: Option<i64>,
             error: Option<String>,
+            prompt_hash: Option<String>,
         }
 
         let entries: Vec<TaskEntry> = views
@@ -463,6 +464,7 @@ impl OrchestratorMcpServer {
                 finished_at: v.finished_at,
                 duration_ms: v.duration_ms,
                 error: v.error_detail,
+                prompt_hash: v.prompt_hash,
             })
             .collect();
 
