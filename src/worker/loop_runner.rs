@@ -321,9 +321,14 @@ impl WorkerRunner {
                         });
 
                         // Strict provenance: execute only from the dispatch message
-                        // linked to this execution. Legacy/unlinked rows fall back to
-                        // an explicit placeholder instruction.
-                        let instruction = if let Some(dispatch_id) = execution.dispatch_message_id {
+                        // linked to this execution. Retry executions use
+                        // original_dispatch_message_id instead of dispatch_message_id
+                        // (the latter is reserved for the UNIQUE index on first dispatch).
+                        // Legacy/unlinked rows fall back to a placeholder instruction.
+                        let effective_dispatch_id = execution
+                            .dispatch_message_id
+                            .or(execution.original_dispatch_message_id);
+                        let instruction = if let Some(dispatch_id) = effective_dispatch_id {
                             match store.get_message(dispatch_id).await {
                                 Ok(Some(msg)) => msg.body,
                                 Ok(None) => {
@@ -633,17 +638,26 @@ async fn handle_trigger_output(
                 .min(3600);
             let retry_after = chrono::Utc::now().timestamp() + delay_secs as i64;
 
-            // Look up prompt_hash from the failed execution for continuity.
-            let prompt_hash = match store.get_execution(&output.execution_id).await {
-                Ok(Some(exec)) => exec.prompt_hash,
-                _ => None,
-            };
+            // Look up prompt_hash and resolve original dispatch message ID
+            // from the failed execution for continuity.
+            let (prompt_hash, orig_dispatch_id) =
+                match store.get_execution(&output.execution_id).await {
+                    Ok(Some(exec)) => {
+                        // For first retry: use dispatch_message_id from the original execution.
+                        // For subsequent retries: carry forward original_dispatch_message_id.
+                        let orig_id = exec
+                            .dispatch_message_id
+                            .or(exec.original_dispatch_message_id);
+                        (exec.prompt_hash, orig_id)
+                    }
+                    _ => (None, output.dispatch_message_id),
+                };
 
             match store
                 .insert_retry_execution(
                     &output.thread_id,
                     &output.agent_alias,
-                    output.dispatch_message_id,
+                    orig_dispatch_id,
                     prompt_hash.as_deref(),
                     next_attempt,
                     retry_after,

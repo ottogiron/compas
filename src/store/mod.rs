@@ -152,6 +152,9 @@ pub struct ExecutionRow {
     pub attempt_number: i32,
     pub retry_after: Option<i64>,
     pub error_category: Option<String>,
+    /// Points to the original dispatch message for retry executions.
+    /// Not part of the UNIQUE index (unlike `dispatch_message_id`).
+    pub original_dispatch_message_id: Option<i64>,
 }
 
 /// A stored execution event row (real-time telemetry).
@@ -320,6 +323,16 @@ impl Store {
             sqlx::query("ALTER TABLE executions ADD COLUMN error_category TEXT")
                 .execute(&self.pool)
                 .await?;
+        }
+        let has_orig_dispatch = columns
+            .iter()
+            .any(|c| c.1 == "original_dispatch_message_id");
+        if !has_orig_dispatch {
+            sqlx::query(
+                "ALTER TABLE executions ADD COLUMN original_dispatch_message_id INTEGER",
+            )
+            .execute(&self.pool)
+            .await?;
         }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_exec_dispatch_msg ON executions(dispatch_message_id)",
@@ -864,7 +877,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1029,7 +1043,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1050,7 +1065,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1080,7 +1096,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.agent_alias = ?
@@ -1099,7 +1116,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              ORDER BY e.queued_at DESC LIMIT ?",
@@ -1254,7 +1272,8 @@ impl Store {
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
-                    e.attempt_number, e.retry_after, e.error_category
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1326,23 +1345,24 @@ impl Store {
     /// and a `retry_after` timestamp for exponential backoff.
     ///
     /// The `dispatch_message_id` is intentionally NOT set on retry executions
-    /// to avoid violating the partial UNIQUE index. Retry chains are tracked
-    /// by (thread_id, agent_alias, attempt_number > 0).
+    /// to avoid violating the partial UNIQUE index. Instead,
+    /// `original_dispatch_message_id` (non-unique) links back to the
+    /// originating dispatch so the loop runner can resolve the instruction.
     ///
     /// Returns the new execution ID.
     pub async fn insert_retry_execution(
         &self,
         thread_id: &str,
         agent_alias: &str,
-        _dispatch_message_id: Option<i64>,
+        original_dispatch_message_id: Option<i64>,
         prompt_hash: Option<&str>,
         attempt_number: i32,
         retry_after: i64,
     ) -> Result<String, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
         sqlx::query(
-            "INSERT INTO executions (id, thread_id, agent_alias, status, prompt_hash, attempt_number, retry_after)
-             VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+            "INSERT INTO executions (id, thread_id, agent_alias, status, prompt_hash, attempt_number, retry_after, original_dispatch_message_id)
+             VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(thread_id)
@@ -1350,6 +1370,7 @@ impl Store {
         .bind(prompt_hash)
         .bind(attempt_number)
         .bind(retry_after)
+        .bind(original_dispatch_message_id)
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -1537,6 +1558,7 @@ struct ExecutionRowDb {
     attempt_number: i32,
     retry_after: Option<i64>,
     error_category: Option<String>,
+    original_dispatch_message_id: Option<i64>,
 }
 
 fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
@@ -1560,6 +1582,7 @@ fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
         attempt_number: r.attempt_number,
         retry_after: r.retry_after,
         error_category: r.error_category,
+        original_dispatch_message_id: r.original_dispatch_message_id,
     }
 }
 
