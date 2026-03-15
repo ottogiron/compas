@@ -5,9 +5,10 @@
 //! pattern: full-screen overlay that replaces the tab bar.
 
 use chrono::{TimeZone, Utc};
+use pulldown_cmark::{Event, HeadingLevel, Tag, TagEnd};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style, Stylize},
+    style::{Color, Modifier, Style, Stylize},
     symbols::border,
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, Wrap},
@@ -186,6 +187,170 @@ fn intent_color(intent: &str) -> Color {
     }
 }
 
+/// Parse markdown body text and return styled ratatui lines, each prefixed with `│ `.
+fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
+    let prefix = Span::styled("│ ", Style::default().fg(border_color));
+
+    let parser = pulldown_cmark::Parser::new(body);
+
+    // Style stack: accumulates modifier/color state from nested tags.
+    let mut style_stack: Vec<Style> = vec![Style::default().fg(TEXT_NORMAL)];
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    let mut result: Vec<Line<'static>> = Vec::new();
+    let mut in_code_block = false;
+    let mut in_heading = false;
+    let mut list_depth: usize = 0;
+
+    let current_style = |stack: &[Style]| -> Style {
+        stack
+            .last()
+            .copied()
+            .unwrap_or(Style::default().fg(TEXT_NORMAL))
+    };
+
+    let flush_line = |spans: &mut Vec<Span<'static>>,
+                      result: &mut Vec<Line<'static>>,
+                      prefix: &Span<'static>| {
+        let mut line_spans = vec![prefix.clone()];
+        line_spans.append(spans);
+        result.push(Line::from(line_spans));
+    };
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                in_heading = true;
+                let heading_style = match level {
+                    HeadingLevel::H1 => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    _ => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                };
+                style_stack.push(heading_style);
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                flush_line(&mut current_spans, &mut result, &prefix);
+                style_stack.pop();
+                in_heading = false;
+            }
+            Event::Start(Tag::Paragraph) => {
+                // No extra action needed — text events will accumulate.
+            }
+            Event::End(TagEnd::Paragraph) => {
+                if !current_spans.is_empty() {
+                    flush_line(&mut current_spans, &mut result, &prefix);
+                }
+                // Add blank line after paragraph (unless in heading — already handled).
+                if !in_heading {
+                    result.push(Line::from(vec![prefix.clone()]));
+                }
+            }
+            Event::Start(Tag::Emphasis) => {
+                style_stack.push(current_style(&style_stack).add_modifier(Modifier::ITALIC));
+            }
+            Event::End(TagEnd::Emphasis) => {
+                style_stack.pop();
+            }
+            Event::Start(Tag::Strong) => {
+                style_stack.push(current_style(&style_stack).add_modifier(Modifier::BOLD));
+            }
+            Event::End(TagEnd::Strong) => {
+                style_stack.pop();
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
+                in_code_block = true;
+                if !current_spans.is_empty() {
+                    flush_line(&mut current_spans, &mut result, &prefix);
+                }
+            }
+            Event::End(TagEnd::CodeBlock) => {
+                in_code_block = false;
+            }
+            Event::Start(Tag::List(_)) => {
+                list_depth += 1;
+            }
+            Event::End(TagEnd::List(_)) => {
+                list_depth = list_depth.saturating_sub(1);
+            }
+            Event::Start(Tag::Item) => {
+                let indent = "  ".repeat(list_depth.saturating_sub(1));
+                current_spans.push(Span::styled(
+                    format!("{}• ", indent),
+                    Style::default().fg(TEXT_MUTED),
+                ));
+            }
+            Event::End(TagEnd::Item) => {
+                if !current_spans.is_empty() {
+                    flush_line(&mut current_spans, &mut result, &prefix);
+                }
+            }
+            Event::Code(text) => {
+                current_spans.push(Span::styled(
+                    text.to_string(),
+                    Style::default().fg(Color::Cyan),
+                ));
+            }
+            Event::Text(text) => {
+                if in_code_block {
+                    // Code blocks: render each line with dim style.
+                    let code_style = Style::default().fg(TEXT_MUTED);
+                    for (i, code_line) in text.lines().enumerate() {
+                        if i > 0 {
+                            flush_line(&mut current_spans, &mut result, &prefix);
+                        }
+                        current_spans.push(Span::styled(code_line.to_string(), code_style));
+                    }
+                } else {
+                    // Normal text: split on newlines to preserve source line breaks.
+                    for (i, segment) in text.lines().enumerate() {
+                        if i > 0 {
+                            flush_line(&mut current_spans, &mut result, &prefix);
+                        }
+                        current_spans.push(Span::styled(
+                            segment.to_string(),
+                            current_style(&style_stack),
+                        ));
+                    }
+                }
+            }
+            Event::SoftBreak => {
+                // Treat soft break as a space (CommonMark default).
+                current_spans.push(Span::styled(" ".to_string(), current_style(&style_stack)));
+            }
+            Event::HardBreak => {
+                flush_line(&mut current_spans, &mut result, &prefix);
+            }
+            Event::Rule => {
+                if !current_spans.is_empty() {
+                    flush_line(&mut current_spans, &mut result, &prefix);
+                }
+                result.push(Line::from(vec![
+                    prefix.clone(),
+                    Span::styled(
+                        "────────────────────────────────────────────",
+                        Style::default().fg(TEXT_DIM),
+                    ),
+                ]));
+            }
+            // Tables, footnotes, etc. — pass through as raw text (monospace).
+            _ => {}
+        }
+    }
+
+    // Flush any remaining spans.
+    if !current_spans.is_empty() {
+        flush_line(&mut current_spans, &mut result, &prefix);
+    }
+
+    // Trim trailing empty prefix-only lines.
+    while result
+        .last()
+        .is_some_and(|l| l.spans.len() == 1 && l.spans[0].content.as_ref() == "│ ")
+    {
+        result.pop();
+    }
+
+    result
+}
+
 /// Append styled lines for a single message into `lines`.
 fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
     let ts = format_timestamp(msg.created_at);
@@ -207,17 +372,12 @@ fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
         ts.fg(TEXT_DIM),
     ]));
 
-    // Body — each source line gets a "│ " prefix
+    // Body — markdown-rendered with "│ " prefix per line
     let body = &msg.body;
     if body.is_empty() {
         lines.push(Line::from(vec!["│ ".fg(TEXT_DIM), "(empty)".fg(TEXT_DIM)]));
     } else {
-        for body_line in body.lines() {
-            lines.push(Line::from(vec![
-                "│ ".fg(TEXT_DIM),
-                body_line.to_string().fg(TEXT_NORMAL),
-            ]));
-        }
+        lines.extend(markdown_to_lines(body, TEXT_DIM));
     }
 }
 
@@ -610,10 +770,12 @@ mod tests {
         let msg = make_message(1, "agent", "review-request", "line one\nline two");
         let mut lines: Vec<Line<'static>> = Vec::new();
         push_message_lines(&msg, &mut lines);
-        // Lines: header, "│ line one", "│ line two"
-        assert_eq!(lines.len(), 3);
-        let line_one_text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(line_one_text.contains("line one"));
+        // Markdown treats "line one\nline two" as a single paragraph with soft break.
+        // Lines: header, "│ line one line two" (no borders — CONV-3 removed them)
+        assert_eq!(lines.len(), 2);
+        let body_text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(body_text.contains("line one"));
+        assert!(body_text.contains("line two"));
     }
 
     #[test]
@@ -642,5 +804,124 @@ mod tests {
         let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("✗"));
         assert!(text.contains("Failed"));
+    }
+
+    // ── Markdown rendering tests ──────────────────────────────────────────
+
+    /// Helper: collect all span text from markdown_to_lines output.
+    fn md_text(body: &str) -> Vec<String> {
+        markdown_to_lines(body, TEXT_DIM)
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_markdown_plain_text() {
+        let lines = md_text("hello world");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("hello world"));
+    }
+
+    #[test]
+    fn test_markdown_empty_body() {
+        let lines = markdown_to_lines("", TEXT_DIM);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_heading() {
+        let lines = md_text("## Summary");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("Summary"));
+    }
+
+    #[test]
+    fn test_markdown_heading_has_bold_accent_style() {
+        let lines = markdown_to_lines("## Summary", TEXT_DIM);
+        // Skip prefix span (index 0), check the text span style.
+        let text_span = &lines[0].spans[1];
+        assert_eq!(text_span.style.fg, Some(ACCENT));
+        assert!(text_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_markdown_bold_text() {
+        let lines = markdown_to_lines("**bold**", TEXT_DIM);
+        // Spans: prefix, bold text
+        let text_span = &lines[0].spans[1];
+        assert!(text_span.style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(text_span.content.as_ref(), "bold");
+    }
+
+    #[test]
+    fn test_markdown_italic_text() {
+        let lines = markdown_to_lines("*italic*", TEXT_DIM);
+        let text_span = &lines[0].spans[1];
+        assert!(text_span.style.add_modifier.contains(Modifier::ITALIC));
+        assert_eq!(text_span.content.as_ref(), "italic");
+    }
+
+    #[test]
+    fn test_markdown_inline_code() {
+        let lines = markdown_to_lines("`code`", TEXT_DIM);
+        let code_span = &lines[0].spans[1];
+        assert_eq!(code_span.style.fg, Some(Color::Cyan));
+        assert_eq!(code_span.content.as_ref(), "code");
+    }
+
+    #[test]
+    fn test_markdown_code_block() {
+        let lines = md_text("```\nfn main() {}\n```");
+        // Should have at least one line with code content.
+        let has_code = lines.iter().any(|l| l.contains("fn main()"));
+        assert!(has_code);
+    }
+
+    #[test]
+    fn test_markdown_bullet_list() {
+        let body = "- item one\n- item two";
+        let lines = md_text(body);
+        let has_bullet = lines
+            .iter()
+            .any(|l| l.contains("•") && l.contains("item one"));
+        assert!(has_bullet, "Expected bullet prefix: {:?}", lines);
+    }
+
+    #[test]
+    fn test_markdown_thematic_break() {
+        let lines = md_text("above\n\n---\n\nbelow");
+        let has_rule = lines.iter().any(|l| l.contains("────"));
+        assert!(has_rule, "Expected thematic break line: {:?}", lines);
+    }
+
+    #[test]
+    fn test_markdown_all_lines_have_prefix() {
+        let body = "## Header\n\nSome **bold** text.\n\n- item\n\n```\ncode\n```\n\n---";
+        let lines = markdown_to_lines(body, TEXT_DIM);
+        for (i, line) in lines.iter().enumerate() {
+            assert!(!line.spans.is_empty(), "Line {} should not be empty", i);
+            assert_eq!(
+                line.spans[0].content.as_ref(),
+                "│ ",
+                "Line {} should start with │ prefix",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_markdown_no_panic_on_malformed() {
+        // Various edge cases that should not panic.
+        let _ = markdown_to_lines("```", TEXT_DIM);
+        let _ = markdown_to_lines("**unclosed bold", TEXT_DIM);
+        let _ = markdown_to_lines("# ", TEXT_DIM);
+        let _ = markdown_to_lines("---\n---\n---", TEXT_DIM);
+        let _ = markdown_to_lines("```\n```\n```", TEXT_DIM);
     }
 }

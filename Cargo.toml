@@ -38,6 +38,9 @@ chrono = { version = "0.4", features = ["serde"] }
 ratatui = "0.30"
 crossterm = "0.29"
 
+# Markdown rendering
+pulldown-cmark = "0.13"
+
 # Config live-reload
 arc-swap = "1"
 notify-debouncer-mini = "0.7"
