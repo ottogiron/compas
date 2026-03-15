@@ -873,7 +873,25 @@ impl Store {
         .await?;
 
         tx.commit().await?;
-        Ok(row.map(row_to_execution))
+        match row {
+            Some(base) => {
+                let mut exec = row_to_execution(base);
+                // Fetch retry fields (attempt_number) within the same connection scope.
+                let extra: Option<(i32, Option<i64>, Option<String>)> = sqlx::query_as(
+                    "SELECT attempt_number, retry_after, error_category FROM executions WHERE id = ?",
+                )
+                .bind(&exec_id)
+                .fetch_optional(&self.pool)
+                .await?;
+                if let Some((attempt, retry, cat)) = extra {
+                    exec.attempt_number = attempt;
+                    exec.retry_after = retry;
+                    exec.error_category = cat;
+                }
+                Ok(Some(exec))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Update execution to 'executing' status.

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::backend::registry::BackendRegistry;
-use crate::backend::BackendOutput;
+use crate::backend::{BackendOutput, ErrorCategory};
 use crate::config::types::AgentConfig;
 use crate::model::agent::Agent;
 use crate::store::{ExecutionRow, ExecutionStatus, Store};
@@ -25,6 +25,14 @@ pub struct TriggerOutput {
     pub exit_code: Option<i32>,
     pub duration_ms: i64,
     pub parsed_intent: Option<String>,
+    /// Classified error category for failure cases.
+    pub error_category: Option<ErrorCategory>,
+    /// Current attempt number (0-based).
+    pub attempt_number: i32,
+    /// The dispatch message ID that originated this execution chain.
+    pub dispatch_message_id: Option<i64>,
+    /// Whether the execution timed out.
+    pub timed_out: bool,
 }
 
 /// Execute a trigger for a claimed execution row.
@@ -57,6 +65,9 @@ pub async fn execute_trigger(
     let thread_id = execution.thread_id.clone();
     let agent_alias = execution.agent_alias.clone();
 
+    let dispatch_message_id = execution.dispatch_message_id;
+    let attempt_number = execution.attempt_number;
+
     // Mark as executing
     if let Err(e) = store.mark_execution_executing(&exec_id).await {
         tracing::error!(exec_id = %exec_id, error = %e, "failed to mark execution as executing");
@@ -69,6 +80,10 @@ pub async fn execute_trigger(
             exit_code: None,
             duration_ms: 0,
             parsed_intent: None,
+            error_category: None,
+            attempt_number,
+            dispatch_message_id,
+            timed_out: false,
         };
     }
 
@@ -84,7 +99,6 @@ pub async fn execute_trigger(
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
             }
-            let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -94,6 +108,10 @@ pub async fn execute_trigger(
                 exit_code: None,
                 duration_ms: 0,
                 parsed_intent: None,
+                error_category: Some(ErrorCategory::Unknown),
+                attempt_number,
+                dispatch_message_id,
+                timed_out: false,
             };
         }
     };
@@ -110,7 +128,6 @@ pub async fn execute_trigger(
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
             }
-            let _ = store.mark_thread_failed_if_active(&thread_id).await;
             return TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -120,6 +137,10 @@ pub async fn execute_trigger(
                 exit_code: None,
                 duration_ms: 0,
                 parsed_intent: None,
+                error_category: Some(ErrorCategory::Unknown),
+                attempt_number,
+                dispatch_message_id,
+                timed_out: false,
             };
         }
     };
@@ -234,6 +255,7 @@ pub async fn execute_trigger(
             // Intent is already parsed by the backend — no executor-side parsing needed.
             let parsed_intent = result.parsed_intent.clone();
             let output_text = result.result_text.clone();
+            let error_category = result.error_category.clone();
 
             if result.success {
                 match store
@@ -296,7 +318,15 @@ pub async fn execute_trigger(
                     }
                     _ => {}
                 }
-                let _ = store.mark_thread_failed_if_active(&thread_id).await;
+                // Persist error category for diagnostics.
+                if let Some(ref cat) = error_category {
+                    if let Err(e) = store.set_error_category(&exec_id, cat.as_str()).await {
+                        tracing::warn!(exec_id = %exec_id, error = %e, "failed to persist error_category");
+                    }
+                }
+                // NOTE: mark_thread_failed_if_active is NOT called here —
+                // it is handled by handle_trigger_output which decides whether
+                // to retry or mark terminal.
             }
 
             TriggerOutput {
@@ -308,13 +338,25 @@ pub async fn execute_trigger(
                 exit_code: if result.success { Some(0) } else { Some(1) },
                 duration_ms,
                 parsed_intent,
+                error_category,
+                attempt_number,
+                dispatch_message_id,
+                timed_out: false,
             }
         }
         Err(err) => {
-            let status = if err.contains("timed out") {
+            let timed_out = err.contains("timed out");
+            let status = if timed_out {
                 ExecutionStatus::TimedOut
             } else {
                 ExecutionStatus::Failed
+            };
+            // Classify the error from the raw error message.
+            let error_category = if timed_out {
+                // Timeouts are not retried per design — they indicate hung backends.
+                Some(ErrorCategory::Unknown)
+            } else {
+                Some(crate::backend::classify_error(false, false, &err))
             };
             if let Ok(0) = store
                 .fail_execution(&exec_id, &err, None, duration_ms, status)
@@ -322,7 +364,15 @@ pub async fn execute_trigger(
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
             }
-            let _ = store.mark_thread_failed_if_active(&thread_id).await;
+            // Persist error category for diagnostics.
+            if let Some(ref cat) = error_category {
+                if let Err(e) = store.set_error_category(&exec_id, cat.as_str()).await {
+                    tracing::warn!(exec_id = %exec_id, error = %e, "failed to persist error_category");
+                }
+            }
+            // NOTE: mark_thread_failed_if_active is NOT called here —
+            // it is handled by handle_trigger_output which decides whether
+            // to retry or mark terminal.
             TriggerOutput {
                 execution_id: exec_id,
                 thread_id,
@@ -332,6 +382,10 @@ pub async fn execute_trigger(
                 exit_code: None,
                 duration_ms,
                 parsed_intent: None,
+                error_category,
+                attempt_number,
+                dispatch_message_id,
+                timed_out,
             }
         }
     }
