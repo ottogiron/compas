@@ -622,7 +622,7 @@ mod store_tests {
 
         // Create execution linked to this message — marks it as triggered.
         store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -713,14 +713,14 @@ mod store_tests {
 
         // First insert succeeds
         let first = store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
         assert!(first.is_some());
 
         // Second insert with same dispatch_message_id is silently ignored
         let second = store
-            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(msg_id), None)
             .await
             .unwrap();
         assert!(second.is_none());
@@ -1165,7 +1165,7 @@ mod lifecycle_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-abandon", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-abandon", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -1281,7 +1281,12 @@ mod lifecycle_tests {
         // Manually create execution (dispatch is now insert-only).
         server
             .store
-            .insert_execution_with_dispatch("t-full-lifecycle", "focused", Some(dispatch_msg_id))
+            .insert_execution_with_dispatch(
+                "t-full-lifecycle",
+                "focused",
+                Some(dispatch_msg_id),
+                None,
+            )
             .await
             .unwrap();
 
@@ -1425,7 +1430,7 @@ mod query_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-q-1", "focused", Some(msg1))
+            .insert_execution_with_dispatch("t-q-1", "focused", Some(msg1), None)
             .await
             .unwrap();
         let msg2 = server
@@ -1436,7 +1441,7 @@ mod query_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-q-2", "spark", Some(msg2))
+            .insert_execution_with_dispatch("t-q-2", "spark", Some(msg2), None)
             .await
             .unwrap();
     }
@@ -2261,7 +2266,7 @@ mod diagnose_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-diag-q", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-diag-q", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -2309,7 +2314,7 @@ mod diagnose_tests {
             .unwrap();
         server
             .store
-            .insert_execution_with_dispatch("t-diag-hb", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-diag-hb", "focused", Some(msg_id), None)
             .await
             .unwrap();
 
@@ -2506,7 +2511,7 @@ mod worktree_tests {
             .await
             .unwrap();
         let exec_id = store
-            .insert_execution_with_dispatch("t-wt-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-wt-1", "focused", Some(msg_id), None)
             .await
             .unwrap()
             .unwrap();
@@ -2589,7 +2594,7 @@ mod worktree_tests {
             .await
             .unwrap();
         let exec_id = store
-            .insert_execution_with_dispatch("t-shared-1", "focused", Some(msg_id))
+            .insert_execution_with_dispatch("t-shared-1", "focused", Some(msg_id), None)
             .await
             .unwrap()
             .unwrap();
@@ -2675,7 +2680,7 @@ mod evo2_event_bus_tests {
             .unwrap();
 
         store
-            .insert_execution_with_dispatch(thread_id, &agent_alias, Some(msg_id))
+            .insert_execution_with_dispatch(thread_id, &agent_alias, Some(msg_id), None)
             .await
             .unwrap();
 
@@ -2736,6 +2741,182 @@ mod evo2_event_bus_tests {
             has_message,
             "expected MessageReceived event, got: {:?}",
             event_names
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ORCH-EVO-13 — Prompt Hash Round-Trip Integration Test
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod prompt_hash_tests {
+    use super::*;
+    use aster_orch::events::EventBus;
+    use aster_orch::worker::WorkerRunner;
+    use sha2::{Digest, Sha256};
+    use tokio::sync::Semaphore;
+
+    fn expected_hash(prompt: &str) -> String {
+        let mut h = Sha256::new();
+        h.update(prompt.as_bytes());
+        format!("{:x}", h.finalize())
+    }
+
+    /// Verify that `scan_and_enqueue_triggers` stores the SHA-256 hash of the
+    /// agent prompt on the execution row and that it round-trips through both
+    /// `orch_tasks` and `orch_transcript`.
+    #[tokio::test]
+    async fn test_prompt_hash_round_trip_through_worker_and_mcp() {
+        let store = test_store().await;
+        let config = test_config(); // "focused" has prompt "You are a test agent."
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let runner = WorkerRunner::new(
+            config_handle.clone(),
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Insert a trigger message addressed to the "focused" agent (which has
+        // prompt = "You are a test agent." in test_config()).
+        let thread_id = "t-hash-rt";
+        store.ensure_thread(thread_id, None).await.unwrap();
+        store
+            .insert_message(
+                thread_id,
+                "operator",
+                "focused",
+                "dispatch",
+                "do something",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // scan_and_enqueue_triggers runs inside poll_once before the claim loop.
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // The hash must be stored at enqueue time, so it's readable immediately.
+        let views = store
+            .status_view(Some(thread_id), None, None, 10)
+            .await
+            .unwrap();
+        let view = views
+            .iter()
+            .find(|v| v.execution_id.is_some())
+            .expect("expected at least one execution");
+
+        let known_prompt = "You are a test agent.";
+        assert_eq!(
+            view.prompt_hash.as_deref(),
+            Some(expected_hash(known_prompt).as_str()),
+            "prompt_hash in store should match sha256 of the known agent prompt"
+        );
+
+        // Build an MCP server backed by the same store and verify the hash
+        // appears in orch_tasks output.
+        let server = OrchestratorMcpServer::new(config_handle, store, BackendRegistry::new());
+        let tasks_result = server
+            .tasks_impl(TasksParams {
+                alias: Some("focused".to_string()),
+                batch_id: None,
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+        assert!(!is_error(&tasks_result));
+        let json = extract_json(&tasks_result);
+        let entry = json
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["thread_id"] == thread_id)
+            .expect("expected task entry for the thread");
+        assert_eq!(
+            entry["prompt_hash"].as_str(),
+            Some(expected_hash(known_prompt).as_str()),
+            "orch_tasks must surface prompt_hash"
+        );
+
+        // Also verify prompt_hash appears in orch_transcript executions.
+        let transcript_result = server
+            .transcript_impl(TranscriptParams {
+                thread_id: thread_id.to_string(),
+            })
+            .await
+            .unwrap();
+        assert!(!is_error(&transcript_result));
+        let tjson = extract_json(&transcript_result);
+        let exec_entry = tjson["executions"]
+            .as_array()
+            .unwrap()
+            .first()
+            .expect("expected at least one execution in transcript");
+        assert_eq!(
+            exec_entry["prompt_hash"].as_str(),
+            Some(expected_hash(known_prompt).as_str()),
+            "orch_transcript must surface prompt_hash"
+        );
+    }
+
+    /// Agents without a prompt field must have prompt_hash = null (not a hash
+    /// of the empty string).
+    #[tokio::test]
+    async fn test_prompt_hash_null_for_prompt_less_agent() {
+        let store = test_store().await;
+        let config = test_config(); // "spark" has prompt: None
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new(&config.state_dir);
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "t-hash-null";
+        store.ensure_thread(thread_id, None).await.unwrap();
+        store
+            .insert_message(
+                thread_id,
+                "operator",
+                "spark", // prompt: None in test_config
+                "dispatch",
+                "do something",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        let views = store
+            .status_view(Some(thread_id), None, None, 10)
+            .await
+            .unwrap();
+        let view = views
+            .iter()
+            .find(|v| v.execution_id.is_some())
+            .expect("expected at least one execution");
+
+        assert_eq!(
+            view.prompt_hash, None,
+            "prompt_hash must be None when the agent has no prompt field"
         );
     }
 }

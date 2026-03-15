@@ -20,6 +20,7 @@ struct StatusEntry {
     started_at: Option<i64>,
     duration_ms: Option<i64>,
     error: Option<String>,
+    prompt_hash: Option<String>,
 }
 
 impl From<ThreadStatusView> for StatusEntry {
@@ -33,6 +34,7 @@ impl From<ThreadStatusView> for StatusEntry {
             started_at: v.started_at,
             duration_ms: v.duration_ms,
             error: v.error_detail,
+            prompt_hash: v.prompt_hash,
         }
     }
 }
@@ -106,6 +108,7 @@ impl OrchestratorMcpServer {
             duration_ms: Option<i64>,
             exit_code: Option<i32>,
             error: Option<String>,
+            prompt_hash: Option<String>,
         }
 
         #[derive(Serialize)]
@@ -146,6 +149,7 @@ impl OrchestratorMcpServer {
                     duration_ms: e.duration_ms,
                     exit_code: e.exit_code,
                     error: e.error_detail,
+                    prompt_hash: e.prompt_hash,
                 })
                 .collect(),
         };
@@ -449,6 +453,7 @@ impl OrchestratorMcpServer {
             finished_at: Option<i64>,
             duration_ms: Option<i64>,
             error: Option<String>,
+            prompt_hash: Option<String>,
         }
 
         let entries: Vec<TaskEntry> = views
@@ -463,6 +468,7 @@ impl OrchestratorMcpServer {
                 finished_at: v.finished_at,
                 duration_ms: v.duration_ms,
                 error: v.error_detail,
+                prompt_hash: v.prompt_hash,
             })
             .collect();
 

@@ -148,6 +148,7 @@ pub struct ExecutionRow {
     pub output_preview: Option<String>,
     pub error_detail: Option<String>,
     pub parsed_intent: Option<String>,
+    pub prompt_hash: Option<String>,
 }
 
 /// A stored execution event row (real-time telemetry).
@@ -254,7 +255,8 @@ impl Store {
                 output_preview      TEXT,
                 error_detail        TEXT,
                 parsed_intent       TEXT,
-                backend_session_id  TEXT
+                backend_session_id  TEXT,
+                prompt_hash         TEXT
             )",
         )
         .execute(&self.pool)
@@ -286,6 +288,12 @@ impl Store {
         let has_backend_session_id = columns.iter().any(|c| c.1 == "backend_session_id");
         if !has_backend_session_id {
             sqlx::query("ALTER TABLE executions ADD COLUMN backend_session_id TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_prompt_hash = columns.iter().any(|c| c.1 == "prompt_hash");
+        if !has_prompt_hash {
+            sqlx::query("ALTER TABLE executions ADD COLUMN prompt_hash TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -697,7 +705,7 @@ impl Store {
         thread_id: &str,
         agent_alias: &str,
     ) -> Result<String, sqlx::Error> {
-        self.insert_execution_with_dispatch(thread_id, agent_alias, None)
+        self.insert_execution_with_dispatch(thread_id, agent_alias, None, None)
             .await
             .map(|opt| opt.expect("insert without dispatch_message_id should always succeed"))
     }
@@ -708,21 +716,26 @@ impl Store {
     /// `dispatch_message_id` (guarded by a partial UNIQUE index) silently
     /// succeed. Returns `Some(id)` on insert, `None` if the message was
     /// already enqueued.
+    ///
+    /// `prompt_hash` is the SHA-256 hex digest of the agent prompt at dispatch
+    /// time, stored once for prompt-to-outcome correlation.
     pub async fn insert_execution_with_dispatch(
         &self,
         thread_id: &str,
         agent_alias: &str,
         dispatch_message_id: Option<i64>,
+        prompt_hash: Option<&str>,
     ) -> Result<Option<String>, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO executions (id, thread_id, agent_alias, dispatch_message_id, status)
-             VALUES (?, ?, ?, ?, 'queued')",
+            "INSERT OR IGNORE INTO executions (id, thread_id, agent_alias, dispatch_message_id, status, prompt_hash)
+             VALUES (?, ?, ?, ?, 'queued', ?)",
         )
         .bind(&id)
         .bind(thread_id)
         .bind(agent_alias)
         .bind(dispatch_message_id)
+        .bind(prompt_hash)
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
@@ -838,10 +851,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1018,10 +1032,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1054,10 +1069,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1099,10 +1115,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.agent_alias = ?
@@ -1133,10 +1150,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              ORDER BY e.queued_at DESC LIMIT ?",
@@ -1172,7 +1190,7 @@ impl Store {
             "SELECT t.thread_id, t.batch_id, t.status, t.created_at, t.updated_at,
                     e.id, COALESCE(e.agent_alias, m.to_alias), e.status, e.queued_at,
                     e.started_at, e.finished_at, e.duration_ms,
-                    e.error_detail, e.parsed_intent
+                    e.error_detail, e.parsed_intent, e.prompt_hash
              FROM threads t
              LEFT JOIN executions e ON e.thread_id = t.thread_id
                AND e.queued_at = (SELECT MAX(e2.queued_at) FROM executions e2 WHERE e2.thread_id = t.thread_id)
@@ -1206,6 +1224,7 @@ impl Store {
             Option<i64>,
             Option<String>,
             Option<String>,
+            Option<String>,
         );
         let mut query = sqlx::query_as::<_, Row>(&sql);
         if let Some(t) = thread_id {
@@ -1237,6 +1256,7 @@ impl Store {
                 duration_ms: r.11,
                 error_detail: r.12,
                 parsed_intent: r.13,
+                prompt_hash: r.14,
             })
             .collect())
     }
@@ -1301,10 +1321,11 @@ impl Store {
             Option<String>,
             Option<String>,
             Option<String>,
+            Option<String>,
         )> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
-                    exit_code, output_preview, error_detail, parsed_intent
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1481,6 +1502,7 @@ pub struct ThreadStatusView {
     pub duration_ms: Option<i64>,
     pub error_detail: Option<String>,
     pub parsed_intent: Option<String>,
+    pub prompt_hash: Option<String>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -1526,6 +1548,7 @@ fn row_to_execution(
         Option<String>,
         Option<String>,
         Option<String>,
+        Option<String>,
     ),
 ) -> ExecutionRow {
     ExecutionRow {
@@ -1544,6 +1567,7 @@ fn row_to_execution(
         output_preview: r.12,
         error_detail: r.13,
         parsed_intent: r.14,
+        prompt_hash: r.15,
     }
 }
 
@@ -1662,12 +1686,38 @@ mod tests {
             .unwrap();
 
         let exec_id = store
-            .insert_execution_with_dispatch("t-1", "focused", Some(dispatch_id))
+            .insert_execution_with_dispatch("t-1", "focused", Some(dispatch_id), None)
             .await
             .unwrap()
             .expect("first insert should succeed");
         let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
         assert_eq!(exec.dispatch_message_id, Some(dispatch_id));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_hash_stored_and_retrieved() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        let exec_id = store
+            .insert_execution_with_dispatch("t-1", "focused", None, Some("abc123hash"))
+            .await
+            .unwrap()
+            .expect("insert should succeed");
+
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.prompt_hash.as_deref(), Some("abc123hash"));
+    }
+
+    #[tokio::test]
+    async fn test_prompt_hash_null_when_not_provided() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.prompt_hash, None);
     }
 
     #[tokio::test]

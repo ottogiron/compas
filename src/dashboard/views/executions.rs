@@ -374,6 +374,7 @@ mod tests {
                 output_preview: None,
                 error_detail: None,
                 parsed_intent: None,
+                prompt_hash: None,
             },
             crate::store::ExecutionRow {
                 id: "2".to_string(),
@@ -391,6 +392,7 @@ mod tests {
                 output_preview: None,
                 error_detail: None,
                 parsed_intent: None,
+                prompt_hash: None,
             },
             crate::store::ExecutionRow {
                 id: "3".to_string(),
@@ -408,6 +410,7 @@ mod tests {
                 output_preview: None,
                 error_detail: None,
                 parsed_intent: None,
+                prompt_hash: None,
             },
         ];
         let groups = group_execution_indices_by_batch(&rows, None, 50);
@@ -436,6 +439,7 @@ mod tests {
                 output_preview: None,
                 error_detail: None,
                 parsed_intent: None,
+                prompt_hash: None,
             });
         }
         let groups = group_execution_indices_by_batch(&rows, Some("b1"), 50);
@@ -466,6 +470,7 @@ mod tests {
             output_preview: None,
             error_detail: None,
             parsed_intent: None,
+            prompt_hash: None,
         }];
         let targets = history_selectable_targets(&rows, None, 50);
         assert!(matches!(targets.first(), Some(HistorySelectable::Batch(_))));
@@ -489,6 +494,7 @@ mod tests {
             output_preview: None,
             error_detail: None,
             parsed_intent: None,
+            prompt_hash: None,
         }];
         let targets = history_selectable_targets(&rows, Some("b1"), 50);
         assert!(targets

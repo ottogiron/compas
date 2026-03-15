@@ -418,9 +418,24 @@ impl WorkerRunner {
         };
 
         for (message_id, thread_id, agent_alias) in untriggered {
+            // Compute a SHA-256 hash of the agent's prompt at enqueue time so
+            // executions can be correlated to the prompt version that produced them.
+            // Agents without a prompt field get None — storing a hash of the empty
+            // string would be misleading since it implies a known prompt existed.
+            let prompt_hash = config
+                .agents
+                .iter()
+                .find(|a| a.alias == agent_alias)
+                .and_then(|a| a.prompt.as_deref())
+                .map(sha256_hex);
             match self
                 .store
-                .insert_execution_with_dispatch(&thread_id, &agent_alias, Some(message_id))
+                .insert_execution_with_dispatch(
+                    &thread_id,
+                    &agent_alias,
+                    Some(message_id),
+                    prompt_hash.as_deref(),
+                )
                 .await
             {
                 Ok(Some(exec_id)) => {
@@ -447,6 +462,17 @@ impl WorkerRunner {
             }
         }
     }
+}
+
+/// Compute the SHA-256 hex digest of a string.
+///
+/// Used to fingerprint agent prompts at execution creation time so that
+/// executions can be correlated to the prompt version that produced them.
+fn sha256_hex(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
 /// Prune old execution log files, keeping only the `retention_count` most recent.
@@ -699,6 +725,30 @@ mod tests {
             }
         }
         assert_eq!(progress_count, 3);
+    }
+
+    #[test]
+    fn test_prompt_hash_same_prompt_same_hash() {
+        let h1 = sha256_hex("You are a focused agent.");
+        let h2 = sha256_hex("You are a focused agent.");
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn test_prompt_hash_different_prompts_different_hashes() {
+        let h1 = sha256_hex("You are agent A.");
+        let h2 = sha256_hex("You are agent B.");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn test_prompt_hash_empty_prompt_is_valid() {
+        let h = sha256_hex("");
+        // SHA-256 of empty string is well-known
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
     }
 
     #[tokio::test]
