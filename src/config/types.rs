@@ -260,4 +260,14 @@ pub struct AgentConfig {
     /// Workspace isolation mode: `"worktree"` for git worktree isolation, `"shared"` (default).
     #[serde(default)]
     pub workspace: Option<String>,
+    /// Maximum number of retry attempts for transient failures (default 0 = no retry).
+    #[serde(default)]
+    pub max_retries: u32,
+    /// Backoff base in seconds between retries (exponential: base * 2^attempt). Default 30.
+    #[serde(default = "default_retry_backoff_secs")]
+    pub retry_backoff_secs: u64,
+}
+
+fn default_retry_backoff_secs() -> u64 {
+    30
 }
