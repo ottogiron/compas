@@ -71,12 +71,12 @@ Created: 2026-03-14
 - Verification:
   - `make verify` passes
   - Manual: dispatch to each backend, verify intent parsing works correctly
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
-1. ORCH-FOUND-1 (Session Continuity — done)
-2. ORCH-FOUND-2 (Backend Output Contract — protects against CLI format changes)
+1. ~~ORCH-FOUND-1 (Session Continuity — done)~~
+2. ~~ORCH-FOUND-2 (Backend Output Contract — done)~~
 
 ## Tracking Notes
 
@@ -97,13 +97,13 @@ Created: 2026-03-14
 - Notes: Implemented and smoke-tested. Session resume confirmed for Claude, Codex, OpenCode.
 
 - Ticket: ORCH-FOUND-2
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Medium
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-14 22:44 UTC
+- End: 2026-03-14 22:44 UTC
+- Duration: ~00:20:00
+- Notes: Unified BackendOutput struct, parse_intent_from_text(), ErrorCategory. Foundation for EVO-12 retry.
 
 ## Closure Evidence
 

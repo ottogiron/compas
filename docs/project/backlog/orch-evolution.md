@@ -35,7 +35,7 @@ Created: 2026-03-14
 - Verification:
   - Integration test: dispatch to stub backend that emits stream-json, verify events are stored
   - Manual: run a real Claude execution, query events via MCP tool during and after execution
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-EVO-2 — Event Broadcast Channel
 
@@ -81,7 +81,7 @@ Created: 2026-03-14
 - Verification:
   - Manual: run an execution, observe live summary updates in Ops tab
   - Manual: open log viewer during execution, verify timeline panel shows events
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-EVO-4 — Desktop Notifications
 
@@ -105,7 +105,7 @@ Created: 2026-03-14
 - Verification:
   - Manual: enable desktop notifications, run an execution, verify notification appears
   - Unit test: notification formatting produces expected title/body
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-EVO-5 — Thread Conversation View in Dashboard
 
@@ -129,7 +129,7 @@ Created: 2026-03-14
 - Verification:
   - Manual: dispatch to an agent, wait for reply, verify conversation view shows both messages
   - Manual: close a thread, verify close message appears in conversation
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-EVO-6 — Quick Dispatch from Dashboard
 
@@ -180,7 +180,7 @@ Created: 2026-03-14
   - Integration test: dispatch to two agents with worktree mode, verify separate directories
   - Manual: run parallel executions, verify no file conflicts
   - Manual: close batch, verify worktree is removed
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-EVO-8 — HTTP API Layer
 
@@ -316,7 +316,7 @@ Created: 2026-03-14
   - Integration test: stub backend fails with transient error, verify retry occurs
   - Integration test: stub backend fails with terminal error, verify no retry
   - `make verify` passes
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-EVO-13 — Prompt Version Hashing
 
@@ -343,7 +343,7 @@ Created: 2026-03-14
   - Unit test: same prompt → same hash, different prompt → different hash
   - Integration test: dispatch, verify prompt_hash is stored in executions table
   - `make verify` passes
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-EVO-14 — Thread Dependency Primitive
 
@@ -375,17 +375,20 @@ Created: 2026-03-14
 
 ## Execution Order
 
-1. ORCH-EVO-2 (Event Broadcast — done)
-2. ORCH-EVO-1 (Execution Telemetry — feeds into dashboard display)
-3. ORCH-EVO-7 (Git Worktrees — moved up: prerequisite for safe concurrent agents)
-4. ORCH-EVO-4 (Desktop Notifications — quick win, high daily-use value)
-5. ORCH-EVO-3 (Dashboard "Currently Working On" — uses telemetry + events)
-6. ORCH-EVO-5 (Conversation View — independent, high ergonomic value)
-7. ORCH-EVO-10 (Webhook Notifications — moved up: simpler than HTTP API, high value for Slack/Discord alerts)
-8. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
-9. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
-10. ORCH-EVO-8 (HTTP API — larger effort, enables remote access)
-11. ORCH-EVO-9 (Web Dashboard — DEFERRED: build HTTP API first, web UI can be community contribution)
+1. ~~ORCH-EVO-2 (Event Broadcast — done)~~
+2. ~~ORCH-EVO-1 (Execution Telemetry — done)~~
+3. ~~ORCH-EVO-7 (Git Worktrees — done)~~
+4. ~~ORCH-EVO-4 (Desktop Notifications — done)~~
+5. ~~ORCH-EVO-3 (Dashboard "Currently Working On" — done)~~
+6. ~~ORCH-EVO-5 (Conversation View — done)~~
+7. ~~ORCH-EVO-12 (Retry with Error Classification — done)~~
+8. ~~ORCH-EVO-13 (Prompt Version Hashing — done)~~
+9. ORCH-EVO-10 (Webhook Notifications — next: simpler than HTTP API, high value for Slack/Discord alerts)
+10. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
+11. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
+12. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
+13. ORCH-EVO-8 (HTTP API — larger effort, enables remote access)
+14. ORCH-EVO-9 (Web Dashboard — DEFERRED: build HTTP API first, web UI can be community contribution)
 
 ## Tracking Notes
 
@@ -402,13 +405,13 @@ Created: 2026-03-14
 ## Execution Metrics
 
 - Ticket: ORCH-EVO-1
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: L
 - Risk: Medium
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-14 23:19 UTC
+- End: 2026-03-14 23:50 UTC
+- Duration: ~00:30:00
+- Notes: Split into EVO-1a (stream-json format) and EVO-1b (telemetry plumbing). Both completed same session.
 
 - Ticket: ORCH-EVO-2
 - Owner: TBD
@@ -420,31 +423,31 @@ Created: 2026-03-14
 - Notes:
 
 - Ticket: ORCH-EVO-3
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 12:48 UTC
+- End: 2026-03-15 12:48 UTC
+- Duration: ~00:30:00
+- Notes: Dashboard "currently working on" display + log viewer timeline.
 
 - Ticket: ORCH-EVO-4
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: S
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 11:35 UTC
+- End: 2026-03-15 11:35 UTC
+- Duration: ~00:20:00
+- Notes: macOS osascript notifications. Notifications lack task context (known issue).
 
 - Ticket: ORCH-EVO-5
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 20:00 UTC
+- End: 2026-03-15 20:52 UTC
+- Duration: ~00:52:00
+- Notes: Full-screen overlay, message + execution marker interleaving, live polling. Multiple fix rounds.
 
 - Ticket: ORCH-EVO-6
 - Owner: TBD
@@ -456,13 +459,13 @@ Created: 2026-03-14
 - Notes:
 
 - Ticket: ORCH-EVO-7
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: L
 - Risk: Medium
-- Start: 2026-03-15 11:24 UTC
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 10:35 UTC
+- End: 2026-03-15 17:20 UTC
+- Duration: ~06:45:00
+- Notes: Multiple iterations — initial impl, repo-sibling relocation, worktree cleanup fix, stored DB path fix. Per-agent workdir (ADR-010).
 
 - Ticket: ORCH-EVO-8
 - Owner: TBD
@@ -501,22 +504,22 @@ Created: 2026-03-14
 - Notes:
 
 - Ticket: ORCH-EVO-12
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: High
 - Start: 2026-03-15 15:22 UTC
-- End:
-- Duration:
-- Notes:
+- End: 2026-03-15 16:00 UTC
+- Duration: ~00:38:00
+- Notes: ErrorCategory enum, deny-list, exponential backoff, multiple fix rounds for rate-limit classification and overflow.
 
 - Ticket: ORCH-EVO-13
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: S
 - Risk: Low
 - Start: 2026-03-15 15:00 UTC
-- End: 2026-03-15 14:45 UTC
-- Duration: 00:00:05
-- Notes:
+- End: 2026-03-15 15:02 UTC
+- Duration: ~00:05:00
+- Notes: SHA-256 hash of resolved prompt. Quick implementation.
 
 - Ticket: ORCH-EVO-14
 - Owner: TBD

@@ -12,11 +12,9 @@
 ## Dashboard polling overhead
 
 **Severity:** Low
-**Status:** Open (addressed by ORCH-EVO-2)
+**Status:** Fixed (ORCH-EVO-2)
 
-Dashboard polls SQLite at a fixed interval. No push-based updates. Can feel sluggish for real-time monitoring of fast-moving executions.
-
-**Planned fix:** ORCH-EVO-2 (Event Broadcast Channel) will enable push-based dashboard updates.
+Dashboard now uses `tokio::broadcast` event channel for push-based updates. SQLite polling is supplementary (1.5s debounce for progress summaries). Resolved by ORCH-EVO-2 (Event Broadcast Channel).
 
 ## Claude: internal UUID may be saved as backend session ID
 
@@ -54,17 +52,9 @@ Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `
 ## Stale worker heartbeat prevents new worker spawn
 
 **Severity:** High
-**Status:** Open
+**Status:** Fixed
 
-When a worker process dies (killed manually, crashed, old binary replaced) but its heartbeat record remains in SQLite, the dashboard's `--with-worker` flag detects the heartbeat and skips spawning a new worker. The result: dispatches queue but never execute — the worker is gone but the system thinks it's alive.
-
-This happens frequently during development: deploy a new binary, restart the dashboard, but the old worker's heartbeat persists. The dashboard starts without a worker and dispatches silently pile up.
-
-**How to detect:** `orch_health()` shows a heartbeat with a stale `started_at` timestamp. `orch_metrics()` shows `queue_depth > 0` but no running executions. Dispatches stay in "Active" with 0 executions.
-
-**Workaround:** Manually clear heartbeats: `sqlite3 <state_dir>/jobs.sqlite "DELETE FROM worker_heartbeats;"` then restart the dashboard.
-
-**Status update:** Fixed — `is_worker_alive()` now checks both heartbeat freshness AND process liveness via `kill(pid, 0)`. A stale heartbeat from a dead process is correctly detected and a new worker is spawned.
+`is_worker_alive()` now checks both heartbeat freshness AND process liveness via `kill(pid, 0)` with ESRCH/EPERM handling. A stale heartbeat from a dead process is correctly detected and a new worker is spawned. No manual heartbeat clearing needed.
 
 ## Dashboard: Active threads section always appears empty
 

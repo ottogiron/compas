@@ -227,7 +227,7 @@ Created: 2026-03-14
 - Implementation commits should reference ticket IDs.
 - ORCH-TEAM depends on ORCH-EVO infrastructure (event broadcast, HTTP API).
 - TEAM-1 (cost tracking) and TEAM-2 (operator identity) can start before ORCH-EVO completes.
-- All work happens in the `crates/aster-orch` submodule — follow submodule git workflow.
+- All work happens in the `ottogiron/aster-orch` standalone repo.
 - This batch targets the "small AI lab with 2-5 orch devs" scale.
 
 ## Execution Metrics
