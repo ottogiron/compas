@@ -599,7 +599,7 @@ impl Store {
         Ok(row.and_then(|(p,)| p).map(std::path::PathBuf::from))
     }
 
-    /// Return all threads that currently have a worktree path set (active worktrees).
+    /// Return all threads with a worktree path set (may include threads pending cleanup).
     pub async fn threads_with_worktree_paths(&self) -> Result<Vec<ThreadWorktreeEntry>, String> {
         let rows: Vec<(String, String)> = sqlx::query_as(
             "SELECT thread_id, worktree_path FROM threads WHERE worktree_path IS NOT NULL",
