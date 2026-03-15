@@ -33,13 +33,13 @@ pub struct ConversationViewState {
     /// All executions loaded for this thread.
     pub executions: Vec<ExecutionRow>,
     /// Scroll position (in display lines).
-    pub scroll_offset: u16,
+    pub scroll_offset: usize,
     /// When true, new messages auto-scroll to the bottom.
     pub follow_mode: bool,
     /// Highest message id seen so far — used for incremental polling.
     pub last_message_id: Option<i64>,
     /// Cached visible rows from last render (for page-scroll sizing).
-    pub visible_rows: u16,
+    pub visible_rows: usize,
 }
 
 impl ConversationViewState {
@@ -58,7 +58,7 @@ impl ConversationViewState {
             thread_status,
             messages,
             executions,
-            scroll_offset: u16::MAX,
+            scroll_offset: usize::MAX,
             follow_mode: true,
             last_message_id,
             visible_rows: 20,
@@ -66,7 +66,7 @@ impl ConversationViewState {
     }
 
     /// Scroll up by `n` lines (disables follow mode).
-    pub fn scroll_up(&mut self, n: u16) {
+    pub fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
         if n > 0 {
             self.follow_mode = false;
@@ -74,7 +74,7 @@ impl ConversationViewState {
     }
 
     /// Scroll down by `n` lines.
-    pub fn scroll_down(&mut self, n: u16) {
+    pub fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
     }
 
@@ -86,7 +86,7 @@ impl ConversationViewState {
 
     /// Jump to the bottom (follow position).
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = u16::MAX;
+        self.scroll_offset = usize::MAX;
     }
 
     /// Toggle follow mode — enabling it also scrolls to the bottom.
@@ -268,7 +268,7 @@ fn push_execution_completed_line(
 
 /// Render the full-screen conversation overlay into `area`.
 pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState, area: Rect) {
-    let visible_rows = area.height.saturating_sub(2);
+    let visible_rows = area.height.saturating_sub(2) as usize;
     state.visible_rows = visible_rows;
 
     let items = build_items(&state.messages, &state.executions);
@@ -308,7 +308,7 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
     }
 
     // Compute scroll — when follow_mode clamp to max; otherwise use stored offset.
-    let line_count = display_lines.len() as u16;
+    let line_count = display_lines.len();
     let max_offset = line_count.saturating_sub(visible_rows);
     let scroll_offset = if state.follow_mode {
         max_offset
@@ -362,7 +362,7 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL));
 
     let paragraph = Paragraph::new(display_lines)
-        .scroll((scroll_offset, 0))
+        .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0))
         .wrap(Wrap { trim: false })
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
         .block(block);
@@ -452,7 +452,7 @@ mod tests {
             vec![],
         );
         assert!(state.follow_mode);
-        assert_eq!(state.scroll_offset, u16::MAX);
+        assert_eq!(state.scroll_offset, usize::MAX);
     }
 
     #[test]
@@ -496,7 +496,7 @@ mod tests {
         state.scroll_offset = 0;
         state.toggle_follow();
         assert!(state.follow_mode);
-        assert_eq!(state.scroll_offset, u16::MAX);
+        assert_eq!(state.scroll_offset, usize::MAX);
     }
 
     #[test]
