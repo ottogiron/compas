@@ -51,6 +51,21 @@ Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `
 
 **Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state, but the stale worker process must be killed manually.
 
+## Stale worker heartbeat prevents new worker spawn
+
+**Severity:** High
+**Status:** Open
+
+When a worker process dies (killed manually, crashed, old binary replaced) but its heartbeat record remains in SQLite, the dashboard's `--with-worker` flag detects the heartbeat and skips spawning a new worker. The result: dispatches queue but never execute — the worker is gone but the system thinks it's alive.
+
+This happens frequently during development: deploy a new binary, restart the dashboard, but the old worker's heartbeat persists. The dashboard starts without a worker and dispatches silently pile up.
+
+**How to detect:** `orch_health()` shows a heartbeat with a stale `started_at` timestamp. `orch_metrics()` shows `queue_depth > 0` but no running executions. Dispatches stay in "Active" with 0 executions.
+
+**Workaround:** Manually clear heartbeats: `sqlite3 <state_dir>/jobs.sqlite "DELETE FROM worker_heartbeats;"` then restart the dashboard.
+
+**Planned fix:** The heartbeat guard should validate that the worker process is actually alive (e.g., `kill(pid, 0)` check) before deciding not to spawn. If the process doesn't exist, the stale heartbeat should be cleared automatically. Alternatively, the heartbeat should include a TTL — if no heartbeat update within 30s (2x the 10s heartbeat interval), consider the worker dead.
+
 ## Dashboard: Active threads section always appears empty
 
 **Severity:** Medium
