@@ -141,6 +141,75 @@ impl WorktreeManager {
         Err(format!("git worktree add failed: {}", stderr.trim()))
     }
 
+    /// Remove a worktree at an absolute path (best-effort).
+    ///
+    /// Use this when the worktree path is already known (e.g. stored in the DB).
+    /// This avoids re-computing the path from config, which could drift if config
+    /// changes between creation and cleanup.
+    pub fn remove_worktree_at_path(
+        &self,
+        repo_root: &Path,
+        worktree_path: &Path,
+        thread_id: &str,
+    ) -> Result<(), String> {
+        if !worktree_path.exists() {
+            return Ok(());
+        }
+
+        let repo_str = repo_root.to_string_lossy();
+        let wt_str = worktree_path.to_string_lossy();
+
+        // Remove worktree
+        let result = Command::new("git")
+            .args(["-C", &repo_str, "worktree", "remove", "--force", &wt_str])
+            .output()
+            .map_err(|e| format!("failed to run git worktree remove: {}", e))?;
+
+        if !result.status.success() {
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            tracing::warn!(
+                thread_id = %thread_id,
+                path = %worktree_path.display(),
+                error = %stderr.trim(),
+                "git worktree remove failed — attempting directory cleanup"
+            );
+            // Best-effort: remove directory manually
+            let _ = std::fs::remove_dir_all(worktree_path);
+        }
+
+        // Best-effort branch cleanup
+        let branch_name = format!("aster-orch/{}", thread_id);
+        let branch_result = Command::new("git")
+            .args(["-C", &repo_str, "branch", "-D", &branch_name])
+            .output();
+
+        match branch_result {
+            Ok(out) if !out.status.success() => {
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    branch = %branch_name,
+                    "branch cleanup skipped (may not exist)"
+                );
+            }
+            Err(e) => {
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    error = %e,
+                    "branch cleanup command failed"
+                );
+            }
+            _ => {
+                tracing::info!(
+                    thread_id = %thread_id,
+                    branch = %branch_name,
+                    "removed worktree branch"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     /// Remove a worktree and its branch (best-effort).
     pub fn remove_worktree(
         &self,
@@ -299,6 +368,19 @@ mod tests {
         // Should succeed silently when worktree doesn't exist
         assert!(mgr
             .remove_worktree(Path::new("/tmp"), "nonexistent-thread", None)
+            .is_ok());
+    }
+
+    #[test]
+    fn test_remove_worktree_at_path_nonexistent_is_ok() {
+        let mgr = WorktreeManager::new();
+        // Should succeed silently when worktree path doesn't exist
+        assert!(mgr
+            .remove_worktree_at_path(
+                Path::new("/tmp"),
+                Path::new("/nonexistent/worktree/path"),
+                "nonexistent-thread"
+            )
             .is_ok());
     }
 

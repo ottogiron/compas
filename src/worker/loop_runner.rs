@@ -167,10 +167,10 @@ impl WorkerRunner {
                     // Worktree cleanup for terminal threads
                     match self.store.threads_with_stale_worktrees().await {
                         Ok(stale) => {
-                            for (thread_id, _worktree_path, repo_root) in &stale {
+                            for (thread_id, worktree_path, repo_root) in &stale {
                                 let repo_root = std::path::PathBuf::from(repo_root);
-                                let wt_override = self.config.load().worktree_dir.clone();
-                                if let Err(e) = self.worktree_manager.remove_worktree(&repo_root, thread_id, wt_override.as_deref()) {
+                                let wt_path = std::path::PathBuf::from(worktree_path);
+                                if let Err(e) = self.worktree_manager.remove_worktree_at_path(&repo_root, &wt_path, thread_id) {
                                     tracing::warn!(thread_id = %thread_id, error = %e, "worktree cleanup failed");
                                 }
                                 // If clear_thread_worktree_path fails after a successful
