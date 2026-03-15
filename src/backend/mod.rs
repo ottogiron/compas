@@ -94,16 +94,17 @@ pub fn classify_error(success: bool, has_result_output: bool, error_text: &str) 
         || lower.contains("invalid api key")
         || lower.contains("invalid_api_key")
         || lower.contains("permission denied")
-        || lower.contains("403")
+        || lower.contains("403 ")
+        || lower.contains("http 403")
+        || lower.contains("status: 403")
     {
         return ErrorCategory::AuthFailure;
     }
 
-    // ── Non-retryable: Quota/billing ──
+    // ── Non-retryable: Quota/billing (hard limits, not transient rate limits) ──
     if lower.contains("quota")
         || lower.contains("billing")
         || lower.contains("insufficient_quota")
-        || lower.contains("rate_limit_exceeded")
         || lower.contains("spending limit")
         || lower.contains("credit")
     {
@@ -131,6 +132,9 @@ pub fn classify_error(success: bool, has_result_output: bool, error_text: &str) 
         || lower.contains("econnrefused")
         || lower.contains("network")
         || lower.contains("dns")
+        || lower.contains("rate_limit_exceeded")
+        || lower.contains("too_many_requests")
+        || lower.contains("429")
     {
         return ErrorCategory::Transient;
     }
@@ -334,6 +338,36 @@ mod tests {
         assert_eq!(
             classify_error(false, false, "spending limit reached"),
             ErrorCategory::QuotaExhausted
+        );
+    }
+
+    #[test]
+    fn test_classify_error_rate_limit_is_transient() {
+        assert_eq!(
+            classify_error(false, false, "rate_limit_exceeded"),
+            ErrorCategory::Transient
+        );
+        assert_eq!(
+            classify_error(false, false, "too_many_requests"),
+            ErrorCategory::Transient
+        );
+        assert_eq!(
+            classify_error(false, false, "HTTP 429 Too Many Requests"),
+            ErrorCategory::Transient
+        );
+    }
+
+    #[test]
+    fn test_classify_error_403_narrow_matching() {
+        // "403 " with trailing space matches (e.g. "403 Forbidden")
+        assert_eq!(
+            classify_error(false, false, "HTTP 403 Forbidden"),
+            ErrorCategory::AuthFailure
+        );
+        // Bare "403" in a port number should NOT match
+        assert_eq!(
+            classify_error(false, false, "listening on port 4030"),
+            ErrorCategory::Unknown
         );
     }
 
