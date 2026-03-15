@@ -31,6 +31,11 @@ pub fn humanize_exec_status(raw: &str) -> &str {
     }
 }
 
+/// Check if an execution status string represents a running execution.
+pub fn is_running_exec_status(status: &str) -> bool {
+    matches!(status, "executing" | "picked_up" | "queued")
+}
+
 // ── Shared duration formatters ─────────────────────────────────────────────────
 
 /// Format a duration in seconds to human-readable tiers.

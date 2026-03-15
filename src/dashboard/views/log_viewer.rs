@@ -19,10 +19,12 @@ use std::path::PathBuf;
 use crate::dashboard::theme::{self, *};
 use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
 use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
+use crate::store::ExecutionEventRow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OutlineSection {
     Input,
+    Timeline,
     Output,
 }
 
@@ -58,6 +60,12 @@ pub struct ExecutionDetailState {
     section_selected: OutlineSection,
     input_expanded: bool,
     output_expanded: bool,
+    /// Timeline events loaded from execution_events table.
+    pub timeline_events: Vec<ExecutionEventRow>,
+    /// Whether the timeline section is expanded.
+    timeline_expanded: bool,
+    /// True when the initial load hit the event limit (indicates truncation).
+    pub timeline_truncated: bool,
 }
 
 impl ExecutionDetailState {
@@ -90,6 +98,9 @@ impl ExecutionDetailState {
             section_selected: OutlineSection::Input,
             input_expanded: false,
             output_expanded: false,
+            timeline_events: Vec::new(),
+            timeline_expanded: false,
+            timeline_truncated: false,
         };
 
         if let Some(path) = log_path {
@@ -202,18 +213,24 @@ impl ExecutionDetailState {
 
     pub fn select_next_section(&mut self) {
         self.section_selected = match self.section_selected {
-            OutlineSection::Input => OutlineSection::Output,
+            OutlineSection::Input => OutlineSection::Timeline,
+            OutlineSection::Timeline => OutlineSection::Output,
             OutlineSection::Output => OutlineSection::Input,
         };
     }
 
     pub fn select_prev_section(&mut self) {
-        self.select_next_section();
+        self.section_selected = match self.section_selected {
+            OutlineSection::Input => OutlineSection::Output,
+            OutlineSection::Timeline => OutlineSection::Input,
+            OutlineSection::Output => OutlineSection::Timeline,
+        };
     }
 
     pub fn expand_selected_section(&mut self) {
         match self.section_selected {
             OutlineSection::Input => self.input_expanded = true,
+            OutlineSection::Timeline => self.timeline_expanded = true,
             OutlineSection::Output => self.output_expanded = true,
         }
     }
@@ -221,6 +238,7 @@ impl ExecutionDetailState {
     pub fn collapse_selected_section(&mut self) {
         match self.section_selected {
             OutlineSection::Input => self.input_expanded = false,
+            OutlineSection::Timeline => self.timeline_expanded = false,
             OutlineSection::Output => self.output_expanded = false,
         }
     }
@@ -228,6 +246,7 @@ impl ExecutionDetailState {
     pub fn toggle_selected_section(&mut self) {
         match self.section_selected {
             OutlineSection::Input => self.input_expanded = !self.input_expanded,
+            OutlineSection::Timeline => self.timeline_expanded = !self.timeline_expanded,
             OutlineSection::Output => self.output_expanded = !self.output_expanded,
         }
     }
@@ -298,6 +317,40 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
                 .map(|l| Line::from(format!("    {l}")).fg(TEXT_MUTED)),
         );
     }
+
+    // Timeline section
+    let timeline_label = format!("Timeline ({} events)", state.timeline_events.len());
+    display_lines.push(section_header_line(
+        &timeline_label,
+        state.section_selected == OutlineSection::Timeline,
+        state.timeline_expanded,
+    ));
+    if state.timeline_expanded {
+        if state.timeline_events.is_empty() {
+            display_lines.push(Line::from("    (no events)").fg(TEXT_MUTED));
+        } else {
+            for ev in &state.timeline_events {
+                let summary = super::truncate(&ev.summary, 60);
+                display_lines.push(
+                    Line::from(format!(
+                        "    [{}] {}: {}",
+                        ev.event_index, ev.event_type, summary
+                    ))
+                    .fg(TEXT_MUTED),
+                );
+            }
+            if state.timeline_truncated {
+                display_lines.push(
+                    Line::from(format!(
+                        "    (showing first {} events)",
+                        state.timeline_events.len()
+                    ))
+                    .fg(TEXT_DIM),
+                );
+            }
+        }
+    }
+
     display_lines.push(section_header_line(
         "Output",
         state.section_selected == OutlineSection::Output,
@@ -420,6 +473,9 @@ mod tests {
             section_selected: OutlineSection::Input,
             input_expanded: false,
             output_expanded: false,
+            timeline_events: Vec::new(),
+            timeline_expanded: false,
+            timeline_truncated: false,
         };
         if follow {
             s.scroll_to_bottom();
@@ -498,5 +554,29 @@ mod tests {
         assert_eq!(s.section_selected, OutlineSection::Input);
         assert!(!s.input_expanded);
         assert!(!s.output_expanded);
+    }
+
+    #[test]
+    fn test_section_navigation_next() {
+        let mut s = make_state("completed", vec!["a"], false);
+        assert_eq!(s.section_selected, OutlineSection::Input);
+        s.select_next_section();
+        assert_eq!(s.section_selected, OutlineSection::Timeline);
+        s.select_next_section();
+        assert_eq!(s.section_selected, OutlineSection::Output);
+        s.select_next_section();
+        assert_eq!(s.section_selected, OutlineSection::Input);
+    }
+
+    #[test]
+    fn test_section_navigation_prev() {
+        let mut s = make_state("completed", vec!["a"], false);
+        assert_eq!(s.section_selected, OutlineSection::Input);
+        s.select_prev_section();
+        assert_eq!(s.section_selected, OutlineSection::Output);
+        s.select_prev_section();
+        assert_eq!(s.section_selected, OutlineSection::Timeline);
+        s.select_prev_section();
+        assert_eq!(s.section_selected, OutlineSection::Input);
     }
 }

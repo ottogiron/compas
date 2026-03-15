@@ -24,6 +24,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use std::{
+    collections::HashMap,
     io,
     path::PathBuf,
     time::{Duration, Instant},
@@ -48,6 +49,8 @@ const TICK_RATE: Duration = Duration::from_millis(250);
 const ACTIVITY_ROW_LIMIT: i64 = 250;
 const HISTORY_ROW_LIMIT: i64 = 200;
 const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
+/// Maximum number of timeline events loaded when opening the log viewer.
+const TIMELINE_EVENT_LIMIT: i64 = 500;
 /// Maximum time a single refresh query set can block the TUI thread.
 /// If exceeded, the refresh is skipped and `last_refresh_error` is set.
 const REFRESH_TIMEOUT: Duration = Duration::from_millis(500);
@@ -218,6 +221,8 @@ pub struct App {
     /// events trigger an immediate data refresh instead of waiting for the next
     /// poll interval.
     event_rx: Option<broadcast::Receiver<OrchestratorEvent>>,
+    /// Maps execution_id → most recent progress summary (from ExecutionProgress events).
+    progress_summaries: HashMap<String, String>,
 }
 
 impl App {
@@ -234,6 +239,13 @@ impl App {
 
     pub fn history_group_visible_limit(&self) -> usize {
         HISTORY_GROUP_VISIBLE_LIMIT
+    }
+
+    /// Get the most recent progress summary for a running execution, if available.
+    pub fn get_progress_summary(&self, execution_id: &str) -> Option<&str> {
+        self.progress_summaries
+            .get(execution_id)
+            .map(|s| s.as_str())
     }
 
     pub fn new(
@@ -276,6 +288,7 @@ impl App {
             last_agents_attempt: None,
             last_executions_attempt: None,
             event_rx,
+            progress_summaries: HashMap::new(),
         }
     }
 
@@ -374,6 +387,36 @@ impl App {
                 self.activity_refresh_error = Some("activity: timeout".to_string());
                 if let Some(ref mut d) = self.activity_data {
                     d.fetched_at = Instant::now();
+                }
+            }
+        }
+
+        // Backfill progress_summaries for running executions that may have
+        // started before the dashboard. Uses the latest execution event.
+        if let Some(ref data) = self.activity_data {
+            for row in &data.rows {
+                if !row
+                    .execution_status
+                    .as_deref()
+                    .map(crate::dashboard::views::is_running_exec_status)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let Some(ref exec_id) = row.execution_id else {
+                    continue;
+                };
+                if self.progress_summaries.contains_key(exec_id) {
+                    continue;
+                }
+                // Fetch the single latest event (DESC order, limit 1) to
+                // get the most recent progress summary.
+                if let Ok(Some(ev)) = self
+                    .handle
+                    .block_on(async { self.store.get_latest_execution_event(exec_id).await })
+                {
+                    self.progress_summaries
+                        .insert(exec_id.clone(), ev.summary.clone());
                 }
             }
         }
@@ -617,7 +660,14 @@ impl App {
         let duration_ms = execution.duration_ms;
         let (input_payload, input_linked) = self.resolve_input_payload_for_execution(&execution);
         let log_path = Some(self.log_dir.join(format!("{}.log", execution.id)));
-        self.viewing_log = Some(ExecutionDetailState::new(
+        let timeline_events = self.handle.block_on(async {
+            self.store
+                .get_execution_events(&exec_id, None, None, Some(TIMELINE_EVENT_LIMIT))
+                .await
+                .unwrap_or_default()
+        });
+        let timeline_truncated = timeline_events.len() as i64 == TIMELINE_EVENT_LIMIT;
+        let mut detail = ExecutionDetailState::new(
             execution.id,
             agent_alias,
             status,
@@ -626,7 +676,10 @@ impl App {
             input_payload,
             input_linked,
             execution.output_preview.clone(),
-        ));
+        );
+        detail.timeline_events = timeline_events;
+        detail.timeline_truncated = timeline_truncated;
+        self.viewing_log = Some(detail);
     }
 
     fn open_log_viewer_from_execution(&mut self) {
@@ -647,8 +700,15 @@ impl App {
         let (input_payload, input_linked) = self.resolve_input_payload_for_execution(row);
 
         let log_path = self.log_dir.join(format!("{}.log", exec_id));
-        self.viewing_log = Some(ExecutionDetailState::new(
-            exec_id,
+        let timeline_events = self.handle.block_on(async {
+            self.store
+                .get_execution_events(&exec_id, None, None, Some(TIMELINE_EVENT_LIMIT))
+                .await
+                .unwrap_or_default()
+        });
+        let timeline_truncated = timeline_events.len() as i64 == TIMELINE_EVENT_LIMIT;
+        let mut detail = ExecutionDetailState::new(
+            exec_id.clone(),
             agent_alias,
             status,
             duration_ms,
@@ -656,7 +716,10 @@ impl App {
             input_payload,
             input_linked,
             row.output_preview.clone(),
-        ));
+        );
+        detail.timeline_events = timeline_events;
+        detail.timeline_truncated = timeline_truncated;
+        self.viewing_log = Some(detail);
     }
 
     /// Resolve strict input payload from execution provenance.
@@ -1150,9 +1213,35 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         // ── Log viewer polling ────────────────────────────────────────────────
         // If a running execution's log viewer is open, poll on every tick for
         // new file content (TICK_RATE ≈ 250 ms, close to the 200 ms target).
-        if let Some(ref mut viewer) = app.viewing_log {
-            if viewer.is_running() {
-                viewer.poll_log_file();
+        if let Some(ref mut state) = app.viewing_log {
+            if state.is_running() {
+                state.poll_log_file();
+            }
+        }
+        // Refresh timeline events for running executions alongside log polling.
+        // Extract needed values first to avoid conflicting borrows on `app`.
+        let timeline_refresh = app.viewing_log.as_ref().and_then(|v| {
+            if v.is_running() {
+                Some((
+                    v.exec_id.clone(),
+                    v.timeline_events.last().map(|e| e.event_index),
+                ))
+            } else {
+                None
+            }
+        });
+        if let Some((exec_id, last_idx)) = timeline_refresh {
+            if let Ok(Ok(events)) = app.handle.block_on(async {
+                tokio::time::timeout(REFRESH_TIMEOUT, async {
+                    app.store
+                        .get_execution_events(&exec_id, None, last_idx, None)
+                        .await
+                })
+                .await
+            }) {
+                if let Some(ref mut state) = app.viewing_log {
+                    state.timeline_events.extend(events);
+                }
             }
         }
 
@@ -1244,8 +1333,22 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             let mut got_event = false;
             loop {
                 match rx.try_recv() {
-                    Ok(_event) => {
+                    Ok(event) => {
                         got_event = true;
+                        match &event {
+                            OrchestratorEvent::ExecutionProgress {
+                                execution_id,
+                                summary,
+                                ..
+                            } => {
+                                app.progress_summaries
+                                    .insert(execution_id.clone(), summary.clone());
+                            }
+                            OrchestratorEvent::ExecutionCompleted { execution_id, .. } => {
+                                app.progress_summaries.remove(execution_id);
+                            }
+                            _ => {}
+                        }
                     }
                     Err(broadcast::error::TryRecvError::Empty) => break,
                     Err(broadcast::error::TryRecvError::Lagged(n)) => {
@@ -1254,7 +1357,6 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                             "dashboard event receiver lagged; forcing refresh"
                         );
                         got_event = true;
-                        // Continue draining after a lag.
                         continue;
                     }
                     Err(broadcast::error::TryRecvError::Closed) => {

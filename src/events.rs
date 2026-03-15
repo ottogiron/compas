@@ -54,14 +54,14 @@ pub enum OrchestratorEvent {
         new_status: String,
     },
     /// Progress update for a batch of related threads.
-    /// TODO(ORCH-EVO-3): Not yet emitted — placeholder for batch progress tracking.
+    /// TODO: not yet emitted
     BatchProgress {
         batch_id: String,
         completed: u32,
         total: u32,
     },
     /// An agent's health/liveness status has changed.
-    /// TODO(ORCH-EVO-3): Not yet emitted — placeholder for agent health events.
+    /// TODO: not yet emitted
     AgentHealthChanged { agent_alias: String, healthy: bool },
     /// A new message has been inserted into a thread.
     MessageReceived {

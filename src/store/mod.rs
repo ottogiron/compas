@@ -1420,6 +1420,33 @@ impl Store {
             .collect())
     }
 
+    /// Fetch the single most recent execution event for an execution (by event_index DESC).
+    pub async fn get_latest_execution_event(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<ExecutionEventRow>, sqlx::Error> {
+        let row: Option<(i64, String, String, String, Option<String>, i64, i32)> = sqlx::query_as(
+            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index
+                 FROM execution_events
+                 WHERE execution_id = ?
+                 ORDER BY event_index DESC
+                 LIMIT 1",
+        )
+        .bind(execution_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| ExecutionEventRow {
+            id: r.0,
+            execution_id: r.1,
+            event_type: r.2,
+            summary: r.3,
+            detail: r.4,
+            timestamp_ms: r.5,
+            event_index: r.6,
+        }))
+    }
+
     /// Delete execution_events rows for executions that are not among the
     /// `retention_count` most recent executions (by `queued_at`). This prevents
     /// unbounded growth of the telemetry table.

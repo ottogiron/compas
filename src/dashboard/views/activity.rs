@@ -55,10 +55,10 @@ struct ClassifiedRows {
 }
 
 fn is_running_now(t: &ThreadStatusView) -> bool {
-    matches!(
-        t.execution_status.as_deref().unwrap_or(""),
-        "executing" | "picked_up" | "queued"
-    )
+    t.execution_status
+        .as_deref()
+        .map(super::is_running_exec_status)
+        .unwrap_or(false)
 }
 
 fn is_latest_exec_completed(t: &ThreadStatusView) -> bool {
@@ -485,7 +485,20 @@ fn render_ops_list(
             };
             let is_selected = selectable_slot == selected_slot;
             sel_to_row.push(items.len());
-            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
+            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+            // Add progress summary as a second line if available and still running.
+            if is_running_now(row) {
+                if let Some(exec_id) = &row.execution_id {
+                    if let Some(summary) = app.get_progress_summary(exec_id) {
+                        let truncated = super::truncate(summary, 50);
+                        lines.push(Line::from(vec![
+                            Span::raw("     └ "),
+                            Span::styled(truncated, Style::default().fg(Color::DarkGray)),
+                        ]));
+                    }
+                }
+            }
+            items.push(ListItem::new(lines));
             selectable_slot += 1;
         }
     }
@@ -693,6 +706,14 @@ fn render_context_panel(
                     "Intent",
                     row.parsed_intent.as_deref().unwrap_or("-"),
                 ));
+                // Show progress summary for running executions.
+                if is_running_now(row) {
+                    if let Some(exec_id) = &row.execution_id {
+                        if let Some(summary) = app.get_progress_summary(exec_id) {
+                            lines.push(kv_line("Working on", summary));
+                        }
+                    }
+                }
                 lines.push(Line::from(Span::raw("")));
 
                 let can_abandon = row.thread_status != "Abandoned";
