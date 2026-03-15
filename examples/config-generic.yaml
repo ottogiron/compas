@@ -15,6 +15,7 @@ orchestration:
   max_concurrent_triggers: 4
   max_triggers_per_agent: 1
   ping_timeout_secs: 30
+  # log_retention_count: 200      # Max execution log files to retain
 
 models:
   - id: claude-sonnet-4-6
@@ -30,6 +31,8 @@ agents:
     model: claude-sonnet-4-6
     # workdir: /path/to/other-repo    # Per-agent repo override (default: target_repo_root)
     # workspace: worktree             # "worktree" for git isolation, "shared" (default)
+    # max_retries: 0                  # Auto-retry on transient failure (0 = disabled)
+    # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
     prompt: >
       You implement changes in this repository and report verification results.
       End with a JSON line: {"intent":"status-update","to":"operator"}.

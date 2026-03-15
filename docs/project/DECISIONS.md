@@ -114,3 +114,33 @@ Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in dif
 **Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) was deferred to ORCH-TEAM-6. Per-agent `workdir` is the interim solution that solves the immediate need. When project-based config is implemented, it would set `workdir` on its agents, making `workdir` the underlying primitive either way.
 
 **Config lives in the aster repo:** The production orch config is at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. It defines agents for both the aster repo (via `target_repo_root: ..`) and the aster-orch repo (via per-agent `workdir`). The aster-orch repo has its own dev config at `.aster-orch/config.yaml` for testing MCP changes.
+
+## ADR-011: Retry with error classification
+
+**Date:** 2026-03
+**Status:** Active
+
+Failed executions with transient errors (network blips, temporary rate limits) are retried automatically when `max_retries > 0` on the agent config. Non-retryable failures (quota exhaustion, auth errors, agent-reported errors) fail immediately regardless of `max_retries`.
+
+**Error classification:** Deny-list strategy — a curated set of error patterns is matched against exit code and stderr output. Anything not on the deny-list is treated as transient and eligible for retry.
+
+**Backoff:** Exponential via store re-enqueue. A new queued execution row is inserted with a `retry_after` timestamp computed as `now + retry_backoff_secs * 2^attempt`. The `claim_next_execution()` SQL query gates on `retry_after IS NULL OR retry_after <= now`, so the poll loop ignores retries until their backoff expires. No synchronous sleep in the worker loop.
+
+**Thread lifecycle:** The thread remains Active during retries. It only transitions to Failed when all retries are exhausted. Each retry creates a new execution row; `attempt_number` tracks the sequence.
+
+**Defaults:** `max_retries: 0` (disabled), `retry_backoff_secs: 30`.
+
+## ADR-012: Execution telemetry pipeline
+
+**Date:** 2026-03
+**Status:** Active
+
+Backend stdout lines are streamed through a `sync_channel(128)` from the reader thread (inside `spawn_blocking`) to a tokio consumer task. The consumer parses JSONL events, batch-inserts them into the `execution_events` table, and emits `ExecutionProgress` events on the EventBus for live dashboard updates.
+
+**Architecture:** `sync_channel` bridges the blocking reader thread and the async consumer without blocking the tokio runtime. Channel bound of 128 provides backpressure — if the consumer falls behind, the reader blocks until space is available.
+
+**Backend-specific parsers:** Each backend (currently Claude via `stream-json`) has its own JSONL parser. The parser extracts typed events: tool calls, file edits, content blocks, and result lines. Other backends emit raw text lines until a parser is implemented.
+
+**Storage:** Batch SQLite inserts reduce write amplification. Events are queryable via `orch_execution_events` MCP tool, enabling mid-execution progress inspection without waiting for the agent to finish.
+
+**EventBus emission:** `ExecutionProgress` events are broadcast on the shared EventBus so the dashboard can update the active execution view in real time without polling.

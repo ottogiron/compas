@@ -35,6 +35,24 @@ This means the `changes-requested` → rework loop (Step 8 → Step 3) is signif
 
 ---
 
+## Worktree Isolation
+
+Agents with `workspace: worktree` run in isolated git worktrees. Each thread gets its own copy of the repo on branch `aster-orch/{thread_id}`. This prevents concurrent agents from conflicting on files.
+
+When reviewing work from a worktree agent, the changes are on the worktree branch — not on main. The operator merges or cherry-picks the work after approval.
+
+Worktrees are automatically cleaned up when threads are completed or abandoned. Failed threads retain their worktrees for inspection.
+
+## Automatic Retry
+
+Agents with `max_retries > 0` automatically retry on transient failures (network errors, temporary rate limits). Quota exhaustion and auth failures are never retried.
+
+The operator does NOT need to do anything differently — retries are transparent. If all retries are exhausted, the thread fails normally and the operator can re-dispatch.
+
+Check `orch_tasks` for `attempt_number` to see if an execution was a retry.
+
+---
+
 ## Mode A — Worker Delegation
 
 ### Step 1 — Health check
@@ -264,3 +282,4 @@ Completion Status: completed / rejected / abandoned
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.
 - **Reviewer unresponsive:** Check `orch_health(alias="chill")`. If unhealthy, operator may do a manual code review as fallback (read the full diff) and document that reviewer was bypassed.
+- **Debugging slow executions:** Use `orch_execution_events(execution_id=...)` to see what tool calls the agent has made so far.

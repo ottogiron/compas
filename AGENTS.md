@@ -22,6 +22,8 @@ This is a standalone repository (`ottogiron/aster-orch`).
 - `src/backend/*` — backend integrations (`claude`, `codex`, `gemini`, `opencode`)
 - `src/config/*` — orchestrator configuration schema and validation
 - `src/dashboard/*` — TUI dashboard (ratatui)
+- `src/worktree.rs` — git worktree creation, cleanup, and path resolution
+- `src/events.rs` — EventBus and execution telemetry pipeline
 - `src/bin/aster_orch.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`)
 - `tests/integration_tests.rs` — orchestrator integration tests
 
