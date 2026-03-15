@@ -20,7 +20,7 @@ use ratatui::{
     style::{Style, Stylize},
     symbols::border,
     text::{Line, Span},
-    widgets::{Block, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Tabs, Widget},
+    widgets::{Block, Clear, Paragraph, Tabs, Widget},
     DefaultTerminal, Frame,
 };
 use std::{
@@ -40,7 +40,6 @@ use crate::dashboard::views::conversation::{render_conversation, ConversationVie
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::events::{EventBus, OrchestratorEvent};
-use crate::lifecycle::LifecycleService;
 use crate::store::{ExecutionRow, Store, ThreadStatusView};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -58,61 +57,6 @@ const SUMMARY_DEBOUNCE: Duration = Duration::from_millis(1500);
 /// Maximum time a single refresh query set can block the TUI thread.
 /// If exceeded, the refresh is skipped and `last_refresh_error` is set.
 const REFRESH_TIMEOUT: Duration = Duration::from_millis(500);
-
-#[derive(Debug, Clone, Copy)]
-enum AdminActionKind {
-    Abandon,
-    Reopen,
-    AbandonStaleActive,
-}
-
-#[derive(Debug, Clone)]
-struct ActionMenuState {
-    thread_id: String,
-    options: Vec<AdminActionKind>,
-    selected: usize,
-}
-
-#[derive(Debug, Clone)]
-struct PendingAdminAction {
-    kind: AdminActionKind,
-    target_label: String,
-    thread_ids: Vec<String>,
-    impact_summary: String,
-    guardrail: String,
-}
-
-impl PendingAdminAction {
-    fn verb(&self) -> &'static str {
-        match self.kind {
-            AdminActionKind::Abandon => "abandon",
-            AdminActionKind::Reopen => "reopen",
-            AdminActionKind::AbandonStaleActive => "abandon stale active",
-        }
-    }
-
-    fn title(&self) -> &'static str {
-        match self.kind {
-            AdminActionKind::Abandon => " Confirm Abandon ",
-            AdminActionKind::Reopen => " Confirm Reopen ",
-            AdminActionKind::AbandonStaleActive => " Confirm Stale Cleanup ",
-        }
-    }
-
-    fn prompt(&self) -> String {
-        match self.kind {
-            AdminActionKind::Abandon => format!("Abandon thread {}?", self.target_label),
-            AdminActionKind::Reopen => {
-                format!("Reopen thread {} to Active?", self.target_label)
-            }
-            AdminActionKind::AbandonStaleActive => format!(
-                "Abandon {} stale active thread(s) in {}?",
-                self.thread_ids.len(),
-                self.target_label
-            ),
-        }
-    }
-}
 
 // ── Activity data ─────────────────────────────────────────────────────────────
 
@@ -194,12 +138,6 @@ pub struct App {
     pub viewing_conversation: Option<ConversationViewState>,
     /// Whether the help overlay is visible.
     pub show_help: bool,
-    /// Optional action menu state for guided admin actions.
-    action_menu: Option<ActionMenuState>,
-    /// Pending admin action waiting for explicit confirmation.
-    pending_admin_action: Option<PendingAdminAction>,
-    /// Last admin action result shown in the status bar.
-    admin_notice: Option<String>,
     /// Optional batch drill filter for Ops tab.
     pub drill_batch: Option<String>,
     /// Optional batch drill filter for History tab.
@@ -282,9 +220,6 @@ impl App {
             viewing_log: None,
             viewing_conversation: None,
             show_help: false,
-            action_menu: None,
-            pending_admin_action: None,
-            admin_notice: None,
             drill_batch: None,
             history_drill_batch: None,
             show_hint_banner: true,
@@ -707,8 +642,6 @@ impl App {
             return;
         };
         let Some(exec_id) = row.execution_id.clone() else {
-            self.admin_notice =
-                Some("Selected thread has no execution to inspect yet.".to_string());
             return;
         };
 
@@ -716,7 +649,6 @@ impl App {
             .handle
             .block_on(async { self.store.get_execution(&exec_id).await.ok().flatten() });
         let Some(execution) = execution else {
-            self.admin_notice = Some(format!("Execution {} was not found.", exec_id));
             return;
         };
 
@@ -853,21 +785,14 @@ impl App {
             })
             .await
         });
-        match result {
-            Ok(Ok((messages, executions))) => {
-                self.viewing_conversation = Some(ConversationViewState::new(
-                    thread_id,
-                    batch_id,
-                    thread_status,
-                    messages,
-                    executions,
-                ));
-            }
-            _ => {
-                self.admin_notice = Some(format!(
-                    "Could not load conversation for thread {thread_id}"
-                ));
-            }
+        if let Ok(Ok((messages, executions))) = result {
+            self.viewing_conversation = Some(ConversationViewState::new(
+                thread_id,
+                batch_id,
+                thread_status,
+                messages,
+                executions,
+            ));
         }
     }
 
@@ -887,7 +812,7 @@ impl App {
         self.refresh_activity();
     }
 
-    // ── Admin actions ────────────────────────────────────────────────────────
+    // ── Selection helpers ─────────────────────────────────────────────────────
 
     fn selected_activity_target(&self) -> Option<OpsSelectable> {
         let data = self.activity_data.as_ref()?;
@@ -908,289 +833,6 @@ impl App {
             self.executions_selected,
             self.history_group_visible_limit(),
         )
-    }
-
-    fn selected_thread_row_from_ops(&self) -> Option<ThreadStatusView> {
-        let data = self.activity_data.as_ref()?;
-        let OpsSelectable::Thread(src_idx) = self.selected_activity_target()? else {
-            return None;
-        };
-        data.rows.get(src_idx).cloned()
-    }
-
-    fn selected_thread_id_and_status(&self) -> Option<(String, String)> {
-        match self.active_tab {
-            0 => self
-                .selected_thread_row_from_ops()
-                .map(|r| (r.thread_id, r.thread_status)),
-            2 => self
-                .executions_data
-                .as_ref()
-                .and_then(|d| match self.selected_history_target() {
-                    Some(HistorySelectable::Execution(exec_idx)) => d.executions.get(exec_idx),
-                    _ => None,
-                })
-                .map(|e| {
-                    let status = self.handle.block_on(async {
-                        self.store
-                            .get_thread(&e.thread_id)
-                            .await
-                            .ok()
-                            .flatten()
-                            .map(|t| t.status)
-                    });
-                    let status = status.unwrap_or_else(|| "Unknown".to_string());
-                    (e.thread_id.clone(), status)
-                }),
-            _ => None,
-        }
-    }
-
-    fn action_allowed(kind: AdminActionKind, thread_status: &str) -> Result<(), &'static str> {
-        match kind {
-            AdminActionKind::Abandon => {
-                if thread_status == "Abandoned" {
-                    Err("thread is already Abandoned")
-                } else {
-                    Ok(())
-                }
-            }
-            AdminActionKind::Reopen => {
-                if matches!(thread_status, "Completed" | "Failed" | "Abandoned") {
-                    Ok(())
-                } else {
-                    Err("reopen is only valid for terminal threads")
-                }
-            }
-            AdminActionKind::AbandonStaleActive => Ok(()),
-        }
-    }
-
-    fn estimate_cancellable_executions(&self, thread_id: &str) -> usize {
-        let store = self.store.clone();
-        let tid = thread_id.to_string();
-        self.handle
-            .block_on(async { store.get_thread_executions(&tid).await.unwrap_or_default() })
-            .into_iter()
-            .filter(|e| matches!(e.status.as_str(), "queued" | "picked_up" | "executing"))
-            .count()
-    }
-
-    fn queue_admin_action(&mut self, kind: AdminActionKind) {
-        let Some((thread_id, thread_status)) = self.selected_thread_id_and_status() else {
-            self.admin_notice =
-                Some("No thread selected. Pick a thread row in Ops/History first.".to_string());
-            return;
-        };
-        if let Err(reason) = Self::action_allowed(kind, &thread_status) {
-            self.admin_notice = Some(format!("Cannot {}: {}", action_name(kind), reason));
-            return;
-        }
-
-        let (impact_summary, guardrail) = match kind {
-            AdminActionKind::Abandon => {
-                let cancellable = self.estimate_cancellable_executions(&thread_id);
-                (
-                    format!("Will cancel {} queued/running executions.", cancellable),
-                    "Use abandon only when work should stop immediately.".to_string(),
-                )
-            }
-            AdminActionKind::Reopen => (
-                format!("Will move {} -> Active.", thread_status),
-                "Reopened threads can be re-triggered by operator actions.".to_string(),
-            ),
-            AdminActionKind::AbandonStaleActive => (
-                "Will abandon stale active threads.".to_string(),
-                "Use the stale cleanup shortcut from Ops.".to_string(),
-            ),
-        };
-
-        self.pending_admin_action = Some(PendingAdminAction {
-            kind,
-            target_label: thread_id.clone(),
-            thread_ids: vec![thread_id],
-            impact_summary,
-            guardrail,
-        });
-        self.action_menu = None;
-    }
-
-    fn stale_active_thread_ids(&self) -> Vec<String> {
-        let now_unix = Self::now_unix();
-        self.activity_data
-            .as_ref()
-            .map(|d| {
-                activity::stale_active_thread_ids(
-                    &d.rows,
-                    self.drill_batch.as_deref(),
-                    now_unix,
-                    self.stale_active_secs(),
-                )
-            })
-            .unwrap_or_default()
-    }
-
-    fn queue_stale_active_cleanup(&mut self) {
-        if self.active_tab != 0 {
-            self.admin_notice = Some("Stale cleanup is available on the Ops tab.".to_string());
-            return;
-        }
-
-        let thread_ids = self.stale_active_thread_ids();
-        if thread_ids.is_empty() {
-            self.admin_notice = Some(format!(
-                "No stale active threads found (age >= {}s, excluding queued/running).",
-                self.stale_active_secs()
-            ));
-            return;
-        }
-
-        let target_label = self
-            .drill_batch
-            .as_deref()
-            .map(|b| format!("batch {}", b))
-            .unwrap_or_else(|| "all visible threads".to_string());
-        let count = thread_ids.len();
-
-        self.pending_admin_action = Some(PendingAdminAction {
-            kind: AdminActionKind::AbandonStaleActive,
-            target_label: target_label.clone(),
-            thread_ids,
-            impact_summary: format!(
-                "Will abandon {} stale active thread(s) in {}.",
-                count, target_label
-            ),
-            guardrail: format!(
-                "Stale means Active for at least {}s with no queued/picked_up/executing execution.",
-                self.stale_active_secs()
-            ),
-        });
-        self.action_menu = None;
-    }
-
-    fn open_action_menu(&mut self) {
-        let Some((thread_id, thread_status)) = self.selected_thread_id_and_status() else {
-            self.admin_notice = Some("Action menu requires a selected thread row.".to_string());
-            return;
-        };
-
-        let mut options = Vec::new();
-        if Self::action_allowed(AdminActionKind::Abandon, &thread_status).is_ok() {
-            options.push(AdminActionKind::Abandon);
-        }
-        if Self::action_allowed(AdminActionKind::Reopen, &thread_status).is_ok() {
-            options.push(AdminActionKind::Reopen);
-        }
-
-        if options.is_empty() {
-            self.admin_notice =
-                Some("No admin actions available for the selected thread status.".to_string());
-            return;
-        }
-
-        self.action_menu = Some(ActionMenuState {
-            thread_id,
-            options,
-            selected: 0,
-        });
-    }
-
-    fn close_action_menu(&mut self) {
-        self.action_menu = None;
-    }
-
-    fn action_menu_prev(&mut self) {
-        if let Some(menu) = &mut self.action_menu {
-            menu.selected = menu.selected.saturating_sub(1);
-        }
-    }
-
-    fn action_menu_next(&mut self) {
-        if let Some(menu) = &mut self.action_menu {
-            let max = menu.options.len().saturating_sub(1);
-            menu.selected = (menu.selected + 1).min(max);
-        }
-    }
-
-    fn action_menu_confirm(&mut self) {
-        let Some(menu) = self.action_menu.as_ref() else {
-            return;
-        };
-        let Some(&kind) = menu.options.get(menu.selected) else {
-            return;
-        };
-        self.queue_admin_action(kind);
-    }
-
-    fn cancel_admin_action(&mut self) {
-        self.pending_admin_action = None;
-        self.admin_notice = Some("Admin action cancelled.".to_string());
-    }
-
-    fn execute_admin_action(&mut self) {
-        let Some(action) = self.pending_admin_action.take() else {
-            return;
-        };
-
-        let svc = LifecycleService::new(self.store.clone());
-        match action.kind {
-            AdminActionKind::Abandon => {
-                let thread_id = action.thread_ids.first().cloned().unwrap_or_default();
-                let result = self
-                    .handle
-                    .block_on(async { svc.abandon(&thread_id).await });
-                match result {
-                    Ok(out) => {
-                        self.admin_notice = Some(format!(
-                            "Thread {} abandoned ({} executions cancelled).",
-                            out.thread_id, out.executions_cancelled
-                        ));
-                    }
-                    Err(e) => {
-                        self.admin_notice = Some(format!("Failed to {}: {}", action.verb(), e));
-                    }
-                }
-            }
-            AdminActionKind::Reopen => {
-                let thread_id = action.thread_ids.first().cloned().unwrap_or_default();
-                let result = self.handle.block_on(async { svc.reopen(&thread_id).await });
-                match result {
-                    Ok(out) => {
-                        self.admin_notice = Some(format!(
-                            "Thread {} reopened ({} → {}).",
-                            out.thread_id, out.previous_status, out.new_status
-                        ));
-                    }
-                    Err(e) => {
-                        self.admin_notice = Some(format!("Failed to {}: {}", action.verb(), e));
-                    }
-                }
-            }
-            AdminActionKind::AbandonStaleActive => {
-                let mut abandoned = 0usize;
-                let mut cancelled_total = 0u64;
-                let mut failed = 0usize;
-
-                for thread_id in &action.thread_ids {
-                    match self.handle.block_on(async { svc.abandon(thread_id).await }) {
-                        Ok(out) => {
-                            abandoned += 1;
-                            cancelled_total += out.executions_cancelled;
-                        }
-                        Err(_) => failed += 1,
-                    }
-                }
-
-                self.admin_notice = Some(format!(
-                    "Stale cleanup complete: {} abandoned, {} failed ({} executions cancelled).",
-                    abandoned, failed, cancelled_total
-                ));
-            }
-        }
-
-        // Refresh impacted views after a state mutation.
-        self.refresh_activity();
-        self.refresh_executions();
     }
 
     fn toggle_help(&mut self) {
@@ -1484,10 +1126,6 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     handle_log_viewer_key(app, key.code);
                 } else if app.show_help {
                     handle_help_key(app, key.code);
-                } else if app.pending_admin_action.is_some() {
-                    handle_admin_confirm_key(app, key.code);
-                } else if app.action_menu.is_some() {
-                    handle_action_menu_key(app, key.code);
                 } else {
                     handle_list_key(app, key.code);
                 }
@@ -1677,30 +1315,6 @@ fn handle_help_key(app: &mut App, code: KeyCode) {
     }
 }
 
-/// Handle key events while action menu overlay is open.
-fn handle_action_menu_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Esc => app.close_action_menu(),
-        KeyCode::Up | KeyCode::Char('k') => app.action_menu_prev(),
-        KeyCode::Down | KeyCode::Char('j') => app.action_menu_next(),
-        KeyCode::Enter => app.action_menu_confirm(),
-        _ => {}
-    }
-}
-
-/// Handle key events while an admin action confirmation modal is open.
-fn handle_admin_confirm_key(app: &mut App, code: KeyCode) {
-    match code {
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
-            app.execute_admin_action();
-        }
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-            app.cancel_admin_action();
-        }
-        _ => {}
-    }
-}
-
 /// Handle a key event when the normal list/tab view is active.
 fn handle_list_key(app: &mut App, code: KeyCode) {
     app.show_hint_banner = false;
@@ -1729,12 +1343,6 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('G') => app.select_last_row(),
         KeyCode::Esc => app.clear_batch_drill(),
         KeyCode::Char('x') => app.clear_batch_drill(),
-        // Guided admin menu.
-        KeyCode::Char('a') => app.open_action_menu(),
-        // Lifecycle admin actions.
-        KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
-        KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
-        KeyCode::Char('s') => app.queue_stale_active_cleanup(),
         // Open conversation view for selected thread (Ops tab only).
         KeyCode::Char('c') => {
             if app.active_tab == 0 {
@@ -1788,10 +1396,6 @@ impl Widget for &App {
 
         if self.show_help {
             self.render_help_overlay_widget(area, buf);
-        } else if self.action_menu.is_some() {
-            self.render_action_menu_widget(area, buf);
-        } else if self.pending_admin_action.is_some() {
-            self.render_admin_action_widget(area, buf);
         }
     }
 }
@@ -1922,14 +1526,8 @@ impl App {
                 spans.push(key("c"));
                 spans.push(Span::raw(": conversation"));
                 spans.push(sep());
-                spans.push(key("a"));
-                spans.push(Span::raw(": actions"));
-                spans.push(sep());
                 spans.push(key("Esc"));
-                spans.push(Span::raw(": back batch"));
-                spans.push(sep());
-                spans.push(key("s"));
-                spans.push(Span::raw(": stale cleanup"));
+                spans.push(Span::raw(": back"));
             }
             2 => {
                 spans.push(sep());
@@ -1938,9 +1536,6 @@ impl App {
                 spans.push(sep());
                 spans.push(key("Esc"));
                 spans.push(Span::raw(": back batch"));
-                spans.push(sep());
-                spans.push(key("a"));
-                spans.push(Span::raw(": actions"));
             }
             1 => {
                 spans.push(sep());
@@ -1948,17 +1543,6 @@ impl App {
                 spans.push(Span::raw(": select agent"));
             }
             _ => {}
-        }
-
-        if let Some(msg) = &self.admin_notice {
-            let mut notice = msg.clone();
-            if notice.chars().count() > 64 {
-                notice = format!("{}…", notice.chars().take(63).collect::<String>());
-            }
-            spans.push(sep());
-            spans.push("last:".fg(theme::ACCENT));
-            spans.push(Span::raw(" "));
-            spans.push(notice.fg(theme::TEXT_MUTED));
         }
 
         {
@@ -1984,102 +1568,12 @@ impl App {
         if self.show_hint_banner {
             spans.push(sep());
             spans.push("Tip:".fg(theme::ACCENT));
-            spans.push(" press ? for keymap, a for guided actions".fg(theme::TEXT_MUTED));
+            spans.push(" press ? for keymap".fg(theme::TEXT_MUTED));
         }
 
         Paragraph::new(Line::from(spans))
             .style(Style::new().bg(theme::BG_STATUS_BAR).fg(theme::TEXT_MUTED))
             .render(area, buf);
-    }
-
-    fn render_admin_action_widget(&self, area: Rect, buf: &mut Buffer) {
-        let Some(action) = &self.pending_admin_action else {
-            return;
-        };
-
-        let modal = centered_rect(74, 10, area);
-        let block = Block::bordered()
-            .border_style(Style::new().fg(theme::BORDER_FOCUS))
-            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
-            .title(action.title());
-        let inner = block.inner(modal);
-        Clear.render(modal, buf);
-        block.render(modal, buf);
-
-        let lines = vec![
-            Line::from(vec![Span::raw(" "), action.prompt().fg(theme::TEXT_BRIGHT)]),
-            Line::from(vec![
-                Span::raw(" "),
-                "Impact: ".fg(theme::ACCENT),
-                action.impact_summary.clone().fg(theme::TEXT_NORMAL),
-            ]),
-            Line::from(vec![
-                Span::raw(" "),
-                "Guardrail: ".fg(theme::ACCENT),
-                action.guardrail.clone().fg(theme::TEXT_MUTED),
-            ]),
-            Line::from(Span::raw("")),
-            Line::from(vec![
-                Span::raw(" "),
-                "Enter".fg(theme::ACCENT).bold(),
-                ": confirm  ".fg(theme::TEXT_MUTED),
-                "Esc".fg(theme::ACCENT).bold(),
-                ": cancel".fg(theme::TEXT_MUTED),
-            ]),
-        ];
-
-        Paragraph::new(lines)
-            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
-            .render(inner, buf);
-    }
-
-    fn render_action_menu_widget(&self, area: Rect, buf: &mut Buffer) {
-        let Some(menu) = &self.action_menu else {
-            return;
-        };
-
-        let modal = centered_rect(58, 8, area);
-        let block = Block::bordered()
-            .border_style(Style::new().fg(theme::BORDER_FOCUS))
-            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
-            .title(" Actions ")
-            .title_bottom(Line::from(vec![
-                Span::raw(" "),
-                "↑/↓".fg(theme::ACCENT).bold(),
-                ": choose  ".fg(theme::TEXT_MUTED),
-                "Enter".fg(theme::ACCENT).bold(),
-                ": continue  ".fg(theme::TEXT_MUTED),
-                "Esc".fg(theme::ACCENT).bold(),
-                ": close ".fg(theme::TEXT_MUTED),
-            ]));
-        let inner = block.inner(modal);
-        Clear.render(modal, buf);
-        block.render(modal, buf);
-
-        let mut items = vec![ListItem::new(Line::from(vec![
-            Span::raw(" "),
-            "Thread: ".fg(theme::ACCENT),
-            menu.thread_id.clone().fg(theme::TEXT_NORMAL),
-        ]))];
-
-        for (idx, action) in menu.options.iter().enumerate() {
-            items.push(ListItem::new(Line::from(vec![
-                Span::raw("   "),
-                action_name(*action).fg(theme::TEXT_NORMAL),
-            ])));
-            if idx + 1 < menu.options.len() {
-                items.push(ListItem::new(Line::from(Span::raw("   "))));
-            }
-        }
-
-        let mut state = ListState::default();
-        state.select(Some(1 + menu.selected.saturating_mul(2)));
-
-        let list = List::new(items)
-            .highlight_symbol(" > ")
-            .highlight_style(Style::new().fg(theme::ACCENT).bold())
-            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL));
-        StatefulWidget::render(list, inner, buf, &mut state);
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
@@ -2100,8 +1594,7 @@ impl App {
             Line::from("   ↑/↓ or j/k move   g/G first/last"),
             Line::from(" Ops"),
             Line::from("   Enter open log or drill batch   c conversation view"),
-            Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
-            Line::from("   Esc back from batch drill"),
+            Line::from("   Esc/x back from batch drill"),
             Line::from(" History"),
             Line::from("   Enter drill batch/open execution   Esc back from history batch drill"),
             Line::from(" Execution Detail"),
@@ -2116,14 +1609,6 @@ impl App {
         Paragraph::new(lines)
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .render(inner, buf);
-    }
-}
-
-fn action_name(kind: AdminActionKind) -> &'static str {
-    match kind {
-        AdminActionKind::Abandon => "abandon",
-        AdminActionKind::Reopen => "reopen",
-        AdminActionKind::AbandonStaleActive => "abandon stale active",
     }
 }
 
