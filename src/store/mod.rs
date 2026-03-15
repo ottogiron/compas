@@ -149,6 +149,9 @@ pub struct ExecutionRow {
     pub error_detail: Option<String>,
     pub parsed_intent: Option<String>,
     pub prompt_hash: Option<String>,
+    pub attempt_number: i32,
+    pub retry_after: Option<i64>,
+    pub error_category: Option<String>,
 }
 
 /// A stored execution event row (real-time telemetry).
@@ -294,6 +297,27 @@ impl Store {
         let has_prompt_hash = columns.iter().any(|c| c.1 == "prompt_hash");
         if !has_prompt_hash {
             sqlx::query("ALTER TABLE executions ADD COLUMN prompt_hash TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        // ORCH-EVO-12: retry support columns
+        let has_attempt_number = columns.iter().any(|c| c.1 == "attempt_number");
+        if !has_attempt_number {
+            sqlx::query(
+                "ALTER TABLE executions ADD COLUMN attempt_number INTEGER NOT NULL DEFAULT 0",
+            )
+            .execute(&self.pool)
+            .await?;
+        }
+        let has_retry_after = columns.iter().any(|c| c.1 == "retry_after");
+        if !has_retry_after {
+            sqlx::query("ALTER TABLE executions ADD COLUMN retry_after INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_error_category = columns.iter().any(|c| c.1 == "error_category");
+        if !has_error_category {
+            sqlx::query("ALTER TABLE executions ADD COLUMN error_category TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -805,6 +829,7 @@ impl Store {
         let candidate: Option<(String,)> = sqlx::query_as(
             "SELECT e.id FROM executions e
              WHERE e.status = 'queued'
+             AND (e.retry_after IS NULL OR e.retry_after <= strftime('%s','now'))
              AND (SELECT COUNT(*) FROM executions e2
                   WHERE e2.agent_alias = e.agent_alias
                   AND e2.status IN ('picked_up', 'executing')) < ?
@@ -835,24 +860,7 @@ impl Store {
             return Ok(None);
         }
 
-        let row: Option<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let row: Option<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1016,24 +1024,7 @@ impl Store {
         &self,
         thread_id: &str,
     ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1053,24 +1044,7 @@ impl Store {
         &self,
         thread_id: &str,
     ) -> Result<Option<ExecutionRow>, sqlx::Error> {
-        let row: Option<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let row: Option<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1099,24 +1073,7 @@ impl Store {
         agent_alias: &str,
         limit: i64,
     ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1134,24 +1091,7 @@ impl Store {
 
     /// Get the most recent executions across all agents, newest first.
     pub async fn recent_executions(&self, limit: i64) -> Result<Vec<ExecutionRow>, sqlx::Error> {
-        let rows: Vec<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let rows: Vec<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1305,24 +1245,7 @@ impl Store {
     }
 
     pub async fn get_execution(&self, id: &str) -> Result<Option<ExecutionRow>, sqlx::Error> {
-        let row: Option<(
-            String,
-            String,
-            Option<String>,
-            String,
-            Option<i64>,
-            String,
-            i64,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i32>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        )> = sqlx::query_as(
+        let row: Option<ExecutionRowBase> = sqlx::query_as(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash
@@ -1333,7 +1256,26 @@ impl Store {
         .bind(id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(row_to_execution))
+
+        match row {
+            Some(r) => {
+                let mut exec = row_to_execution(r);
+                // Fetch retry-specific fields separately (avoids 19-element tuple).
+                let extra: Option<(i32, Option<i64>, Option<String>)> = sqlx::query_as(
+                    "SELECT attempt_number, retry_after, error_category FROM executions WHERE id = ?",
+                )
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+                if let Some((attempt, retry, cat)) = extra {
+                    exec.attempt_number = attempt;
+                    exec.retry_after = retry;
+                    exec.error_category = cat;
+                }
+                Ok(Some(exec))
+            }
+            None => Ok(None),
+        }
     }
 
     /// Retrieve the backend-specific session ID from the most recent completed
@@ -1372,6 +1314,68 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    // ── Retry support ───────────────────────────────────────────────────
+
+    /// Set the error category on an execution after failure classification.
+    pub async fn set_error_category(
+        &self,
+        execution_id: &str,
+        category: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query("UPDATE executions SET error_category = ? WHERE id = ?")
+            .bind(category)
+            .bind(execution_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Get the attempt number of an execution.
+    pub async fn get_execution_attempt_number(
+        &self,
+        execution_id: &str,
+    ) -> Result<i32, sqlx::Error> {
+        let row: Option<(i32,)> =
+            sqlx::query_as("SELECT attempt_number FROM executions WHERE id = ?")
+                .bind(execution_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| r.0).unwrap_or(0))
+    }
+
+    /// Insert a retry execution for a failed execution.
+    ///
+    /// Creates a new queued execution linked to the same dispatch message,
+    /// with an incremented attempt number and a `retry_after` timestamp
+    /// for exponential backoff.
+    ///
+    /// Returns the new execution ID.
+    pub async fn insert_retry_execution(
+        &self,
+        thread_id: &str,
+        agent_alias: &str,
+        dispatch_message_id: Option<i64>,
+        prompt_hash: Option<&str>,
+        attempt_number: i32,
+        retry_after: i64,
+    ) -> Result<String, sqlx::Error> {
+        let id = ulid::Ulid::new().to_string();
+        sqlx::query(
+            "INSERT INTO executions (id, thread_id, agent_alias, dispatch_message_id, status, prompt_hash, attempt_number, retry_after)
+             VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(thread_id)
+        .bind(agent_alias)
+        .bind(dispatch_message_id)
+        .bind(prompt_hash)
+        .bind(attempt_number)
+        .bind(retry_after)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
     }
 
     // ── Execution event telemetry ────────────────────────────────────────
@@ -1531,26 +1535,28 @@ fn row_to_message(
     }
 }
 
-fn row_to_execution(
-    r: (
-        String,
-        String,
-        Option<String>,
-        String,
-        Option<i64>,
-        String,
-        i64,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i32>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    ),
-) -> ExecutionRow {
+/// Raw row type for execution queries (sqlx tuple derivation limited to 16 elements).
+/// Split into base (16) + extra (3) tuples to stay within sqlx limits.
+type ExecutionRowBase = (
+    String,
+    String,
+    Option<String>,
+    String,
+    Option<i64>,
+    String,
+    i64,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i64>,
+    Option<i32>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn row_to_execution(r: ExecutionRowBase) -> ExecutionRow {
     ExecutionRow {
         id: r.0,
         thread_id: r.1,
@@ -1568,6 +1574,10 @@ fn row_to_execution(
         error_detail: r.13,
         parsed_intent: r.14,
         prompt_hash: r.15,
+        // Default values — populated by separate query when needed
+        attempt_number: 0,
+        retry_after: None,
+        error_category: None,
     }
 }
 
