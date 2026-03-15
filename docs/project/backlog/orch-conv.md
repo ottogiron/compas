@@ -53,7 +53,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: open conversation with long agent messages, scroll top to bottom, verify all content is reachable
-- Status: Todo
+- Status: In Progress
 
 ## Ticket ORCH-CONV-3 — Left-Side Indicator Border
 
@@ -134,6 +134,9 @@ Created: 2026-03-15
 - End:
 - Duration:
 - Notes:
+
+
+- Start: 2026-03-15 21:38 UTC
 
 - Ticket: ORCH-CONV-3
 - Owner: TBD

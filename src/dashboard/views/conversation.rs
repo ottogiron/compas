@@ -467,15 +467,6 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
         }
     }
 
-    // Compute scroll — when follow_mode clamp to max; otherwise use stored offset.
-    let line_count = display_lines.len();
-    let max_offset = line_count.saturating_sub(visible_rows);
-    let scroll_offset = if state.follow_mode {
-        max_offset
-    } else {
-        state.scroll_offset.min(max_offset)
-    };
-
     // Build title and footer spans
     let thread_short = super::truncate(&state.thread_id, 20);
     let status_color = theme::thread_status_color(&state.thread_status);
@@ -521,11 +512,29 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
         .padding(Padding::new(1, 1, 0, 0))
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL));
 
+    // Build paragraph first to compute visual row count (accounts for line wrapping).
     let paragraph = Paragraph::new(display_lines)
-        .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0))
         .wrap(Wrap { trim: false })
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
         .block(block);
+
+    // Inner content width: area minus 2 borders and 2 padding columns.
+    let inner_width = area.width.saturating_sub(4);
+
+    // Use visual row count (after wrapping) instead of logical line count.
+    let visual_line_count = paragraph.line_count(inner_width);
+    let max_offset = visual_line_count.saturating_sub(visible_rows);
+
+    // Compute scroll — when follow_mode clamp to max; otherwise use stored offset.
+    let scroll_offset = if state.follow_mode {
+        max_offset
+    } else {
+        state.scroll_offset.min(max_offset)
+    };
+    // Write back clamped offset so subsequent scroll_up works from the actual position.
+    state.scroll_offset = scroll_offset;
+
+    let paragraph = paragraph.scroll((scroll_offset.min(u16::MAX as usize) as u16, 0));
 
     frame.render_widget(paragraph, area);
 }
