@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::backend::registry::BackendRegistry;
-use crate::config::types::AgentRole;
+use crate::config::types::{AgentConfig, AgentRole};
 use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::store::Store;
@@ -374,8 +374,9 @@ impl WorkerRunner {
                         // which causes the consumer's recv to get Disconnected.
                         let _ = telemetry_handle.await;
 
-                        // Post-execution: insert reply message and emit events.
-                        handle_trigger_output(&store, &event_bus, &output).await;
+                        // Post-execution: insert reply message, emit events, and
+                        // potentially enqueue a retry for transient failures.
+                        handle_trigger_output(&store, &event_bus, &output, &agent_configs).await;
                     });
                 }
                 Ok(None) => {
@@ -582,20 +583,17 @@ async fn consume_telemetry(
 /// Insert a reply message from the agent after trigger completion, and emit
 /// events for `ExecutionCompleted`, `ThreadStatusChanged` (on failure), and
 /// `MessageReceived`.
-async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &TriggerOutput) {
-    let reply_intent = if output.success {
-        output.parsed_intent.as_deref().unwrap_or("status-update")
-    } else {
-        "error"
-    };
-
-    let reply_body = output.output.as_deref().unwrap_or(if output.success {
-        "(completed with no output)"
-    } else {
-        "(failed with no output)"
-    });
-
-    // Emit ExecutionCompleted before inserting the reply message.
+///
+/// For failed executions with transient errors: if the agent config allows
+/// retries and the attempt limit hasn't been reached, enqueue a retry
+/// execution with exponential backoff instead of marking the thread Failed.
+async fn handle_trigger_output(
+    store: &Store,
+    event_bus: &EventBus,
+    output: &TriggerOutput,
+    agent_configs: &[AgentConfig],
+) {
+    // Emit ExecutionCompleted before any retry/reply logic.
     event_bus.emit(OrchestratorEvent::ExecutionCompleted {
         execution_id: output.execution_id.clone(),
         thread_id: output.thread_id.clone(),
@@ -604,44 +602,95 @@ async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &Tri
         duration_ms: output.duration_ms,
     });
 
-    // Emit ThreadStatusChanged for both success and failure paths so all
-    // consumers get push notification regardless of outcome.
-    let thread_status = if output.success {
-        "Active" // thread stays Active after a successful execution; operator closes it
-    } else {
-        "Failed"
-    };
-    event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
-        thread_id: output.thread_id.clone(),
-        new_status: thread_status.to_string(),
-    });
+    if output.success {
+        // ── Success path ──
+        let reply_intent = output.parsed_intent.as_deref().unwrap_or("status-update");
+        let reply_body = output
+            .output
+            .as_deref()
+            .unwrap_or("(completed with no output)");
 
-    // Insert the reply message and emit MessageReceived on success.
-    match store
-        .insert_message(
-            &output.thread_id,
-            &output.agent_alias,
-            "operator",
-            reply_intent,
-            reply_body,
-            None,
-        )
-        .await
-    {
-        Ok(message_id) => {
-            event_bus.emit(OrchestratorEvent::MessageReceived {
-                thread_id: output.thread_id.clone(),
-                message_id,
-                from_alias: output.agent_alias.clone(),
-                intent: reply_intent.to_string(),
-            });
-        }
-        Err(e) => {
-            tracing::error!(
-                thread_id = %output.thread_id,
-                error = %e,
-                "failed to insert reply message"
-            );
+        event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+            thread_id: output.thread_id.clone(),
+            new_status: "Active".to_string(),
+        });
+
+        insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+    } else {
+        // ── Failure path — check for retry eligibility ──
+        let should_retry = should_retry_execution(output, agent_configs);
+
+        if should_retry {
+            // Enqueue retry execution with exponential backoff.
+            let agent_config = agent_configs
+                .iter()
+                .find(|a| a.alias == output.agent_alias);
+            let backoff_secs = agent_config
+                .map(|a| a.retry_backoff_secs)
+                .unwrap_or(30);
+            let next_attempt = output.attempt_number + 1;
+            // Exponential backoff: base * 2^attempt (capped at 1 hour)
+            let delay_secs =
+                (backoff_secs * 2u64.saturating_pow(output.attempt_number as u32)).min(3600);
+            let retry_after =
+                chrono::Utc::now().timestamp() + delay_secs as i64;
+
+            // Look up prompt_hash from the failed execution for continuity.
+            let prompt_hash = match store.get_execution(&output.execution_id).await {
+                Ok(Some(exec)) => exec.prompt_hash,
+                _ => None,
+            };
+
+            match store
+                .insert_retry_execution(
+                    &output.thread_id,
+                    &output.agent_alias,
+                    output.dispatch_message_id,
+                    prompt_hash.as_deref(),
+                    next_attempt,
+                    retry_after,
+                )
+                .await
+            {
+                Ok(retry_exec_id) => {
+                    tracing::info!(
+                        exec_id = %output.execution_id,
+                        retry_exec_id = %retry_exec_id,
+                        thread_id = %output.thread_id,
+                        agent = %output.agent_alias,
+                        attempt = next_attempt,
+                        retry_after = retry_after,
+                        delay_secs = delay_secs,
+                        error_category = ?output.error_category,
+                        "enqueued retry execution"
+                    );
+
+                    // Emit retry event — thread stays Active
+                    event_bus.emit(OrchestratorEvent::ExecutionRetrying {
+                        execution_id: output.execution_id.clone(),
+                        retry_execution_id: retry_exec_id,
+                        thread_id: output.thread_id.clone(),
+                        agent_alias: output.agent_alias.clone(),
+                        attempt: next_attempt,
+                        retry_after,
+                    });
+
+                    // Do NOT insert error reply or mark thread failed — retry is pending
+                }
+                Err(e) => {
+                    tracing::error!(
+                        exec_id = %output.execution_id,
+                        thread_id = %output.thread_id,
+                        error = %e,
+                        "failed to enqueue retry — falling through to terminal failure"
+                    );
+                    // Fall through to terminal failure
+                    mark_terminal_failure(store, event_bus, output).await;
+                }
+            }
+        } else {
+            // Terminal failure — no retry
+            mark_terminal_failure(store, event_bus, output).await;
         }
     }
 
@@ -652,8 +701,109 @@ async fn handle_trigger_output(store: &Store, event_bus: &EventBus, output: &Tri
         success = output.success,
         duration_ms = output.duration_ms,
         intent = ?output.parsed_intent,
+        error_category = ?output.error_category,
+        attempt = output.attempt_number,
         "trigger completed"
     );
+}
+
+/// Determine if a failed execution should be retried.
+///
+/// Criteria:
+/// - Error category is retryable (Transient only)
+/// - Execution did not time out (timed out = hung backend, not retried)
+/// - Agent config allows retries (max_retries > 0)
+/// - Current attempt is under the limit
+fn should_retry_execution(output: &TriggerOutput, agent_configs: &[AgentConfig]) -> bool {
+    // Never retry successful executions
+    if output.success {
+        return false;
+    }
+
+    // Never retry timeouts (hung backends)
+    if output.timed_out {
+        return false;
+    }
+
+    // Must have a retryable error category
+    let is_retryable = output
+        .error_category
+        .as_ref()
+        .is_some_and(|cat| cat.is_retryable());
+    if !is_retryable {
+        return false;
+    }
+
+    // Check agent config for retry limit
+    let agent_config = agent_configs
+        .iter()
+        .find(|a| a.alias == output.agent_alias);
+    let max_retries = agent_config.map(|a| a.max_retries).unwrap_or(0);
+
+    if max_retries == 0 {
+        return false;
+    }
+
+    // attempt_number is 0-based; after attempt 0, we've done 1 try.
+    // max_retries is the number of retry attempts allowed.
+    // So we retry if (attempt_number + 1) <= max_retries,
+    // i.e., attempt_number < max_retries.
+    (output.attempt_number as u32) < max_retries
+}
+
+/// Mark a failed execution as terminal: set thread Failed, insert error reply.
+async fn mark_terminal_failure(store: &Store, event_bus: &EventBus, output: &TriggerOutput) {
+    let _ = store
+        .mark_thread_failed_if_active(&output.thread_id)
+        .await;
+
+    event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+        thread_id: output.thread_id.clone(),
+        new_status: "Failed".to_string(),
+    });
+
+    let reply_body = output
+        .output
+        .as_deref()
+        .unwrap_or("(failed with no output)");
+    insert_reply_message(store, event_bus, output, "error", reply_body).await;
+}
+
+/// Insert a reply message and emit MessageReceived event.
+async fn insert_reply_message(
+    store: &Store,
+    event_bus: &EventBus,
+    output: &TriggerOutput,
+    intent: &str,
+    body: &str,
+) {
+    match store
+        .insert_message(
+            &output.thread_id,
+            &output.agent_alias,
+            "operator",
+            intent,
+            body,
+            None,
+        )
+        .await
+    {
+        Ok(message_id) => {
+            event_bus.emit(OrchestratorEvent::MessageReceived {
+                thread_id: output.thread_id.clone(),
+                message_id,
+                from_alias: output.agent_alias.clone(),
+                intent: intent.to_string(),
+            });
+        }
+        Err(e) => {
+            tracing::error!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "failed to insert reply message"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

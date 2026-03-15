@@ -70,6 +70,19 @@ pub enum OrchestratorEvent {
         from_alias: String,
         intent: String,
     },
+    /// A failed execution is being retried with a new execution.
+    ExecutionRetrying {
+        /// The failed execution that triggered the retry.
+        execution_id: String,
+        /// The new queued execution for the retry attempt.
+        retry_execution_id: String,
+        thread_id: String,
+        agent_alias: String,
+        /// The retry attempt number (1-based).
+        attempt: i32,
+        /// Unix timestamp when the retry execution becomes eligible for claiming.
+        retry_after: i64,
+    },
 }
 
 /// Shared event bus — thin wrapper around `tokio::broadcast`.
