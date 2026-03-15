@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod agents;
+pub mod conversation;
 pub mod executions;
 pub mod log_viewer;
 pub mod payload;

@@ -36,6 +36,7 @@ use crate::config::ConfigHandle;
 use crate::dashboard::theme;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
+use crate::dashboard::views::conversation::{render_conversation, ConversationViewState};
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::events::{EventBus, OrchestratorEvent};
@@ -189,6 +190,8 @@ pub struct App {
     pub executions_selected: usize,
     /// Active execution detail state. `Some` when the detail overlay is open.
     pub viewing_log: Option<ExecutionDetailState>,
+    /// Active conversation view state. `Some` when the conversation overlay is open.
+    pub viewing_conversation: Option<ConversationViewState>,
     /// Whether the help overlay is visible.
     pub show_help: bool,
     /// Optional action menu state for guided admin actions.
@@ -277,6 +280,7 @@ impl App {
             executions_data: None,
             executions_selected: 0,
             viewing_log: None,
+            viewing_conversation: None,
             show_help: false,
             action_menu: None,
             pending_admin_action: None,
@@ -813,6 +817,66 @@ impl App {
         })
     }
 
+    // ── Conversation view ────────────────────────────────────────────────────
+
+    /// Open the conversation view for the currently selected thread on the Ops tab.
+    pub fn open_conversation(&mut self) {
+        if self.active_tab != 0 {
+            return;
+        }
+        let Some(data) = &self.activity_data else {
+            return;
+        };
+        let Some(OpsSelectable::Thread(src_idx)) = activity::ops_selected_target(
+            &data.rows,
+            self.drill_batch.as_deref(),
+            self.activity_selected,
+            Self::now_unix(),
+            self.stale_active_secs(),
+        ) else {
+            return;
+        };
+        let Some(row) = data.rows.get(src_idx) else {
+            return;
+        };
+        let thread_id = row.thread_id.clone();
+        let batch_id = row.batch_id.clone();
+        let thread_status = row.thread_status.clone();
+
+        let store = self.store.clone();
+        let tid = thread_id.clone();
+        let result = self.handle.block_on(async {
+            tokio::time::timeout(REFRESH_TIMEOUT, async {
+                let messages = store.get_thread_messages(&tid).await?;
+                let executions = store.get_thread_executions(&tid).await?;
+                Ok::<_, sqlx::Error>((messages, executions))
+            })
+            .await
+        });
+        match result {
+            Ok(Ok((messages, executions))) => {
+                self.viewing_conversation = Some(ConversationViewState::new(
+                    thread_id,
+                    batch_id,
+                    thread_status,
+                    messages,
+                    executions,
+                ));
+            }
+            _ => {
+                self.admin_notice = Some(format!(
+                    "Could not load conversation for thread {thread_id}"
+                ));
+            }
+        }
+    }
+
+    /// Close the conversation view and return to the list view.
+    pub fn close_conversation(&mut self) {
+        self.viewing_conversation = None;
+        self.refresh_activity();
+    }
+
     /// Close the detail view and return to the list view.
     ///
     /// Forces an immediate activity refresh so data is current when the
@@ -1306,12 +1370,47 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             }
         }
 
+        // ── Conversation view live polling ─────────────────────────────────────
+        // When a conversation view is open for an active thread, poll for new
+        // messages and executions on each refresh tick.
+        let conversation_refresh = app.viewing_conversation.as_ref().and_then(|cv| {
+            if cv.is_active() {
+                Some((cv.thread_id.clone(), cv.last_message_id))
+            } else {
+                None
+            }
+        });
+        if let Some((tid, last_msg_id)) = conversation_refresh {
+            let store = app.store.clone();
+            let tid2 = tid.clone();
+            if let Ok(Ok((new_msgs, execs))) = app.handle.block_on(async {
+                tokio::time::timeout(REFRESH_TIMEOUT, async {
+                    let after_id = last_msg_id.unwrap_or(-1);
+                    let new_msgs = store.get_messages_since(&tid2, after_id).await?;
+                    let execs = store.get_thread_executions(&tid2).await?;
+                    Ok::<_, sqlx::Error>((new_msgs, execs))
+                })
+                .await
+            }) {
+                if let Some(ref mut cv) = app.viewing_conversation {
+                    if !new_msgs.is_empty() {
+                        cv.last_message_id = new_msgs.iter().map(|m| m.id).max();
+                        cv.messages.extend(new_msgs);
+                    }
+                    cv.executions = execs;
+                    if cv.follow_mode {
+                        cv.scroll_to_bottom();
+                    }
+                }
+            }
+        }
+
         // ── Background data refreshes ──────────────────────────────────────────
         // Activity data refreshes regardless of active tab so changes are
         // visible immediately when switching views. Paused while the log
         // viewer is open to avoid unnecessary DB queries — an immediate
         // refresh fires when the viewer is closed (see close_log_viewer).
-        if app.viewing_log.is_none() {
+        if app.viewing_log.is_none() && app.viewing_conversation.is_none() {
             let is_stale = is_data_stale(
                 app.activity_data.as_ref().map(|d| d.fetched_at),
                 app.last_activity_attempt,
@@ -1349,7 +1448,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         }
 
         terminal.draw(|frame| {
-            if let Some(ref mut viewer) = app.viewing_log {
+            if let Some(ref mut conversation) = app.viewing_conversation {
+                render_conversation(frame, conversation, frame.area());
+            } else if let Some(ref mut viewer) = app.viewing_log {
                 render_execution_detail(frame, viewer, frame.area());
             } else {
                 frame.render_widget(&*app, frame.area());
@@ -1368,7 +1469,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     app.should_quit = true;
                     continue;
                 }
-                if app.viewing_log.is_some() {
+                if app.viewing_conversation.is_some() {
+                    handle_conversation_key(app, key.code);
+                } else if app.viewing_log.is_some() {
                     handle_log_viewer_key(app, key.code);
                 } else if app.show_help {
                     handle_help_key(app, key.code);
@@ -1510,6 +1613,53 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Handle a key event when the conversation view is open.
+fn handle_conversation_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Esc => {
+            app.close_conversation();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_down(1);
+            }
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_up(1);
+            }
+        }
+        KeyCode::Char('g') => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_to_top();
+            }
+        }
+        KeyCode::Char('G') => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_to_bottom();
+            }
+        }
+        KeyCode::Char('f') => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.toggle_follow();
+            }
+        }
+        KeyCode::PageUp => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                let page = cv.visible_rows.max(1);
+                cv.scroll_up(page);
+            }
+        }
+        KeyCode::PageDown => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                let page = cv.visible_rows.max(1);
+                cv.scroll_down(page);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Handle key events while help overlay is open.
 fn handle_help_key(app: &mut App, code: KeyCode) {
     match code {
@@ -1576,6 +1726,12 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('b') => app.queue_admin_action(AdminActionKind::Abandon),
         KeyCode::Char('o') => app.queue_admin_action(AdminActionKind::Reopen),
         KeyCode::Char('s') => app.queue_stale_active_cleanup(),
+        // Open conversation view for selected thread (Ops tab only).
+        KeyCode::Char('c') => {
+            if app.active_tab == 0 {
+                app.open_conversation();
+            }
+        }
         // Enter: drill batch row in Ops/History, otherwise open execution detail.
         KeyCode::Enter => {
             if app.active_tab == 0
@@ -1611,8 +1767,8 @@ impl Widget for &App {
         // Invariant: the draw closure only calls Widget::render when viewing_log is None.
         // The log viewer is rendered directly via Frame in the draw closure.
         debug_assert!(
-            self.viewing_log.is_none(),
-            "Widget::render called while viewing_log is Some; draw closure contract broken"
+            self.viewing_log.is_none() && self.viewing_conversation.is_none(),
+            "Widget::render called while an overlay is active; draw closure contract broken"
         );
 
         let [tab_bar, content, status_bar] = Layout::vertical(MAIN_LAYOUT).areas(area);
@@ -1753,6 +1909,9 @@ impl App {
                 spans.push(sep());
                 spans.push(key("Enter"));
                 spans.push(Span::raw(": open/drill"));
+                spans.push(sep());
+                spans.push(key("c"));
+                spans.push(Span::raw(": conversation"));
                 spans.push(sep());
                 spans.push(key("a"));
                 spans.push(Span::raw(": actions"));
@@ -1915,7 +2074,7 @@ impl App {
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
-        let modal = centered_rect(72, 16, area);
+        let modal = centered_rect(72, 18, area);
         let block = Block::bordered()
             .border_style(Style::new().fg(theme::BORDER_FOCUS))
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
@@ -1931,7 +2090,7 @@ impl App {
             Line::from(" Navigation"),
             Line::from("   ↑/↓ or j/k move   g/G first/last"),
             Line::from(" Ops"),
-            Line::from("   Enter open log or drill batch"),
+            Line::from("   Enter open log or drill batch   c conversation view"),
             Line::from("   a action menu   b/o quick action aliases   s stale cleanup"),
             Line::from("   Esc back from batch drill"),
             Line::from(" History"),
@@ -1939,6 +2098,8 @@ impl App {
             Line::from(" Execution Detail"),
             Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
             Line::from("   Esc back   f follow   J view mode"),
+            Line::from(" Conversation View"),
+            Line::from("   j/k or ↑/↓ scroll   g/G top/bottom   f follow   Esc back"),
             Line::from(""),
             Line::from(" Press Esc, Enter, or ? to close this panel."),
         ];
