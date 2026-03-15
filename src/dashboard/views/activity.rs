@@ -1,9 +1,8 @@
 //! Ops tab — unified selectable control-plane list with Running, Active Batches,
 //! Active Threads, Batches, and Recently Completed.
 //!
-//! Layout (within content pane):
-//! - Left: grouped list with keyboard selection and section counts.
-//! - Right: context panel for the selected thread/batch with available actions.
+//! Layout: full-width grouped list with keyboard selection, section counts,
+//! and inline detail sub-lines for the selected item.
 
 use ratatui::{
     layout::{Constraint, Layout, Rect},
@@ -403,12 +402,8 @@ pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let [left, right] =
-        Layout::horizontal([Constraint::Fill(64), Constraint::Fill(36)]).areas(inner);
-
     let stale_after_secs = app.config.load().orchestration.stale_active_secs as i64;
-    render_ops_list(f, app, data, left, now_unix, stale_after_secs);
-    render_context_panel(f, app, data, right, now_unix, stale_after_secs);
+    render_ops_list(f, app, data, inner, now_unix, stale_after_secs);
 }
 
 fn render_ops_list(
@@ -479,12 +474,27 @@ fn render_ops_list(
                 if let Some(exec_id) = &row.execution_id {
                     if let Some(summary) = app.get_progress_summary(exec_id) {
                         let truncated = super::truncate(summary, 50);
-                        lines.push(Line::from(vec![
+                        let mut spans = vec![
                             Span::raw("     └ "),
                             Span::styled(truncated, Style::default().fg(Color::DarkGray)),
-                        ]));
+                        ];
+                        if is_selected {
+                            spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER_DIM)));
+                            spans.push(Span::styled("[c]", Style::default().fg(theme::ACCENT)));
+                            spans.push(Span::styled(
+                                " conversation",
+                                Style::default().fg(theme::TEXT_DIM),
+                            ));
+                        }
+                        lines.push(Line::from(spans));
+                    } else if is_selected {
+                        lines.push(make_thread_detail_line(row));
                     }
+                } else if is_selected {
+                    lines.push(make_thread_detail_line(row));
                 }
+            } else if is_selected {
+                lines.push(make_thread_detail_line(row));
             }
             items.push(ListItem::new(lines));
             selectable_slot += 1;
@@ -505,13 +515,17 @@ fn render_ops_list(
             for batch in capped_batches(&classified.active_batches) {
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
-                items.push(ListItem::new(make_batch_line(
+                let mut lines = vec![make_batch_line(
                     batch,
                     is_selected,
                     now_unix,
                     "A",
                     theme::ACCENT,
-                )));
+                )];
+                if is_selected {
+                    lines.push(make_batch_detail_line(batch, app.drill_batch.as_deref()));
+                }
+                items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
         }
@@ -533,7 +547,11 @@ fn render_ops_list(
             };
             let is_selected = selectable_slot == selected_slot;
             sel_to_row.push(items.len());
-            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
+            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+            if is_selected {
+                lines.push(make_thread_detail_line(row));
+            }
+            items.push(ListItem::new(lines));
             selectable_slot += 1;
         }
     }
@@ -555,7 +573,11 @@ fn render_ops_list(
                 };
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
-                items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
+                let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+                if is_selected {
+                    lines.push(make_thread_detail_line(row));
+                }
+                items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
         }
@@ -575,13 +597,17 @@ fn render_ops_list(
             for batch in capped_batches(&classified.batches) {
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
-                items.push(ListItem::new(make_batch_line(
+                let mut lines = vec![make_batch_line(
                     batch,
                     is_selected,
                     now_unix,
                     "B",
                     theme::TEXT_MUTED,
-                )));
+                )];
+                if is_selected {
+                    lines.push(make_batch_detail_line(batch, app.drill_batch.as_deref()));
+                }
+                items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
         }
@@ -603,7 +629,11 @@ fn render_ops_list(
             };
             let is_selected = selectable_slot == selected_slot;
             sel_to_row.push(items.len());
-            items.push(ListItem::new(make_thread_line(row, is_selected, now_unix)));
+            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+            if is_selected {
+                lines.push(make_thread_detail_line(row));
+            }
+            items.push(ListItem::new(lines));
             selectable_slot += 1;
         }
     }
@@ -633,168 +663,37 @@ fn render_ops_list(
     );
 }
 
-fn render_context_panel(
-    f: &mut Frame,
-    app: &App,
-    data: &ActivityData,
-    area: Rect,
-    now_unix: i64,
-    stale_after_secs: i64,
-) {
-    let block = theme::panel("Context");
-    let inner = block.inner(area);
-    f.render_widget(block, area);
+fn make_thread_detail_line(row: &ThreadStatusView) -> Line<'static> {
+    let intent = row.parsed_intent.as_deref().unwrap_or("-");
+    Line::from(vec![
+        Span::raw("     \u{2514}\u{2500} "),
+        Span::styled(intent.to_string(), Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled("[c]", Style::default().fg(theme::ACCENT)),
+        Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),
+    ])
+}
 
-    let stale_count = stale_active_thread_ids(
-        &data.rows,
-        app.drill_batch.as_deref(),
-        now_unix,
-        stale_after_secs,
-    )
-    .len();
-
-    let selected_idx = ops_selectable_count(
-        &data.rows,
-        app.drill_batch.as_deref(),
-        now_unix,
-        stale_after_secs,
-    )
-    .saturating_sub(1)
-    .min(app.activity_selected);
-
-    let selected = ops_selected_target(
-        &data.rows,
-        app.drill_batch.as_deref(),
-        selected_idx,
-        now_unix,
-        stale_after_secs,
-    );
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    match selected {
-        Some(OpsSelectable::Thread(src_idx)) => {
-            if let Some(row) = data.rows.get(src_idx) {
-                let thread_status = humanize_thread_status(&row.thread_status);
-                let exec_status = row
-                    .execution_status
-                    .as_deref()
-                    .map(humanize_exec_status)
-                    .unwrap_or("-");
-                let duration = row_duration(row, now_unix);
-                let batch = row.batch_id.as_deref().unwrap_or("-");
-
-                lines.push(kv_line("Thread", &row.thread_id));
-                lines.push(kv_line("Batch", batch));
-                lines.push(kv_line("Agent", row.agent_alias.as_deref().unwrap_or("-")));
-                lines.push(kv_line("Thread Status", thread_status));
-                lines.push(kv_line("Execution", exec_status));
-                lines.push(kv_line("Duration", &duration));
-                lines.push(kv_line(
-                    "Intent",
-                    row.parsed_intent.as_deref().unwrap_or("-"),
-                ));
-                // Show progress summary for running executions.
-                if is_running_now(row) {
-                    if let Some(exec_id) = &row.execution_id {
-                        if let Some(summary) = app.get_progress_summary(exec_id) {
-                            lines.push(kv_line("Working on", summary));
-                        }
-                    }
-                }
-                lines.push(Line::from(Span::raw("")));
-
-                let can_abandon = row.thread_status != "Abandoned";
-                let can_reopen = matches!(
-                    row.thread_status.as_str(),
-                    "Completed" | "Failed" | "Abandoned"
-                );
-
-                lines.push(Line::from(vec![
-                    "Available Actions".fg(theme::ACCENT).bold(),
-                    Span::raw(":"),
-                ]));
-                lines.push(action_line(
-                    "abandon",
-                    "b",
-                    can_abandon,
-                    "already abandoned",
-                ));
-                lines.push(action_line(
-                    "reopen",
-                    "o",
-                    can_reopen,
-                    "requires terminal status",
-                ));
-                lines.push(action_line(
-                    "abandon stale active",
-                    "s",
-                    stale_count > 0,
-                    "no stale active threads",
-                ));
-                lines.push(action_line("action menu", "a", true, ""));
-            }
-        }
-        Some(OpsSelectable::Batch(batch_id)) => {
-            let mut active = 0usize;
-            let mut failed = 0usize;
-            let mut completed = 0usize;
-            let mut total = 0usize;
-            for row in &data.rows {
-                if row.batch_id.as_deref() != Some(batch_id.as_str()) {
-                    continue;
-                }
-                total += 1;
-                if row.thread_status == "Completed" {
-                    completed += 1;
-                }
-                if row.thread_status == "Failed" {
-                    failed += 1;
-                }
-                if is_running_now(row) || is_active_waiting(row, now_unix, stale_after_secs) {
-                    active += 1;
-                }
-            }
-
-            lines.push(kv_line("Batch", &batch_id));
-            lines.push(kv_line("Total Threads", &total.to_string()));
-            lines.push(kv_line("Active", &active.to_string()));
-            lines.push(kv_line("Failed", &failed.to_string()));
-            lines.push(kv_line("Completed", &completed.to_string()));
-            lines.push(Line::from(Span::raw("")));
-            lines.push(Line::from(vec![
-                "Batch Actions".fg(theme::ACCENT).bold(),
-                Span::raw(":"),
-            ]));
-            lines.push(action_line(
-                "abandon stale active",
-                "s",
-                stale_count > 0,
-                "no stale active threads",
-            ));
-            if app.drill_batch.as_deref() == Some(batch_id.as_str()) {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    "Esc".fg(theme::ACCENT).bold(),
-                    Span::raw(": back to all batches"),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    "Enter".fg(theme::ACCENT).bold(),
-                    Span::raw(": drill into this batch"),
-                ]));
-            }
-        }
-        None => {
-            lines.push(Line::from(" No selection".fg(theme::TEXT_DIM)));
-        }
-    }
-
-    f.render_widget(
-        Paragraph::new(lines).style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL)),
-        inner,
-    );
+fn make_batch_detail_line(batch: &BatchProgress, drill_batch: Option<&str>) -> Line<'static> {
+    let is_drilled = drill_batch == Some(batch.batch_id.as_str());
+    let (key, label) = if is_drilled {
+        ("[Esc]", " back")
+    } else {
+        ("[Enter]", " drill")
+    };
+    Line::from(vec![
+        Span::raw("     \u{2514}\u{2500} "),
+        Span::styled(
+            format!(
+                "a:{} c:{} f:{}",
+                batch.active, batch.completed, batch.failed
+            ),
+            Style::default().fg(theme::TEXT_DIM),
+        ),
+        Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled(key.to_string(), Style::default().fg(theme::ACCENT)),
+        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM)),
+    ])
 }
 
 fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> Line<'static> {
@@ -949,33 +848,6 @@ fn push_section_header(
 
 fn empty_line(s: &str) -> ListItem<'static> {
     ListItem::new(Line::from(s.to_string().fg(theme::TEXT_DIM)))
-}
-
-fn kv_line(label: &str, value: &str) -> Line<'static> {
-    Line::from(vec![
-        format!("{}: ", label).fg(theme::TEXT_MUTED).bold(),
-        value.to_string().fg(theme::TEXT_NORMAL),
-    ])
-}
-
-fn action_line(name: &str, key: &str, enabled: bool, disabled_reason: &str) -> Line<'static> {
-    let status = if enabled {
-        "ready".to_string()
-    } else {
-        format!("blocked ({})", disabled_reason)
-    };
-    let status_color = if enabled {
-        theme::SUCCESS
-    } else {
-        theme::TEXT_DIM
-    };
-
-    Line::from(vec![
-        Span::raw("  "),
-        key.to_string().fg(theme::ACCENT).bold(),
-        Span::raw(format!(": {}  ", name)),
-        Span::styled(status, Style::new().fg(status_color)),
-    ])
 }
 
 fn row_icon(t: &ThreadStatusView) -> (&'static str, Color) {

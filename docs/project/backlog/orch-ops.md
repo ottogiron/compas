@@ -36,7 +36,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: view Ops tab in portrait and horizontal, verify no Context panel, inline details visible
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-OPS-2 — Responsive Columns and Collapse Empty Sections
 
@@ -115,6 +115,15 @@ Note: OPS-1 and OPS-3 touch different primary files (activity.rs vs app.rs) and 
 - End:
 - Duration:
 - Notes:
+
+
+- Start: 2026-03-15 22:02 UTC
+
+
+- End: 2026-03-15 22:05 UTC
+
+
+- Duration: 00:02:49
 
 - Ticket: ORCH-OPS-2
 - Owner: TBD
