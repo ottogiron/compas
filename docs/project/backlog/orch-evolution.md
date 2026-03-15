@@ -507,13 +507,10 @@ Created: 2026-03-14
 - Owner: TBD
 - Complexity: M
 - Risk: High
-- Start:
+- Start: 2026-03-15 15:22 UTC
 - End:
 - Duration:
 - Notes:
-
-
-- Start: 2026-03-15 15:22 UTC
 
 - Ticket: ORCH-EVO-13
 - Owner: TBD
