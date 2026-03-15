@@ -229,7 +229,7 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     // Log legacy worktree directory if it exists.
     let legacy_worktree_dir = config.state_dir.join("worktrees");
     if legacy_worktree_dir.exists() {
-        tracing::info!(
+        tracing::warn!(
             "legacy worktree directory found at {}; worktrees now live at {{repo_root}}/../.aster-worktrees/. Remove manually: rm -rf {}",
             legacy_worktree_dir.display(),
             legacy_worktree_dir.display()
