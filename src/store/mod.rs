@@ -1320,19 +1320,6 @@ impl Store {
         Ok(())
     }
 
-    /// Get the attempt number of an execution.
-    pub async fn get_execution_attempt_number(
-        &self,
-        execution_id: &str,
-    ) -> Result<i32, sqlx::Error> {
-        let row: Option<(i32,)> =
-            sqlx::query_as("SELECT attempt_number FROM executions WHERE id = ?")
-                .bind(execution_id)
-                .fetch_optional(&self.pool)
-                .await?;
-        Ok(row.map(|r| r.0).unwrap_or(0))
-    }
-
     /// Insert a retry execution for a failed execution.
     ///
     /// Creates a new queued execution with an incremented attempt number
@@ -1955,8 +1942,8 @@ mod tests {
             .await
             .unwrap();
 
-        let attempt = store.get_execution_attempt_number(&exec_id).await.unwrap();
-        assert_eq!(attempt, 2);
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.attempt_number, 2);
     }
 
     #[tokio::test]
