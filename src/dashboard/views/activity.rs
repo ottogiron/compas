@@ -61,14 +61,9 @@ fn is_running_now(t: &ThreadStatusView) -> bool {
         .unwrap_or(false)
 }
 
-fn is_latest_exec_completed(t: &ThreadStatusView) -> bool {
-    t.execution_status.as_deref() == Some("completed")
-}
-
 fn is_stale_active(t: &ThreadStatusView, now_unix: i64, stale_after_secs: i64) -> bool {
     t.thread_status == "Active"
         && !is_running_now(t)
-        && !is_latest_exec_completed(t)
         && (now_unix - t.thread_updated_at).max(0) >= stale_after_secs
 }
 
@@ -303,13 +298,7 @@ pub fn stale_active_thread_ids(
             None => true,
         })
         .filter(|r| r.thread_status == "Active")
-        .filter(|r| {
-            !matches!(
-                r.execution_status.as_deref().unwrap_or(""),
-                "queued" | "picked_up" | "executing"
-            )
-        })
-        .filter(|r| r.execution_status.as_deref() != Some("completed"))
+        .filter(|r| !is_running_now(r))
         .filter(|r| (now_unix - r.thread_updated_at).max(0) >= stale_after_secs)
         .map(|r| r.thread_id.clone())
         .collect()
@@ -1169,7 +1158,47 @@ mod tests {
             make_row("fresh", Some("b1"), "Active", None, 990),
         ];
         let ids = stale_active_thread_ids(&rows, Some("b1"), 1000, 300);
-        assert_eq!(ids, vec!["stale".to_string()]);
+        // "stale" and "done" are both Active, not running, and old enough.
+        // "running" is excluded (executing). "fresh" is excluded (too recent).
+        assert!(ids.contains(&"stale".to_string()));
+        assert!(ids.contains(&"done".to_string()));
+        assert!(!ids.contains(&"running".to_string()));
+        assert!(!ids.contains(&"fresh".to_string()));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn test_active_completed_thread_shows_in_active_section() {
+        // An Active thread with a completed execution (waiting for operator review)
+        // should appear in the active_threads section, not recently_completed.
+        let rows = vec![
+            make_row(
+                "waiting-review",
+                Some("b1"),
+                "Active",
+                Some("completed"),
+                500,
+            ),
+            make_row(
+                "truly-completed",
+                Some("b1"),
+                "Completed",
+                Some("completed"),
+                500,
+            ),
+        ];
+        let classified = classify_rows(&rows, None, 1000, 3600);
+        assert_eq!(classified.active_threads.len(), 1);
+        assert_eq!(
+            rows[classified.active_threads[0]].thread_id,
+            "waiting-review"
+        );
+        // The Completed thread should be in recently_completed, not active_threads
+        assert_eq!(classified.recently_completed.len(), 1);
+        assert_eq!(
+            rows[classified.recently_completed[0]].thread_id,
+            "truly-completed"
+        );
     }
 
     #[test]

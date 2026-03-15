@@ -51,6 +51,9 @@ const HISTORY_ROW_LIMIT: i64 = 200;
 const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
 /// Maximum number of timeline events loaded when opening the log viewer.
 const TIMELINE_EVENT_LIMIT: i64 = 500;
+/// Minimum time between displayed progress summary changes per execution.
+/// Prevents flickering when tool calls arrive in rapid succession.
+const SUMMARY_DEBOUNCE: Duration = Duration::from_millis(1500);
 /// Maximum time a single refresh query set can block the TUI thread.
 /// If exceeded, the refresh is skipped and `last_refresh_error` is set.
 const REFRESH_TIMEOUT: Duration = Duration::from_millis(500);
@@ -223,6 +226,8 @@ pub struct App {
     event_rx: Option<broadcast::Receiver<OrchestratorEvent>>,
     /// Maps execution_id → most recent progress summary (from ExecutionProgress events).
     progress_summaries: HashMap<String, String>,
+    /// Tracks when each execution's displayed summary last changed (for debounce).
+    progress_last_changed: HashMap<String, Instant>,
 }
 
 impl App {
@@ -289,6 +294,7 @@ impl App {
             last_executions_attempt: None,
             event_rx,
             progress_summaries: HashMap::new(),
+            progress_last_changed: HashMap::new(),
         }
     }
 
@@ -391,34 +397,89 @@ impl App {
             }
         }
 
-        // Backfill progress_summaries for running executions that may have
-        // started before the dashboard. Uses the latest execution event.
+        // Update progress_summaries for running executions from DB.
+        // This runs on every refresh cycle so the summary stays current
+        // even when the dashboard runs as a separate process (no EventBus).
+        // All per-execution DB queries are wrapped in a single REFRESH_TIMEOUT
+        // to prevent unbounded TUI blocking.
         if let Some(ref data) = self.activity_data {
-            for row in &data.rows {
-                if !row
-                    .execution_status
-                    .as_deref()
-                    .map(crate::dashboard::views::is_running_exec_status)
-                    .unwrap_or(false)
-                {
-                    continue;
-                }
-                let Some(ref exec_id) = row.execution_id else {
-                    continue;
-                };
-                if self.progress_summaries.contains_key(exec_id) {
-                    continue;
-                }
-                // Fetch the single latest event (DESC order, limit 1) to
-                // get the most recent progress summary.
-                if let Ok(Some(ev)) = self
-                    .handle
-                    .block_on(async { self.store.get_latest_execution_event(exec_id).await })
-                {
-                    self.progress_summaries
-                        .insert(exec_id.clone(), ev.summary.clone());
+            let running_execs: Vec<(String, String)> = data
+                .rows
+                .iter()
+                .filter(|r| {
+                    r.execution_status
+                        .as_deref()
+                        .map(crate::dashboard::views::is_running_exec_status)
+                        .unwrap_or(false)
+                })
+                .filter_map(|r| r.execution_id.as_ref().map(|id| (id.clone(), id.clone())))
+                .collect();
+
+            if !running_execs.is_empty() {
+                let store = self.store.clone();
+                let exec_ids: Vec<String> =
+                    running_execs.iter().map(|(id, _)| id.clone()).collect();
+                // Batch all DB queries under a single timeout
+                let results: Vec<(String, Option<String>)> = self.handle.block_on(async {
+                    match tokio::time::timeout(REFRESH_TIMEOUT, async {
+                        let mut out = Vec::new();
+                        for exec_id in &exec_ids {
+                            let summary = store
+                                .get_latest_execution_event(exec_id)
+                                .await
+                                .ok()
+                                .flatten()
+                                .map(|ev| ev.summary);
+                            out.push((exec_id.clone(), summary));
+                        }
+                        out
+                    })
+                    .await
+                    {
+                        Ok(results) => results,
+                        Err(_) => {
+                            tracing::debug!("progress summary refresh timed out");
+                            Vec::new()
+                        }
+                    }
+                });
+
+                for (exec_id, summary) in results {
+                    if let Some(summary) = summary {
+                        let current = self.progress_summaries.get(&exec_id);
+                        if current.map(|s| s.as_str()) != Some(&summary) {
+                            // Summary changed — check debounce
+                            let debounce_ok = self
+                                .progress_last_changed
+                                .get(&exec_id)
+                                .map(|t| t.elapsed() >= SUMMARY_DEBOUNCE)
+                                .unwrap_or(true);
+                            if debounce_ok {
+                                self.progress_summaries.insert(exec_id.clone(), summary);
+                                self.progress_last_changed
+                                    .insert(exec_id.clone(), Instant::now());
+                            }
+                        }
+                    }
                 }
             }
+
+            // Clean up summaries for executions that are no longer running
+            let running_ids: std::collections::HashSet<String> = data
+                .rows
+                .iter()
+                .filter(|r| {
+                    r.execution_status
+                        .as_deref()
+                        .map(crate::dashboard::views::is_running_exec_status)
+                        .unwrap_or(false)
+                })
+                .filter_map(|r| r.execution_id.clone())
+                .collect();
+            self.progress_summaries
+                .retain(|id, _| running_ids.contains(id));
+            self.progress_last_changed
+                .retain(|id, _| running_ids.contains(id));
         }
     }
 
@@ -1341,11 +1402,26 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                                 summary,
                                 ..
                             } => {
-                                app.progress_summaries
-                                    .insert(execution_id.clone(), summary.clone());
+                                // Only update if the summary actually changed
+                                let current = app.progress_summaries.get(execution_id);
+                                if current.map(|s| s.as_str()) != Some(summary.as_str()) {
+                                    // Debounce: only update display if enough time passed
+                                    let debounce_ok = app
+                                        .progress_last_changed
+                                        .get(execution_id)
+                                        .map(|t| t.elapsed() >= SUMMARY_DEBOUNCE)
+                                        .unwrap_or(true);
+                                    if debounce_ok {
+                                        app.progress_summaries
+                                            .insert(execution_id.clone(), summary.clone());
+                                        app.progress_last_changed
+                                            .insert(execution_id.clone(), Instant::now());
+                                    }
+                                }
                             }
                             OrchestratorEvent::ExecutionCompleted { execution_id, .. } => {
                                 app.progress_summaries.remove(execution_id);
+                                app.progress_last_changed.remove(execution_id);
                             }
                             _ => {}
                         }
