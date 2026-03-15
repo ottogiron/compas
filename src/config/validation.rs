@@ -220,6 +220,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
             }],
+            worktree_dir: None,
             orchestration: Default::default(),
             database: Default::default(),
             notifications: Default::default(),

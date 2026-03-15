@@ -180,7 +180,7 @@ Created: 2026-03-14
   - Integration test: dispatch to two agents with worktree mode, verify separate directories
   - Manual: run parallel executions, verify no file conflicts
   - Manual: close batch, verify worktree is removed
-- Status: Todo
+- Status: In Progress
 
 ## Ticket ORCH-EVO-8 — HTTP API Layer
 
@@ -466,6 +466,9 @@ Created: 2026-03-14
 - End:
 - Duration:
 - Notes:
+
+
+- Start: 2026-03-15 17:11 UTC
 
 - Ticket: ORCH-EVO-8
 - Owner: TBD

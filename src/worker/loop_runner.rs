@@ -169,7 +169,8 @@ impl WorkerRunner {
                         Ok(stale) => {
                             for (thread_id, _worktree_path, repo_root) in &stale {
                                 let repo_root = std::path::PathBuf::from(repo_root);
-                                if let Err(e) = self.worktree_manager.remove_worktree(&repo_root, thread_id) {
+                                let wt_override = self.config.load().worktree_dir.clone();
+                                if let Err(e) = self.worktree_manager.remove_worktree(&repo_root, thread_id, wt_override.as_deref()) {
                                     tracing::warn!(thread_id = %thread_id, error = %e, "worktree cleanup failed");
                                 }
                                 // If clear_thread_worktree_path fails after a successful
@@ -282,6 +283,7 @@ impl WorkerRunner {
 
                     let worktree_manager = self.worktree_manager.clone();
                     let target_repo_root = trigger_config.target_repo_root.clone();
+                    let worktree_override_dir = trigger_config.worktree_dir.clone();
 
                     // Create telemetry channel for real-time stdout line forwarding.
                     let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel::<String>(128);
@@ -371,6 +373,7 @@ impl WorkerRunner {
                             Some(stdout_tx),
                             &worktree_manager,
                             &target_repo_root,
+                            worktree_override_dir,
                         )
                         .await;
 

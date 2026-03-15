@@ -3,14 +3,18 @@
 //! When an agent's `workspace` config is set to `"worktree"`, the executor
 //! creates an isolated git worktree for each thread. This prevents file
 //! conflicts when multiple agents work concurrently in the same repository.
+//!
+//! Default worktree location: `{repo_root}/../.aster-worktrees/{thread_id}/`
+//! An optional `worktree_dir` config overrides the parent directory.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Manages git worktrees for isolated agent execution.
-pub struct WorktreeManager {
-    worktree_root: PathBuf,
-}
+///
+/// Worktree root is computed per-call from the repo_root (or an override
+/// directory), so this struct carries no state.
+pub struct WorktreeManager;
 
 /// Information about an active worktree.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -19,13 +23,28 @@ pub struct WorktreeInfo {
     pub path: PathBuf,
 }
 
+/// Compute the worktree root directory.
+///
+/// If `override_dir` is provided, uses that. Otherwise defaults to
+/// `{repo_root}/../.aster-worktrees/`.
+fn worktree_root(repo_root: &Path, override_dir: Option<&Path>) -> PathBuf {
+    match override_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => repo_root
+            .parent()
+            .unwrap_or(repo_root)
+            .join(".aster-worktrees"),
+    }
+}
+
 impl WorktreeManager {
-    pub fn new(state_dir: &Path) -> Self {
-        let worktree_root = state_dir.join("worktrees");
-        Self { worktree_root }
+    pub fn new() -> Self {
+        Self
     }
 
     /// Ensure a worktree exists for the given thread. Creates one if needed.
+    ///
+    /// `override_dir`: optional worktree parent directory override from config.
     ///
     /// Returns `Ok(Some(path))` on success, `Ok(None)` if `repo_root` is not
     /// a git repository (graceful fallback to shared mode).
@@ -33,6 +52,7 @@ impl WorktreeManager {
         &self,
         repo_root: &Path,
         thread_id: &str,
+        override_dir: Option<&Path>,
     ) -> Result<Option<PathBuf>, String> {
         // 1. Check if repo_root is a git repo
         let check = Command::new("git")
@@ -49,7 +69,8 @@ impl WorktreeManager {
         }
 
         // 2. Worktree path
-        let worktree_path = self.worktree_root.join(thread_id);
+        let root = worktree_root(repo_root, override_dir);
+        let worktree_path = root.join(thread_id);
         if worktree_path.exists() {
             tracing::debug!(
                 thread_id = %thread_id,
@@ -121,8 +142,14 @@ impl WorktreeManager {
     }
 
     /// Remove a worktree and its branch (best-effort).
-    pub fn remove_worktree(&self, repo_root: &Path, thread_id: &str) -> Result<(), String> {
-        let worktree_path = self.worktree_root.join(thread_id);
+    pub fn remove_worktree(
+        &self,
+        repo_root: &Path,
+        thread_id: &str,
+        override_dir: Option<&Path>,
+    ) -> Result<(), String> {
+        let root = worktree_root(repo_root, override_dir);
+        let worktree_path = root.join(thread_id);
         if !worktree_path.exists() {
             return Ok(());
         }
@@ -180,13 +207,17 @@ impl WorktreeManager {
         Ok(())
     }
 
-    /// List active worktrees by reading the worktree directory.
+    /// List active worktrees by reading a worktree directory.
+    ///
+    /// `root` is the directory to scan (e.g. the resolved worktree root for a
+    /// particular repo). Since worktrees may live in different locations
+    /// (per-agent workdir), callers must supply the root to scan.
     ///
     /// **Note:** This reads the filesystem directory, not the git worktree
     /// registry. Orphaned directories (e.g. from a crash before cleanup)
     /// may appear as active worktrees.
-    pub fn list_worktrees(&self) -> Result<Vec<WorktreeInfo>, String> {
-        let entries = match std::fs::read_dir(&self.worktree_root) {
+    pub fn list_worktrees(&self, root: &Path) -> Result<Vec<WorktreeInfo>, String> {
+        let entries = match std::fs::read_dir(root) {
             Ok(e) => e,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(e) => return Err(format!("failed to read worktree dir: {}", e)),
@@ -209,55 +240,82 @@ impl WorktreeManager {
     }
 }
 
+impl Default for WorktreeManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_worktree_manager_new() {
-        let mgr = WorktreeManager::new(Path::new("/tmp/state"));
-        assert_eq!(mgr.worktree_root, PathBuf::from("/tmp/state/worktrees"));
+        let _mgr = WorktreeManager::new();
+        // Unit struct — nothing to assert beyond construction.
+    }
+
+    #[test]
+    fn test_worktree_root_default() {
+        let root = worktree_root(Path::new("/home/user/repo"), None);
+        assert_eq!(root, PathBuf::from("/home/user/.aster-worktrees"));
+    }
+
+    #[test]
+    fn test_worktree_root_override() {
+        let root = worktree_root(
+            Path::new("/home/user/repo"),
+            Some(Path::new("/custom/worktrees")),
+        );
+        assert_eq!(root, PathBuf::from("/custom/worktrees"));
+    }
+
+    #[test]
+    fn test_worktree_root_root_level_repo() {
+        // When repo_root is `/`, parent() returns None, so fallback to repo_root itself.
+        let root = worktree_root(Path::new("/"), None);
+        assert_eq!(root, PathBuf::from("/.aster-worktrees"));
     }
 
     #[test]
     fn test_list_worktrees_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path());
-        let list = mgr.list_worktrees().unwrap();
+        let mgr = WorktreeManager::new();
+        let list = mgr.list_worktrees(dir.path()).unwrap();
         assert!(list.is_empty());
     }
 
     #[test]
     fn test_list_worktrees_nonexistent_dir() {
-        let mgr = WorktreeManager::new(Path::new("/nonexistent/path"));
-        let list = mgr.list_worktrees().unwrap();
+        let mgr = WorktreeManager::new();
+        let list = mgr.list_worktrees(Path::new("/nonexistent/path")).unwrap();
         assert!(list.is_empty());
     }
 
     #[test]
     fn test_remove_worktree_nonexistent_is_ok() {
-        let dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(dir.path());
+        let mgr = WorktreeManager::new();
         // Should succeed silently when worktree doesn't exist
         assert!(mgr
-            .remove_worktree(Path::new("/tmp"), "nonexistent-thread")
+            .remove_worktree(Path::new("/tmp"), "nonexistent-thread", None)
             .is_ok());
     }
 
     #[test]
     fn test_ensure_worktree_non_git_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = tempfile::tempdir().unwrap();
-        let mgr = WorktreeManager::new(state_dir.path());
+        let mgr = WorktreeManager::new();
         // dir.path() is not a git repo
-        let result = mgr.ensure_worktree(dir.path(), "test-thread").unwrap();
+        let result = mgr
+            .ensure_worktree(dir.path(), "test-thread", None)
+            .unwrap();
         assert!(result.is_none(), "non-git repo should return None");
     }
 
     #[test]
     fn test_ensure_worktree_git_repo() {
         let dir = tempfile::tempdir().unwrap();
-        let state_dir = tempfile::tempdir().unwrap();
 
         // Initialize a real git repo
         let init = Command::new("git")
@@ -284,22 +342,78 @@ mod tests {
             .output()
             .unwrap();
 
-        let mgr = WorktreeManager::new(state_dir.path());
-        let result = mgr.ensure_worktree(dir.path(), "test-thread-123").unwrap();
+        let mgr = WorktreeManager::new();
+        let result = mgr
+            .ensure_worktree(dir.path(), "test-thread-123", None)
+            .unwrap();
         assert!(result.is_some(), "git repo should create worktree");
         let wt_path = result.unwrap();
         assert!(wt_path.exists(), "worktree path should exist");
-        assert_eq!(
-            wt_path,
-            state_dir.path().join("worktrees").join("test-thread-123")
-        );
+        // Default location: repo_root/../.aster-worktrees/thread_id
+        let expected = dir
+            .path()
+            .parent()
+            .unwrap()
+            .join(".aster-worktrees")
+            .join("test-thread-123");
+        assert_eq!(wt_path, expected);
 
         // Calling again should reuse existing
-        let result2 = mgr.ensure_worktree(dir.path(), "test-thread-123").unwrap();
+        let result2 = mgr
+            .ensure_worktree(dir.path(), "test-thread-123", None)
+            .unwrap();
         assert_eq!(result2, Some(wt_path.clone()));
 
         // Cleanup
-        mgr.remove_worktree(dir.path(), "test-thread-123").unwrap();
+        mgr.remove_worktree(dir.path(), "test-thread-123", None)
+            .unwrap();
+        assert!(!wt_path.exists(), "worktree should be removed");
+
+        // Also clean up the .aster-worktrees directory
+        let wt_root = dir.path().parent().unwrap().join(".aster-worktrees");
+        let _ = std::fs::remove_dir_all(&wt_root);
+    }
+
+    #[test]
+    fn test_ensure_worktree_with_override_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let override_dir = tempfile::tempdir().unwrap();
+
+        // Initialize a real git repo
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+
+        let mgr = WorktreeManager::new();
+        let result = mgr
+            .ensure_worktree(dir.path(), "test-override", Some(override_dir.path()))
+            .unwrap();
+        assert!(result.is_some(), "git repo should create worktree");
+        let wt_path = result.unwrap();
+        assert!(wt_path.exists(), "worktree path should exist");
+        assert_eq!(wt_path, override_dir.path().join("test-override"));
+
+        // Cleanup
+        mgr.remove_worktree(dir.path(), "test-override", Some(override_dir.path()))
+            .unwrap();
         assert!(!wt_path.exists(), "worktree should be removed");
     }
 }

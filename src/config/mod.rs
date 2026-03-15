@@ -36,6 +36,10 @@ fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
     config.target_repo_root = resolve_path(&base, &config.target_repo_root);
     config.state_dir = resolve_path(&base, &config.state_dir);
 
+    if let Some(ref worktree_dir) = config.worktree_dir {
+        config.worktree_dir = Some(resolve_path(&base, worktree_dir));
+    }
+
     for agent in &mut config.agents {
         if let Some(ref prompt_file) = agent.prompt_file {
             agent.prompt_file = Some(resolve_path(&base, prompt_file));
