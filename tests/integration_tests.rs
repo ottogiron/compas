@@ -60,6 +60,7 @@ impl Backend for StubBackend {
             parsed_intent: None,
             session_id: Some(session.id.clone()),
             raw_output: result_text,
+            error_category: None,
         })
     }
 
