@@ -286,6 +286,7 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
                 }
                 ConversationItem::ExecutionStarted { agent, started_at } => {
                     push_execution_started_line(agent, *started_at, &mut display_lines);
+                    display_lines.push(Line::from(""));
                 }
                 ConversationItem::ExecutionCompleted {
                     agent,
