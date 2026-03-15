@@ -207,9 +207,6 @@ fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
         ts.fg(TEXT_DIM),
     ]));
 
-    // Top border
-    lines.push(Line::from("┌──────────────────────────────────────────────────────┐").fg(TEXT_DIM));
-
     // Body — each source line gets a "│ " prefix
     let body = &msg.body;
     if body.is_empty() {
@@ -222,9 +219,6 @@ fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
             ]));
         }
     }
-
-    // Bottom border
-    lines.push(Line::from("└──────────────────────────────────────────────────────┘").fg(TEXT_DIM));
 }
 
 /// Append a styled execution-started marker line into `lines`.
@@ -273,6 +267,9 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
 
     let items = build_items(&state.messages, &state.executions);
 
+    // Inner content width: area minus 2 borders and 2 padding columns (left+right each).
+    let area_width = area.width.saturating_sub(4) as usize;
+
     // Build flat display line list
     let mut display_lines: Vec<Line<'static>> = Vec::new();
     if items.is_empty() {
@@ -282,7 +279,10 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
             match item {
                 ConversationItem::Message(msg) => {
                     push_message_lines(msg, &mut display_lines);
-                    display_lines.push(Line::from(""));
+                    display_lines.push(Line::from(Span::styled(
+                        "─".repeat(area_width),
+                        Style::default().fg(BORDER_DIM),
+                    )));
                 }
                 ConversationItem::ExecutionStarted { agent, started_at } => {
                     push_execution_started_line(agent, *started_at, &mut display_lines);
@@ -610,9 +610,9 @@ mod tests {
         let msg = make_message(1, "agent", "review-request", "line one\nline two");
         let mut lines: Vec<Line<'static>> = Vec::new();
         push_message_lines(&msg, &mut lines);
-        // Lines: header, top-border, "│ line one", "│ line two", bottom-border
-        assert_eq!(lines.len(), 5);
-        let line_one_text: String = lines[2].spans.iter().map(|s| s.content.as_ref()).collect();
+        // Lines: header, "│ line one", "│ line two"
+        assert_eq!(lines.len(), 3);
+        let line_one_text: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(line_one_text.contains("line one"));
     }
 
