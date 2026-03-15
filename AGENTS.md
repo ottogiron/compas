@@ -71,18 +71,22 @@ Backlogs live in `docs/project/backlog/`. See `docs/project/backlog/template.md`
 
 **Never bypass the pre-commit hook with `--no-verify`.** Run `make setup-hooks` after cloning to install the hook.
 
-## Quality Gates (Required Before Merge)
+## Quality Gates (Required Before Every Push)
 
 ```bash
 make verify    # always — fmt-check + clippy + test
 ```
 
-This matches the CI pipeline (`.github/workflows/ci.yml`). All three checks must pass locally before pushing.
+This matches the CI pipeline (`.github/workflows/ci.yml`). All three checks must pass locally before pushing. **CI runs on Linux (Ubuntu).** Code that compiles on macOS may fail CI due to `#[cfg(target_os = "macos")]` gating — clippy will flag dead code that is only reachable on macOS. Always run `make verify` to catch these issues locally.
 
-### Pre-push Checklist
+### Pre-commit hook vs CI
+
+The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only** — it does NOT run fmt, clippy, or tests. Those checks are enforced by CI. Agents MUST run `make verify` themselves before pushing.
+
+### Pre-push Checklist (Mandatory)
 
 1. `make fmt` — apply formatting
-2. `make verify` — run the full CI gate locally
+2. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test`). **Do not push if this fails.**
 3. If working as a submodule, push here first, then update the pointer in aster
 
 ## Impact Update Matrix

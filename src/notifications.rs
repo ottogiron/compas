@@ -12,6 +12,9 @@ use tokio::sync::broadcast;
 
 /// Sanitize a string for safe interpolation into AppleScript.
 /// Strips characters that could inject AppleScript commands.
+// Only called from `send_macos_notification` (cfg(target_os = "macos")),
+// but kept visible for tests on all platforms.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn sanitize_applescript(s: &str) -> String {
     s.replace('\\', "")
         .replace('"', "'")

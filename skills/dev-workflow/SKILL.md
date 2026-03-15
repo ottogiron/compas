@@ -35,7 +35,9 @@ Do not use for read-only exploration or research tasks that produce no code chan
 
 ## Required Checks
 
-- `make verify` (fmt-check + clippy + test)
+- `make verify` (fmt-check + clippy + test) — **must pass before push**
+- CI runs on **Linux (Ubuntu)**. `#[cfg(target_os = "macos")]`-gated code is dead on Linux — clippy will flag it. Always run `make verify` locally to catch cross-platform issues before pushing.
+- The pre-commit hook only enforces ticket tracking, NOT quality gates. You must run `make verify` yourself.
 
 ## Output Format
 
