@@ -420,20 +420,21 @@ impl WorkerRunner {
         for (message_id, thread_id, agent_alias) in untriggered {
             // Compute a SHA-256 hash of the agent's prompt at enqueue time so
             // executions can be correlated to the prompt version that produced them.
-            let prompt_text = config
+            // Agents without a prompt field get None — storing a hash of the empty
+            // string would be misleading since it implies a known prompt existed.
+            let prompt_hash = config
                 .agents
                 .iter()
                 .find(|a| a.alias == agent_alias)
                 .and_then(|a| a.prompt.as_deref())
-                .unwrap_or("");
-            let prompt_hash = sha256_hex(prompt_text);
+                .map(sha256_hex);
             match self
                 .store
                 .insert_execution_with_dispatch(
                     &thread_id,
                     &agent_alias,
                     Some(message_id),
-                    Some(&prompt_hash),
+                    prompt_hash.as_deref(),
                 )
                 .await
             {
