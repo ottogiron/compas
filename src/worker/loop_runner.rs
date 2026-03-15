@@ -622,18 +622,13 @@ async fn handle_trigger_output(
 
         if should_retry {
             // Enqueue retry execution with exponential backoff.
-            let agent_config = agent_configs
-                .iter()
-                .find(|a| a.alias == output.agent_alias);
-            let backoff_secs = agent_config
-                .map(|a| a.retry_backoff_secs)
-                .unwrap_or(30);
+            let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
+            let backoff_secs = agent_config.map(|a| a.retry_backoff_secs).unwrap_or(30);
             let next_attempt = output.attempt_number + 1;
             // Exponential backoff: base * 2^attempt (capped at 1 hour)
             let delay_secs =
                 (backoff_secs * 2u64.saturating_pow(output.attempt_number as u32)).min(3600);
-            let retry_after =
-                chrono::Utc::now().timestamp() + delay_secs as i64;
+            let retry_after = chrono::Utc::now().timestamp() + delay_secs as i64;
 
             // Look up prompt_hash from the failed execution for continuity.
             let prompt_hash = match store.get_execution(&output.execution_id).await {
@@ -735,9 +730,7 @@ fn should_retry_execution(output: &TriggerOutput, agent_configs: &[AgentConfig])
     }
 
     // Check agent config for retry limit
-    let agent_config = agent_configs
-        .iter()
-        .find(|a| a.alias == output.agent_alias);
+    let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
     let max_retries = agent_config.map(|a| a.max_retries).unwrap_or(0);
 
     if max_retries == 0 {
@@ -753,9 +746,7 @@ fn should_retry_execution(output: &TriggerOutput, agent_configs: &[AgentConfig])
 
 /// Mark a failed execution as terminal: set thread Failed, insert error reply.
 async fn mark_terminal_failure(store: &Store, event_bus: &EventBus, output: &TriggerOutput) {
-    let _ = store
-        .mark_thread_failed_if_active(&output.thread_id)
-        .await;
+    let _ = store.mark_thread_failed_if_active(&output.thread_id).await;
 
     event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
         thread_id: output.thread_id.clone(),
@@ -1150,7 +1141,10 @@ mod tests {
                 found_retrying = true;
             }
         }
-        assert!(found_retrying, "should have emitted ExecutionRetrying event");
+        assert!(
+            found_retrying,
+            "should have emitted ExecutionRetrying event"
+        );
     }
 
     #[tokio::test]

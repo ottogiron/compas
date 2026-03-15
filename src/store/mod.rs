@@ -1980,10 +1980,7 @@ mod tests {
             .await
             .unwrap();
 
-        let attempt = store
-            .get_execution_attempt_number(&exec_id)
-            .await
-            .unwrap();
+        let attempt = store.get_execution_attempt_number(&exec_id).await.unwrap();
         assert_eq!(attempt, 2);
     }
 
@@ -2001,7 +1998,10 @@ mod tests {
 
         // Should NOT be claimable — retry_after is in the future
         let claimed = store.claim_next_execution(2).await.unwrap();
-        assert!(claimed.is_none(), "retry execution should not be claimed before retry_after");
+        assert!(
+            claimed.is_none(),
+            "retry execution should not be claimed before retry_after"
+        );
     }
 
     #[tokio::test]
@@ -2018,7 +2018,10 @@ mod tests {
 
         // Should be claimable — retry_after is in the past
         let claimed = store.claim_next_execution(2).await.unwrap();
-        assert!(claimed.is_some(), "retry execution should be claimed after retry_after");
+        assert!(
+            claimed.is_some(),
+            "retry execution should be claimed after retry_after"
+        );
         assert_eq!(claimed.unwrap().id, exec_id);
     }
 
