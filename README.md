@@ -201,6 +201,7 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 | `orch_tasks` | Execution history with timing and results |
 | `orch_metrics` | Aggregate stats (thread counts, queue depth) |
 | `orch_diagnose` | Thread diagnostics with suggested next actions |
+| `orch_execution_events` | Structured events from a running/completed execution (tool calls, file edits) |
 
 ### System
 
@@ -209,6 +210,7 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 | `orch_health` | Worker heartbeat + backend health pings |
 | `orch_list_agents` | List configured agents with backend/model info |
 | `orch_session_info` | Current MCP session metadata |
+| `orch_worktrees` | List active git worktrees for agent isolation |
 
 ## Configuration Reference
 
@@ -224,6 +226,7 @@ orchestration:
   max_triggers_per_agent: 2             # Per-agent concurrency limit
   stale_active_secs: 3600              # Staleness threshold for idle threads
   ping_timeout_secs: 15                # Backend health check timeout
+  # log_retention_count: 200      # Max execution log files to retain
 
 notifications:
   desktop: false                       # macOS desktop notifications (requires worker restart)
@@ -237,6 +240,8 @@ agents:
     # backend_args: ["--flag"]         # Extra CLI args for the backend
     # workdir: /path/to/other/repo     # Per-agent repo override (default: target_repo_root)
     # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
+    # max_retries: 0              # Auto-retry on transient failure (0 = disabled)
+    # retry_backoff_secs: 30      # Base delay between retries (doubles each attempt)
 ```
 
 **Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
@@ -270,6 +275,12 @@ agents:
 ```
 
 Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `aster-orch/{thread_id}`. They're automatically cleaned up when the thread is closed or abandoned. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
+
+### Retry on Transient Failure
+
+When `max_retries` is set on an agent, transient failures (network blips, temporary rate limits) are automatically retried with exponential backoff. Non-retryable failures (quota exhaustion, auth errors, agent errors) fail immediately.
+
+Each retry creates a new execution entry. Check `orch_tasks` for `attempt_number` to see retry history. The thread stays Active during retries — it only fails when all retries are exhausted.
 
 ## How It Works
 

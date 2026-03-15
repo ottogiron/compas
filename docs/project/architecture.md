@@ -8,7 +8,7 @@ Operator (MCP client)
     ▼
 ┌─────────────────────────────────────┐
 │  MCP Server  (stdio transport)      │
-│  15 tools: dispatch, status, poll,  │
+│  17 tools: dispatch, status, poll,  │
 │  close, abandon, reopen, ...        │
 │                                     │
 │  ┌───────────┐   ┌───────────────┐  │
@@ -57,7 +57,7 @@ This separation allows one shared orchestrator binary/config model to work acros
 
 ## Database Schema
 
-Four tables in a single SQLite file with WAL mode:
+Five tables in a single SQLite file with WAL mode:
 
 | Table | Purpose |
 |-------|---------|
@@ -65,6 +65,7 @@ Four tables in a single SQLite file with WAL mode:
 | `messages` | Conversation ledger between operator and agents |
 | `executions` | Job queue AND execution lifecycle tracker (queued → picked_up → executing → completed/failed/timed_out/crashed/cancelled) |
 | `worker_heartbeats` | Worker liveness tracking |
+| `execution_events` | Structured telemetry events extracted from backend output |
 
 The `executions` table is the single source of truth for both queuing and execution state — no separate job queue system.
 
@@ -98,7 +99,8 @@ Main loop (concurrent via `tokio::select!`):
 
 ```
 queued → picked_up → executing → completed
-                               → failed
+                               → failed (transient) → re-queued (retry backoff)
+                               → failed (non-retryable / retries exhausted)
                                → timed_out
                                → crashed (worker died mid-execution)
                     → cancelled (thread abandoned)
@@ -117,7 +119,9 @@ queued → picked_up → executing → completed
 - **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing` rows as `crashed` on startup, preventing lost work from going unnoticed.
 - **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP server + worker) to read/write concurrently without SQLITE_BUSY errors.
 - **200ms DB polling for wait** — `wait_for_message()` polls at 200ms intervals. Exposed via `aster_orch wait` CLI subcommand. Removed from MCP surface (stdio transport timeouts made it unreliable).
-- **Three core tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker). Plus `worker_heartbeats` for liveness.
+- **Five tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker), `worker_heartbeats` (liveness), `execution_events` (telemetry).
+- **Retry via store re-enqueue** — failed executions with transient errors are retried by inserting a new queued execution with a `retry_after` timestamp. The poll loop claims retries only when the backoff expires. No synchronous sleep.
+- **Execution telemetry via line-level channel** — backend stdout lines flow through a `sync_channel(128)` from the reader thread to a tokio consumer that parses JSONL and batch-inserts events.
 
 ## Module Structure
 
@@ -138,7 +142,7 @@ src/
 │   ├── mod.rs           #   Config loading + normalization
 │   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
 │   └── validation.rs    #   Config validation
-├── mcp/                 # MCP server (15 tools)
+├── mcp/                 # MCP server (17 tools)
 │   ├── mod.rs           #   Module declarations
 │   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
 │   ├── params.rs        #   All parameter structs
@@ -150,6 +154,8 @@ src/
 │   └── health.rs        #   orch_health, orch_diagnose
 ├── store/               # SQLite store (threads + messages + executions + heartbeats)
 │   └── mod.rs           #   Store with WAL setup, typed enums, all CRUD, claim logic
+├── worktree.rs          # Git worktree creation, cleanup, and path resolution
+├── events.rs            # EventBus and execution telemetry pipeline
 ├── worker/              # Custom poll-loop worker
 │   ├── mod.rs           #   Re-exports
 │   ├── loop_runner.rs   #   WorkerRunner: poll loop, heartbeat, crash recovery
@@ -172,5 +178,5 @@ src/
 | Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
 | AgentRuntime state machine | Stateless worker (execution-per-trigger) |
 | Session namespace scoping | Scoping by DB file |
-| 24 MCP tools | 15 MCP tools (wait moved to CLI-only) |
+| 24 MCP tools | 17 MCP tools (wait moved to CLI-only) |
 | `daemon run` subcommand | `worker` + `mcp-server` subcommands only |
