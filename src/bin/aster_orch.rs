@@ -390,22 +390,74 @@ async fn run_dashboard(
 
 // ── Heartbeat guard (extracted for testability) ──────────────────────────
 
-/// Check whether a worker is already running based on heartbeat recency.
+/// Check whether a worker is actually running.
 ///
-/// A heartbeat is "recent" if it was written at most `max_age_secs` seconds
-/// ago. Tolerates up to 5 s of forward clock skew.
+/// Two checks are performed (in this order):
+/// 1. **Heartbeat is fresh**: `last_beat_at` is within `max_age_secs` of now
+///    (tolerates up to 5s of forward clock skew). Checked first to avoid a
+///    syscall when the heartbeat is clearly stale.
+/// 2. **Process exists**: extract the PID from `worker_id` (format: `worker-<pid>`)
+///    and verify the process is alive via `kill(pid, 0)`. ESRCH = dead,
+///    EPERM = alive (different user), 0 = alive (same user).
+///
+/// Both must be true. A stale heartbeat from a dead process (the most common
+/// failure mode during deployments) is correctly detected.
 fn is_worker_alive(
     heartbeat: &Option<(String, i64, i64, Option<String>)>,
     max_age_secs: i64,
 ) -> bool {
     match heartbeat {
-        Some((_, last_beat_at, _, _)) => {
+        Some((worker_id, last_beat_at, _, _)) => {
             let now_unix = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            // Heartbeat is recent if it was written within [now - max_age, now + 5s].
-            *last_beat_at >= now_unix.saturating_sub(max_age_secs) && *last_beat_at <= now_unix + 5
+
+            // Check 1: heartbeat is recent
+            let heartbeat_fresh = *last_beat_at >= now_unix.saturating_sub(max_age_secs)
+                && *last_beat_at <= now_unix + 5;
+
+            if !heartbeat_fresh {
+                return false;
+            }
+
+            // Check 2: process is actually alive
+            // worker_id format: "worker-<pid>"
+            let pid_alive = worker_id
+                .strip_prefix("worker-")
+                .and_then(|pid_str| pid_str.parse::<u32>().ok())
+                .and_then(|pid| i32::try_from(pid).ok())
+                .map(|pid| {
+                    #[cfg(unix)]
+                    {
+                        // kill(pid, 0) checks if the process exists without sending
+                        // a signal. Returns 0 if permitted, or -1 with errno:
+                        //   ESRCH (3) = no such process → dead
+                        //   EPERM (1) = exists but can't signal → alive
+                        let ret = unsafe { libc::kill(pid, 0) };
+                        if ret == 0 {
+                            true
+                        } else {
+                            let err = std::io::Error::last_os_error();
+                            err.raw_os_error() != Some(libc::ESRCH)
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = pid;
+                        true // Can't check on non-unix, trust the heartbeat
+                    }
+                })
+                .unwrap_or(false); // Can't parse PID → treat as dead
+
+            if !pid_alive {
+                tracing::info!(
+                    worker_id = %worker_id,
+                    "stale heartbeat: process no longer exists, clearing"
+                );
+            }
+
+            pid_alive
         }
         None => false,
     }
@@ -838,8 +890,13 @@ mod tests {
     }
 
     fn heartbeat_at(ts: i64) -> Option<(String, i64, i64, Option<String>)> {
+        // PID 1 (init/launchd) is always alive on Unix
+        heartbeat_at_pid(ts, 1)
+    }
+
+    fn heartbeat_at_pid(ts: i64, pid: u32) -> Option<(String, i64, i64, Option<String>)> {
         Some((
-            "worker-1".to_string(),
+            format!("worker-{}", pid),
             ts,
             ts - 100,
             Some("0.2.0".to_string()),
@@ -886,6 +943,26 @@ mod tests {
     fn test_is_worker_alive_future_beyond_tolerance_returns_false() {
         // Large forward clock skew (10s) should not pass the guard.
         let hb = heartbeat_at(now_unix() + 10);
+        assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_fresh_heartbeat_but_dead_pid() {
+        // Heartbeat is recent but the process doesn't exist → stale
+        // Use PID 99999999 which almost certainly doesn't exist
+        let hb = heartbeat_at_pid(now_unix() - 5, 99_999_999);
+        assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_is_worker_alive_unparseable_worker_id() {
+        // worker_id doesn't have the expected format → treat as dead
+        let hb = Some((
+            "bad-format".to_string(),
+            now_unix() - 5,
+            now_unix() - 105,
+            Some("0.2.0".to_string()),
+        ));
         assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
     }
 }
