@@ -437,9 +437,6 @@ Created: 2026-03-14
 - Duration:
 - Notes:
 
-
-- Start: 2026-03-15 11:24 UTC
-
 - Ticket: ORCH-EVO-5
 - Owner: TBD
 - Complexity: M
@@ -462,13 +459,10 @@ Created: 2026-03-14
 - Owner: TBD
 - Complexity: L
 - Risk: Medium
-- Start:
+- Start: 2026-03-15 11:24 UTC
 - End:
 - Duration:
 - Notes:
-
-
-- Start: 2026-03-15 17:11 UTC
 
 - Ticket: ORCH-EVO-8
 - Owner: TBD
@@ -519,19 +513,10 @@ Created: 2026-03-14
 - Owner: TBD
 - Complexity: S
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
-
-
 - Start: 2026-03-15 15:00 UTC
-
-
 - End: 2026-03-15 14:45 UTC
-
-
 - Duration: 00:00:05
+- Notes:
 
 - Ticket: ORCH-EVO-14
 - Owner: TBD
