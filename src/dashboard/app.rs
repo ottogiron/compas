@@ -1383,12 +1383,18 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         if let Some((tid, last_msg_id)) = conversation_refresh {
             let store = app.store.clone();
             let tid2 = tid.clone();
-            if let Ok(Ok((new_msgs, execs))) = app.handle.block_on(async {
+            if let Ok(Ok((new_msgs, execs, thread_status))) = app.handle.block_on(async {
                 tokio::time::timeout(REFRESH_TIMEOUT, async {
                     let after_id = last_msg_id.unwrap_or(-1);
                     let new_msgs = store.get_messages_since(&tid2, after_id).await?;
                     let execs = store.get_thread_executions(&tid2).await?;
-                    Ok::<_, sqlx::Error>((new_msgs, execs))
+                    let thread_status = store
+                        .get_thread(&tid2)
+                        .await
+                        .ok()
+                        .flatten()
+                        .map(|t| t.status);
+                    Ok::<_, sqlx::Error>((new_msgs, execs, thread_status))
                 })
                 .await
             }) {
@@ -1398,6 +1404,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                         cv.messages.extend(new_msgs);
                     }
                     cv.executions = execs;
+                    if let Some(status) = thread_status {
+                        cv.thread_status = status;
+                    }
                     if cv.follow_mode {
                         cv.scroll_to_bottom();
                     }
