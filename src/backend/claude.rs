@@ -53,6 +53,8 @@ impl ClaudeCodeBackend {
         args.push("--dangerously-skip-permissions".to_string());
 
         // Stream-JSON output (JSONL events during execution, result line at end)
+        // Claude CLI requires --verbose when using stream-json with -p (print mode)
+        args.push("--verbose".to_string());
         args.push("--output-format".to_string());
         args.push("stream-json".to_string());
 
