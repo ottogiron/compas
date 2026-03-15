@@ -379,6 +379,34 @@ pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                                 .unwrap_or("?");
                             format!("{}: {}", name, pattern)
                         }
+                        "Task" => {
+                            let desc = item
+                                .pointer("/input/description")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("sub-task");
+                            format!("Task: {}", desc)
+                        }
+                        "TodoWrite" => "Updating task list".to_string(),
+                        "WebFetch" => {
+                            let url = item
+                                .pointer("/input/url")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            let short: String = url.chars().take(50).collect();
+                            format!("WebFetch: {}", short)
+                        }
+                        "Agent" => {
+                            let prompt = item
+                                .pointer("/input/prompt")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            let short: String = prompt.chars().take(40).collect();
+                            if short.is_empty() {
+                                "Agent sub-task".to_string()
+                            } else {
+                                format!("Agent: {}", short)
+                            }
+                        }
                         other => other.to_string(),
                     };
                     return Some(super::ExecutionEvent {
