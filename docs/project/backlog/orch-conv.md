@@ -31,7 +31,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: dispatch to an agent that produces markdown output, verify styled rendering in conversation view
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-CONV-2 — Fix Scroll Math for Wrapped Lines
 
@@ -53,7 +53,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: open conversation with long agent messages, scroll top to bottom, verify all content is reachable
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-CONV-3 — Left-Side Indicator Border
 
@@ -75,7 +75,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: view conversation with multiple messages at different terminal widths, verify no visual artifacts
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-CONV-4 — Integration Verification and Edge Cases
 
@@ -97,14 +97,14 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: dispatch a real task to an agent, observe conversation view throughout execution lifecycle
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
-1. ORCH-CONV-3 (border simplification — smallest change, clears the way)
-2. ORCH-CONV-1 (markdown rendering — the main feature)
-3. ORCH-CONV-2 (scroll fix — test after markdown changes line structure)
-4. ORCH-CONV-4 (integration verification — depends on all above)
+1. ~~ORCH-CONV-3 (border simplification — done)~~
+2. ~~ORCH-CONV-1 (markdown rendering — done)~~
+3. ~~ORCH-CONV-2 (scroll fix — done)~~
+4. ~~ORCH-CONV-4 (integration verification — done)~~
 
 ## Tracking Notes
 
@@ -118,13 +118,40 @@ Created: 2026-03-15
 ## Execution Metrics
 
 - Ticket: ORCH-CONV-1
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Medium
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 21:26 UTC
+- End: 2026-03-15 21:33 UTC
+- Duration: ~00:07:00
+- Notes: pulldown-cmark integration, markdown_to_lines(), 12 new tests. Merged with conflict resolution against CONV-3.
+
+- Ticket: ORCH-CONV-2
+- Owner: orch-dev
+- Complexity: S
+- Risk: Low
+- Start: 2026-03-15 21:36 UTC
+- End: 2026-03-15 21:40 UTC
+- Duration: ~00:04:00
+- Notes: paragraph.line_count(inner_width) for visual row count, ratatui unstable-rendered-line-info feature.
+
+- Ticket: ORCH-CONV-3
+- Owner: orch-dev-2
+- Complexity: S
+- Risk: Low
+- Start: 2026-03-15 21:26 UTC
+- End: 2026-03-15 21:32 UTC
+- Duration: ~00:06:00
+- Notes: Removed box borders, added dim separator. Agent forgot to commit — operator committed in worktree.
+
+- Ticket: ORCH-CONV-4
+- Owner: operator
+- Complexity: S
+- Risk: Low
+- Start: 2026-03-15 21:45 UTC
+- End: 2026-03-15 21:50 UTC
+- Duration: ~00:05:00
+- Notes: Visual verification via real agent output screenshot. Markdown rendering, scrolling, and layout all confirmed working.
 
 - Ticket: ORCH-CONV-2
 - Owner: TBD
@@ -158,4 +185,10 @@ Created: 2026-03-15
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 4 tickets implemented and merged on main
+- Markdown rendering: headers (bold+accent), bold, italic, inline code (cyan), code blocks (dim), bullet lists, thematic breaks
+- Scroll fix: visual row count via `paragraph.line_count(width)` replaces logical line count
+- Border: box borders removed, left-side `│` indicator + dim `─` separators
+- 12 new unit tests for markdown rendering, all existing tests pass (477 total)
+- Visual verification: real agent review-request output renders correctly (screenshot confirmed by operator)
+- Verification: `make verify` passes (fmt-check + clippy + 362 unit + 22 bin + 93 integration tests)
