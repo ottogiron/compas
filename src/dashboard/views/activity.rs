@@ -401,6 +401,8 @@ fn render_ops_list(
         .saturating_sub(1),
     );
 
+    let list_width = list_area.width as usize;
+
     if let Some(batch) = app.drill_batch.as_deref() {
         items.push(ListItem::new(Line::from(vec![
             Span::raw(" "),
@@ -416,65 +418,77 @@ fn render_ops_list(
         items.push(ListItem::new(Line::from(Span::raw(""))));
     }
 
-    push_section_header(
-        &mut items,
-        "Running",
-        classified.running.len(),
-        theme::ACCENT,
-    );
-    if classified.running.is_empty() {
-        items.push(empty_line("  none"));
+    let all_active_empty = classified.running.is_empty()
+        && (app.drill_batch.is_some() || classified.active_batches.is_empty())
+        && classified.active_threads.is_empty();
+
+    if all_active_empty {
+        items.push(ListItem::new(Line::from(
+            "  no active work".to_string().fg(theme::TEXT_DIM),
+        )));
     } else {
-        for src_idx in &classified.running {
-            let Some(row) = data.rows.get(*src_idx) else {
-                continue;
-            };
-            let is_selected = selectable_slot == selected_slot;
-            sel_to_row.push(items.len());
-            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
-            // Add progress summary as a second line if available and still running.
-            if is_running_now(row) {
-                if let Some(exec_id) = &row.execution_id {
-                    if let Some(summary) = app.get_progress_summary(exec_id) {
-                        let truncated = super::truncate(summary, 50);
-                        let mut spans = vec![
-                            Span::raw("     └ "),
-                            Span::styled(truncated, Style::default().fg(Color::DarkGray)),
-                        ];
-                        if is_selected {
-                            spans.push(Span::styled(" │ ", Style::default().fg(theme::BORDER_DIM)));
-                            spans.push(Span::styled("[c]", Style::default().fg(theme::ACCENT)));
-                            spans.push(Span::styled(
-                                " conversation",
-                                Style::default().fg(theme::TEXT_DIM),
-                            ));
+        let mut rendered_active_section = false;
+
+        if !classified.running.is_empty() {
+            push_section_header(
+                &mut items,
+                "Running",
+                classified.running.len(),
+                theme::ACCENT,
+            );
+            for src_idx in &classified.running {
+                let Some(row) = data.rows.get(*src_idx) else {
+                    continue;
+                };
+                let is_selected = selectable_slot == selected_slot;
+                sel_to_row.push(items.len());
+                let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
+                // Add progress summary as a second line if available and still running.
+                if is_running_now(row) {
+                    if let Some(exec_id) = &row.execution_id {
+                        if let Some(summary) = app.get_progress_summary(exec_id) {
+                            let truncated = super::truncate(summary, 50);
+                            let mut spans = vec![
+                                Span::raw("     └ "),
+                                Span::styled(truncated, Style::default().fg(Color::DarkGray)),
+                            ];
+                            if is_selected {
+                                spans.push(Span::styled(
+                                    " │ ",
+                                    Style::default().fg(theme::BORDER_DIM),
+                                ));
+                                spans.push(Span::styled("[c]", Style::default().fg(theme::ACCENT)));
+                                spans.push(Span::styled(
+                                    " conversation",
+                                    Style::default().fg(theme::TEXT_DIM),
+                                ));
+                            }
+                            lines.push(Line::from(spans));
+                        } else if is_selected {
+                            lines.push(make_thread_detail_line(row));
                         }
-                        lines.push(Line::from(spans));
                     } else if is_selected {
                         lines.push(make_thread_detail_line(row));
                     }
                 } else if is_selected {
                     lines.push(make_thread_detail_line(row));
                 }
-            } else if is_selected {
-                lines.push(make_thread_detail_line(row));
+                items.push(ListItem::new(lines));
+                selectable_slot += 1;
             }
-            items.push(ListItem::new(lines));
-            selectable_slot += 1;
+            rendered_active_section = true;
         }
-    }
 
-    if app.drill_batch.is_none() {
-        items.push(ListItem::new(Line::from(Span::raw(""))));
-        push_section_header(
-            &mut items,
-            "Active Batches",
-            classified.active_batches.len(),
-            theme::ACCENT,
-        );
-        if classified.active_batches.is_empty() {
-            items.push(empty_line("  none"));
-        } else {
+        if app.drill_batch.is_none() && !classified.active_batches.is_empty() {
+            if rendered_active_section {
+                items.push(ListItem::new(Line::from(Span::raw(""))));
+            }
+            push_section_header(
+                &mut items,
+                "Active Batches",
+                classified.active_batches.len(),
+                theme::ACCENT,
+            );
             for batch in capped_batches(&classified.active_batches) {
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
@@ -484,6 +498,7 @@ fn render_ops_list(
                     now_unix,
                     "A",
                     theme::ACCENT,
+                    list_width,
                 )];
                 if is_selected {
                     lines.push(make_batch_detail_line(batch));
@@ -491,31 +506,32 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
+            rendered_active_section = true;
         }
-    }
 
-    items.push(ListItem::new(Line::from(Span::raw(""))));
-    push_section_header(
-        &mut items,
-        "Active Threads",
-        classified.active_threads.len(),
-        theme::ACCENT,
-    );
-    if classified.active_threads.is_empty() {
-        items.push(empty_line("  none"));
-    } else {
-        for src_idx in &classified.active_threads {
-            let Some(row) = data.rows.get(*src_idx) else {
-                continue;
-            };
-            let is_selected = selectable_slot == selected_slot;
-            sel_to_row.push(items.len());
-            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
-            if is_selected {
-                lines.push(make_thread_detail_line(row));
+        if !classified.active_threads.is_empty() {
+            if rendered_active_section {
+                items.push(ListItem::new(Line::from(Span::raw(""))));
             }
-            items.push(ListItem::new(lines));
-            selectable_slot += 1;
+            push_section_header(
+                &mut items,
+                "Active Threads",
+                classified.active_threads.len(),
+                theme::ACCENT,
+            );
+            for src_idx in &classified.active_threads {
+                let Some(row) = data.rows.get(*src_idx) else {
+                    continue;
+                };
+                let is_selected = selectable_slot == selected_slot;
+                sel_to_row.push(items.len());
+                let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
+                if is_selected {
+                    lines.push(make_thread_detail_line(row));
+                }
+                items.push(ListItem::new(lines));
+                selectable_slot += 1;
+            }
         }
     }
 
@@ -536,7 +552,7 @@ fn render_ops_list(
                 };
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
-                let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+                let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
                 if is_selected {
                     lines.push(make_thread_detail_line(row));
                 }
@@ -566,6 +582,7 @@ fn render_ops_list(
                     now_unix,
                     "B",
                     theme::TEXT_MUTED,
+                    list_width,
                 )];
                 if is_selected {
                     lines.push(make_batch_detail_line(batch));
@@ -592,7 +609,7 @@ fn render_ops_list(
             };
             let is_selected = selectable_slot == selected_slot;
             sel_to_row.push(items.len());
-            let mut lines = vec![make_thread_line(row, is_selected, now_unix)];
+            let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
             if is_selected {
                 lines.push(make_thread_detail_line(row));
             }
@@ -664,9 +681,19 @@ fn make_batch_detail_line(batch: &BatchProgress) -> Line<'static> {
     ])
 }
 
-fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> Line<'static> {
+fn make_thread_line(
+    t: &ThreadStatusView,
+    is_selected: bool,
+    now_unix: i64,
+    width: usize,
+) -> Line<'static> {
     let (icon, icon_color) = row_icon(t);
-    let thread_id = super::truncate(&t.thread_id, 16);
+    let is_wide = width >= 100;
+    let thread_id = if is_wide {
+        super::truncate(&t.thread_id, 16)
+    } else {
+        super::truncate(&t.thread_id, 10)
+    };
     let (status_text, status_color) = row_status_display(t);
     let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
     let batch = t
@@ -687,41 +714,47 @@ fn make_thread_line(t: &ThreadStatusView, is_selected: bool, now_unix: i64) -> L
         Modifier::empty()
     };
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(format!(" {} ", icon), Style::new().fg(icon_color).bg(bg)),
         Span::styled(
-            format!("{:<18}", thread_id),
+            format!("{:<w$}", thread_id, w = if is_wide { 18 } else { 12 }),
             Style::new()
                 .fg(theme::TEXT_BRIGHT)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<16}", status_text),
+            format!("{:<w$}", status_text, w = if is_wide { 16 } else { 12 }),
             Style::new().fg(status_color).bg(bg).add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<12}", agent),
+            format!("{:<w$}", agent, w = if is_wide { 12 } else { 10 }),
             Style::new()
                 .fg(theme::TEXT_NORMAL)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
-        Span::styled(
+    ];
+
+    if is_wide {
+        spans.push(Span::styled(
             format!("{:<14}", batch),
             Style::new()
                 .fg(theme::TEXT_DIM)
                 .bg(bg)
                 .add_modifier(base_mod),
-        ),
-        Span::styled(
-            duration,
-            Style::new()
-                .fg(theme::TEXT_DIM)
-                .bg(bg)
-                .add_modifier(base_mod),
-        ),
-    ])
+        ));
+    }
+
+    spans.push(Span::styled(
+        duration,
+        Style::new()
+            .fg(theme::TEXT_DIM)
+            .bg(bg)
+            .add_modifier(base_mod),
+    ));
+
+    Line::from(spans)
 }
 
 fn make_batch_line(
@@ -730,16 +763,21 @@ fn make_batch_line(
     now_unix: i64,
     marker: &str,
     marker_color: Color,
+    width: usize,
 ) -> Line<'static> {
+    let is_wide = width >= 100;
+    let (id_trunc, id_width) = if is_wide { (16, 18) } else { (12, 14) };
+    let (prog_width, bar_len, bar_width) = if is_wide { (9, 10, 12) } else { (7, 6, 8) };
+
     let fill = if batch.total == 0 {
         0
     } else {
-        (batch.completed * 10 / batch.total).min(10)
+        (batch.completed * bar_len / batch.total).min(bar_len)
     };
     let bar = format!(
         "{}{}",
         theme::BATCH_PROGRESS_FILLED.repeat(fill),
-        theme::BATCH_PROGRESS_EMPTY.repeat(10 - fill)
+        theme::BATCH_PROGRESS_EMPTY.repeat(bar_len - fill)
     );
     let age = batch
         .oldest_active_updated_at
@@ -757,30 +795,41 @@ fn make_batch_line(
         Modifier::empty()
     };
 
-    Line::from(vec![
+    let mut spans = vec![
         Span::styled(
             format!(" {} ", marker),
             Style::new().fg(marker_color).bg(bg),
         ),
         Span::styled(
-            format!("{:<18}", super::truncate(&batch.batch_id, 16)),
+            format!(
+                "{:<w$}",
+                super::truncate(&batch.batch_id, id_trunc),
+                w = id_width
+            ),
             Style::new()
                 .fg(theme::TEXT_BRIGHT)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<9}", format!("{}/{}", batch.completed, batch.total)),
+            format!(
+                "{:<w$}",
+                format!("{}/{}", batch.completed, batch.total),
+                w = prog_width
+            ),
             Style::new()
                 .fg(theme::TEXT_NORMAL)
                 .bg(bg)
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<12}", bar),
+            format!("{:<w$}", bar, w = bar_width),
             Style::new().fg(theme::ACCENT).bg(bg).add_modifier(base_mod),
         ),
-        Span::styled(
+    ];
+
+    if is_wide {
+        spans.push(Span::styled(
             format!(
                 "a:{} c:{} f:{}",
                 batch.active, batch.completed, batch.failed
@@ -792,12 +841,15 @@ fn make_batch_line(
                     theme::TEXT_DIM
                 })
                 .bg(bg),
-        ),
-        Span::styled(
-            format!("  age {}", age),
-            Style::new().fg(theme::TEXT_DIM).bg(bg),
-        ),
-    ])
+        ));
+    }
+
+    spans.push(Span::styled(
+        format!("  age {}", age),
+        Style::new().fg(theme::TEXT_DIM).bg(bg),
+    ));
+
+    Line::from(spans)
 }
 
 fn push_section_header(
