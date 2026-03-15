@@ -328,11 +328,9 @@ impl Store {
             .iter()
             .any(|c| c.1 == "original_dispatch_message_id");
         if !has_orig_dispatch {
-            sqlx::query(
-                "ALTER TABLE executions ADD COLUMN original_dispatch_message_id INTEGER",
-            )
-            .execute(&self.pool)
-            .await?;
+            sqlx::query("ALTER TABLE executions ADD COLUMN original_dispatch_message_id INTEGER")
+                .execute(&self.pool)
+                .await?;
         }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_exec_dispatch_msg ON executions(dispatch_message_id)",
