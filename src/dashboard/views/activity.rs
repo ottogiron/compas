@@ -75,7 +75,6 @@ fn is_stale_active(t: &ThreadStatusView, now_unix: i64, stale_after_secs: i64) -
 fn is_active_waiting(t: &ThreadStatusView, now_unix: i64, stale_after_secs: i64) -> bool {
     t.thread_status == "Active"
         && !is_running_now(t)
-        && !is_latest_exec_completed(t)
         && !is_stale_active(t, now_unix, stale_after_secs)
 }
 

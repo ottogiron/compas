@@ -69,9 +69,9 @@ This happens frequently during development: deploy a new binary, restart the das
 ## Dashboard: Active threads section always appears empty
 
 **Severity:** Medium
-**Status:** Open
+**Status:** Fixed
 
-The Ops tab "Active" section shows no threads. Threads in Active state with no running execution don't appear — only "Running" (executing) and completed threads are visible. Active threads waiting for operator action (review, re-dispatch) should show in the Active section.
+The `is_active_waiting` filter excluded threads where the latest execution was completed. Active threads waiting for operator review (execution done, thread still Active) fell through to "recently completed" instead. Fixed by removing the completed-execution exclusion.
 
 ## Desktop notifications lack task context
 
