@@ -568,7 +568,7 @@ impl Store {
             "SELECT thread_id, worktree_path, worktree_repo_root FROM threads
              WHERE worktree_path IS NOT NULL
              AND worktree_repo_root IS NOT NULL
-             AND status IN ('Completed', 'Failed', 'Abandoned')",
+             AND status IN ('Completed', 'Abandoned')",
         )
         .fetch_all(&self.pool)
         .await
