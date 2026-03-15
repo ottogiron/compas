@@ -61,7 +61,7 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: resize terminal to various widths, verify columns adapt and no clipping
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-OPS-3 — Remove Admin Action Keybindings and Dead Code
 
@@ -87,15 +87,13 @@ Created: 2026-03-15
 - Verification:
   - `make verify` passes
   - Manual: press `a`, `b`, `o`, `s` on Ops tab — no action, no crash
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
-1. ORCH-OPS-1 (context panel removal — foundational layout change)
-2. ORCH-OPS-3 (admin action removal — can run in parallel with OPS-2 since it touches app.rs, not activity.rs)
-3. ORCH-OPS-2 (responsive columns — builds on OPS-1 layout)
-
-Note: OPS-1 and OPS-3 touch different primary files (activity.rs vs app.rs) and can be dispatched in parallel.
+1. ~~ORCH-OPS-1 (context panel removal — done)~~
+2. ~~ORCH-OPS-3 (admin action removal — done, parallel with OPS-1)~~
+3. ~~ORCH-OPS-2 (responsive columns — done)~~
 
 ## Tracking Notes
 
@@ -104,45 +102,44 @@ Note: OPS-1 and OPS-3 touch different primary files (activity.rs vs app.rs) and 
 - Admin actions had low usage — operator uses MCP tools or lets agents handle lifecycle.
 - Action menu (`a`) was broken (overlay overlaps list content).
 - Batch row `a:N c:N f:N` counts were unreadable at narrow widths.
+- Reviewer (chill) caught scroll regression from multi-line ListItems — fixed before merge.
 
 ## Execution Metrics
 
 - Ticket: ORCH-OPS-1
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Medium
-- Start:
-- End:
-- Duration:
-- Notes:
-
-
 - Start: 2026-03-15 22:02 UTC
-
-
-- End: 2026-03-15 22:05 UTC
-
-
-- Duration: 00:02:49
+- End: 2026-03-15 22:10 UTC
+- Duration: ~00:08:00
+- Notes: Context panel removed, inline detail rows added. Reviewer found scroll regression — fixed.
 
 - Ticket: ORCH-OPS-2
-- Owner: TBD
+- Owner: orch-dev
 - Complexity: M
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 22:28 UTC
+- End: 2026-03-15 22:35 UTC
+- Duration: ~00:07:00
+- Notes: Two column profiles (wide/narrow at 100 col breakpoint). Empty sections collapsed.
 
 - Ticket: ORCH-OPS-3
-- Owner: TBD
+- Owner: orch-dev-2
 - Complexity: M
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-15 22:02 UTC
+- End: 2026-03-15 22:09 UTC
+- Duration: ~00:07:00
+- Notes: 528 lines removed. 15 methods, 3 types, 4 keybindings, 2 render functions deleted.
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 3 tickets implemented, reviewed by chill, and merged on main
+- Context panel removed — full-width list with inline detail rows for selected items
+- Admin actions fully removed — 528 lines of dead code cleaned up
+- Responsive columns: narrow (<100) hides batch column, compresses widths
+- Empty sections collapsed: "no active work" replaces 6+ lines of headers
+- Reviewer scroll regression fixed: compute_scroll uses display row heights
+- `make verify` passes: 361 unit + 22 bin + 93 integration = 476 tests
+- Net code change: approximately -860 lines across activity.rs and app.rs
