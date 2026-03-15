@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::process::{
     kill_process, parse_json_output, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{parse_intent_from_text, Backend, BackendOutput, PingResult};
+use super::{classify_error, parse_intent_from_text, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -175,13 +175,22 @@ impl Backend for GeminiBackend {
                 }
 
                 let parsed_intent = parse_intent_from_text(&result_text);
+                let success = out.status.success();
+
+                let error_category = if !success {
+                    let has_result_output = json.is_ok();
+                    Some(classify_error(false, has_result_output, &result_text))
+                } else {
+                    None
+                };
 
                 Ok(BackendOutput {
-                    success: out.status.success(),
+                    success,
                     result_text,
                     parsed_intent,
                     session_id: real_session_id,
                     raw_output,
+                    error_category,
                 })
             }
             Err(e) => Err(e),

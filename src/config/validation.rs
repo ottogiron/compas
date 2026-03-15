@@ -217,6 +217,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
             }],
             orchestration: Default::default(),
             database: Default::default(),
@@ -297,6 +299,8 @@ mod tests {
             env: None,
             workdir: None,
             workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
         });
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("duplicate agent alias"));
@@ -477,6 +481,8 @@ agents:
             env: None,
             workdir: None,
             workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -494,6 +500,8 @@ agents:
             env: None,
             workdir: None,
             workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 

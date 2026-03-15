@@ -60,6 +60,7 @@ impl Backend for StubBackend {
             parsed_intent: None,
             session_id: Some(session.id.clone()),
             raw_output: result_text,
+            error_category: None,
         })
     }
 
@@ -105,6 +106,8 @@ fn test_config() -> OrchestratorConfig {
                 env: None,
                 workdir: None,
                 workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
             },
             AgentConfig {
                 alias: "spark".to_string(),
@@ -118,6 +121,8 @@ fn test_config() -> OrchestratorConfig {
                 env: None,
                 workdir: None,
                 workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
             },
         ],
         orchestration: OrchestrationConfig::default(),
@@ -832,6 +837,8 @@ mod registry_tests {
             env: None,
             workdir: None,
             workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
         };
 
         let backend = registry.get(&agent_cfg);
@@ -855,6 +862,8 @@ mod registry_tests {
             env: None,
             workdir: None,
             workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
         };
 
         let result = registry.get(&agent_cfg);
@@ -2498,6 +2507,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("worktree".to_string()),
+            max_retries: 0,
+            retry_backoff_secs: 30,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -2571,6 +2582,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: None, // shared (default)
+            max_retries: 0,
+            retry_backoff_secs: 30,
         }];
 
         let mut registry = BackendRegistry::new();

@@ -316,7 +316,7 @@ Created: 2026-03-14
   - Integration test: stub backend fails with transient error, verify retry occurs
   - Integration test: stub backend fails with terminal error, verify no retry
   - `make verify` passes
-- Status: Todo
+- Status: In Progress
 
 ## Ticket ORCH-EVO-13 — Prompt Version Hashing
 
@@ -507,7 +507,7 @@ Created: 2026-03-14
 - Owner: TBD
 - Complexity: M
 - Risk: High
-- Start:
+- Start: 2026-03-15 15:22 UTC
 - End:
 - Duration:
 - Notes:
