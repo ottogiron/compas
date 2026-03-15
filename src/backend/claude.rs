@@ -305,6 +305,21 @@ fn truncate_detail(s: &str) -> String {
 /// blocks, only the *first* one is captured. Subsequent tool_use blocks in
 /// the same message are dropped. This is acceptable because Claude Code
 /// typically emits one tool_use per assistant message in stream-json mode.
+/// Shorten an absolute file path for display.
+/// Keeps the last 2-3 path components (e.g., "/Users/otto/.../src/backend/claude.rs" → "src/backend/claude.rs").
+fn shorten_path(path: &str) -> &str {
+    // Find a reasonable suffix — keep up to 3 components from the end
+    let parts: Vec<&str> = path.rsplitn(4, '/').collect();
+    if parts.len() >= 4 {
+        // parts = ["claude.rs", "backend", "src", "/Users/otto/.../"]
+        // We want "src/backend/claude.rs"
+        let start = path.len() - parts[0].len() - parts[1].len() - parts[2].len() - 2;
+        &path[start..]
+    } else {
+        path
+    }
+}
+
 pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -333,7 +348,14 @@ pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                                 .pointer("/input/file_path")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("?");
-                            format!("Write to {}", fp)
+                            format!("Write to {}", shorten_path(fp))
+                        }
+                        "Edit" => {
+                            let fp = item
+                                .pointer("/input/file_path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            format!("Edit {}", shorten_path(fp))
                         }
                         "Bash" => {
                             let cmd = item
@@ -348,7 +370,14 @@ pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                                 .pointer("/input/file_path")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("?");
-                            format!("Read {}", fp)
+                            format!("Read {}", shorten_path(fp))
+                        }
+                        "Glob" | "Grep" => {
+                            let pattern = item
+                                .pointer("/input/pattern")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("?");
+                            format!("{}: {}", name, pattern)
                         }
                         other => other.to_string(),
                     };
@@ -557,6 +586,36 @@ mod tests {
         assert!(sid.is_none());
     }
 
+    // -- shorten_path tests --
+
+    #[test]
+    fn test_shorten_path_absolute() {
+        assert_eq!(
+            shorten_path(
+                "/Users/otto/workspace/github.com/ottogiron/aster-orch/src/backend/claude.rs"
+            ),
+            "src/backend/claude.rs"
+        );
+    }
+
+    #[test]
+    fn test_shorten_path_relative() {
+        assert_eq!(
+            shorten_path("src/backend/claude.rs"),
+            "src/backend/claude.rs"
+        );
+    }
+
+    #[test]
+    fn test_shorten_path_short() {
+        assert_eq!(shorten_path("file.rs"), "file.rs");
+    }
+
+    #[test]
+    fn test_shorten_path_just_filename() {
+        assert_eq!(shorten_path("Cargo.toml"), "Cargo.toml");
+    }
+
     // -- parse_claude_stream_line tests --
     // Schemas observed from Claude Code CLI v1.0.x (--output-format stream-json)
 
@@ -599,11 +658,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_claude_stream_other_tool() {
+    fn test_parse_claude_stream_grep_tool() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Grep","input":{"pattern":"TODO"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse Grep tool_use");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.summary, "Grep: TODO");
+    }
+
+    #[test]
+    fn test_parse_claude_stream_other_tool() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"CustomTool","input":{"foo":"bar"}}]}}"#;
         let event = parse_claude_stream_line(line).expect("should parse other tool_use");
         assert_eq!(event.event_type, "tool_call");
-        assert_eq!(event.summary, "Grep");
+        assert_eq!(event.summary, "CustomTool");
     }
 
     #[test]
