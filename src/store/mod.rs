@@ -1365,29 +1365,31 @@ impl Store {
 
     /// Insert a retry execution for a failed execution.
     ///
-    /// Creates a new queued execution linked to the same dispatch message,
-    /// with an incremented attempt number and a `retry_after` timestamp
-    /// for exponential backoff.
+    /// Creates a new queued execution with an incremented attempt number
+    /// and a `retry_after` timestamp for exponential backoff.
+    ///
+    /// The `dispatch_message_id` is intentionally NOT set on retry executions
+    /// to avoid violating the partial UNIQUE index. Retry chains are tracked
+    /// by (thread_id, agent_alias, attempt_number > 0).
     ///
     /// Returns the new execution ID.
     pub async fn insert_retry_execution(
         &self,
         thread_id: &str,
         agent_alias: &str,
-        dispatch_message_id: Option<i64>,
+        _dispatch_message_id: Option<i64>,
         prompt_hash: Option<&str>,
         attempt_number: i32,
         retry_after: i64,
     ) -> Result<String, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
         sqlx::query(
-            "INSERT INTO executions (id, thread_id, agent_alias, dispatch_message_id, status, prompt_hash, attempt_number, retry_after)
-             VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)",
+            "INSERT INTO executions (id, thread_id, agent_alias, status, prompt_hash, attempt_number, retry_after)
+             VALUES (?, ?, ?, 'queued', ?, ?, ?)",
         )
         .bind(&id)
         .bind(thread_id)
         .bind(agent_alias)
-        .bind(dispatch_message_id)
         .bind(prompt_hash)
         .bind(attempt_number)
         .bind(retry_after)
@@ -1965,6 +1967,74 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sid.as_deref(), Some("claude-sid-latest"));
+    }
+
+    #[tokio::test]
+    async fn test_insert_retry_execution_and_attempt_number() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        let retry_after = chrono::Utc::now().timestamp() - 10; // in the past
+        let exec_id = store
+            .insert_retry_execution("t-1", "focused", None, Some("hash123"), 2, retry_after)
+            .await
+            .unwrap();
+
+        let attempt = store
+            .get_execution_attempt_number(&exec_id)
+            .await
+            .unwrap();
+        assert_eq!(attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn test_claim_respects_retry_after_future() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // Insert a retry execution with retry_after far in the future
+        let future_ts = chrono::Utc::now().timestamp() + 9999;
+        let _exec_id = store
+            .insert_retry_execution("t-1", "focused", None, None, 1, future_ts)
+            .await
+            .unwrap();
+
+        // Should NOT be claimable — retry_after is in the future
+        let claimed = store.claim_next_execution(2).await.unwrap();
+        assert!(claimed.is_none(), "retry execution should not be claimed before retry_after");
+    }
+
+    #[tokio::test]
+    async fn test_claim_picks_up_retry_after_past() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // Insert a retry execution with retry_after in the past
+        let past_ts = chrono::Utc::now().timestamp() - 10;
+        let exec_id = store
+            .insert_retry_execution("t-1", "focused", None, None, 1, past_ts)
+            .await
+            .unwrap();
+
+        // Should be claimable — retry_after is in the past
+        let claimed = store.claim_next_execution(2).await.unwrap();
+        assert!(claimed.is_some(), "retry execution should be claimed after retry_after");
+        assert_eq!(claimed.unwrap().id, exec_id);
+    }
+
+    #[tokio::test]
+    async fn test_set_and_get_error_category() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        store
+            .set_error_category(&exec_id, "transient")
+            .await
+            .unwrap();
+
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.error_category.as_deref(), Some("transient"));
     }
 
     #[tokio::test]

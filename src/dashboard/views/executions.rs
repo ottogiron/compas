@@ -375,6 +375,9 @@ mod tests {
                 error_detail: None,
                 parsed_intent: None,
                 prompt_hash: None,
+                attempt_number: 0,
+                retry_after: None,
+                error_category: None,
             },
             crate::store::ExecutionRow {
                 id: "2".to_string(),
@@ -393,6 +396,9 @@ mod tests {
                 error_detail: None,
                 parsed_intent: None,
                 prompt_hash: None,
+                attempt_number: 0,
+                retry_after: None,
+                error_category: None,
             },
             crate::store::ExecutionRow {
                 id: "3".to_string(),
@@ -411,6 +417,9 @@ mod tests {
                 error_detail: None,
                 parsed_intent: None,
                 prompt_hash: None,
+                attempt_number: 0,
+                retry_after: None,
+                error_category: None,
             },
         ];
         let groups = group_execution_indices_by_batch(&rows, None, 50);
@@ -440,6 +449,9 @@ mod tests {
                 error_detail: None,
                 parsed_intent: None,
                 prompt_hash: None,
+                attempt_number: 0,
+                retry_after: None,
+                error_category: None,
             });
         }
         let groups = group_execution_indices_by_batch(&rows, Some("b1"), 50);
@@ -471,6 +483,9 @@ mod tests {
             error_detail: None,
             parsed_intent: None,
             prompt_hash: None,
+            attempt_number: 0,
+            retry_after: None,
+            error_category: None,
         }];
         let targets = history_selectable_targets(&rows, None, 50);
         assert!(matches!(targets.first(), Some(HistorySelectable::Batch(_))));
@@ -495,6 +510,9 @@ mod tests {
             error_detail: None,
             parsed_intent: None,
             prompt_hash: None,
+            attempt_number: 0,
+            retry_after: None,
+            error_category: None,
         }];
         let targets = history_selectable_targets(&rows, Some("b1"), 50);
         assert!(targets

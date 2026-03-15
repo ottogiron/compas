@@ -918,4 +918,324 @@ mod tests {
             .unwrap();
         assert!(events.is_empty());
     }
+
+    // ── Retry logic tests ──
+
+    fn test_agent_config(alias: &str, max_retries: u32) -> AgentConfig {
+        AgentConfig {
+            alias: alias.to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: None,
+            prompt: None,
+            prompt_file: None,
+            timeout_secs: None,
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: None,
+            max_retries,
+            retry_backoff_secs: 10,
+        }
+    }
+
+    fn failed_trigger_output(
+        agent_alias: &str,
+        error_category: Option<crate::backend::ErrorCategory>,
+        attempt_number: i32,
+        timed_out: bool,
+    ) -> TriggerOutput {
+        TriggerOutput {
+            execution_id: "exec-test".to_string(),
+            thread_id: "t-test".to_string(),
+            agent_alias: agent_alias.to_string(),
+            success: false,
+            output: Some("error text".to_string()),
+            exit_code: Some(1),
+            duration_ms: 1000,
+            parsed_intent: None,
+            error_category,
+            attempt_number,
+            dispatch_message_id: Some(1),
+            timed_out,
+        }
+    }
+
+    #[test]
+    fn test_should_retry_transient_error_with_retries_configured() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            0,
+            false,
+        );
+        assert!(should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_quota_error() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::QuotaExhausted),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_auth_error() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::AuthFailure),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_agent_error() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::AgentError),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_unknown_error() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Unknown),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_when_max_retries_zero() {
+        let configs = vec![test_agent_config("worker-a", 0)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_at_max_attempts() {
+        let configs = vec![test_agent_config("worker-a", 2)];
+        // attempt_number = 2, max_retries = 2 → already used both retries
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            2,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_retry_under_max_attempts() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        // attempt_number = 1, max_retries = 3 → 1 < 3, should retry
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            1,
+            false,
+        );
+        assert!(should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_on_timeout() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            0,
+            true, // timed_out
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_success() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let mut output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::Transient),
+            0,
+            false,
+        );
+        output.success = true;
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_no_error_category() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output("worker-a", None, 0, false);
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
+    #[tokio::test]
+    async fn test_handle_trigger_output_retries_transient_error() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let configs = vec![test_agent_config("worker-a", 3)];
+
+        // Setup: create thread, dispatch message, and failed execution
+        store.ensure_thread("t-retry", None).await.unwrap();
+        let msg_id = store
+            .insert_message("t-retry", "operator", "worker-a", "dispatch", "task", None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-retry", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Simulate failed execution
+        let output = TriggerOutput {
+            execution_id: exec_id.clone(),
+            thread_id: "t-retry".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: false,
+            output: Some("connection refused".to_string()),
+            exit_code: Some(1),
+            duration_ms: 500,
+            parsed_intent: None,
+            error_category: Some(crate::backend::ErrorCategory::Transient),
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+
+        // Thread should still be Active (not Failed)
+        let status = store.get_thread_status("t-retry").await.unwrap();
+        assert_eq!(status.as_deref(), Some("Active"));
+
+        // Should have enqueued a retry execution
+        let execs = store.get_thread_executions("t-retry").await.unwrap();
+        assert_eq!(execs.len(), 2, "should have original + retry execution");
+        // Fetch full execution to get retry-specific fields
+        let retry_exec = store.get_execution(&execs[1].id).await.unwrap().unwrap();
+        assert_eq!(retry_exec.status, "queued");
+        assert_eq!(retry_exec.attempt_number, 1);
+        assert!(retry_exec.retry_after.is_some());
+
+        // Check events
+        let mut found_retrying = false;
+        while let Ok(ev) = rx.try_recv() {
+            if let OrchestratorEvent::ExecutionRetrying { attempt, .. } = ev {
+                assert_eq!(attempt, 1);
+                found_retrying = true;
+            }
+        }
+        assert!(found_retrying, "should have emitted ExecutionRetrying event");
+    }
+
+    #[tokio::test]
+    async fn test_handle_trigger_output_terminal_on_non_retryable() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+
+        let configs = vec![test_agent_config("worker-a", 3)];
+
+        store.ensure_thread("t-term", None).await.unwrap();
+        let msg_id = store
+            .insert_message("t-term", "operator", "worker-a", "dispatch", "task", None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-term", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-term".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: false,
+            output: Some("quota exceeded".to_string()),
+            exit_code: Some(1),
+            duration_ms: 500,
+            parsed_intent: None,
+            error_category: Some(crate::backend::ErrorCategory::QuotaExhausted),
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+
+        // Thread should be Failed
+        let status = store.get_thread_status("t-term").await.unwrap();
+        assert_eq!(status.as_deref(), Some("Failed"));
+
+        // Should NOT have enqueued a retry
+        let execs = store.get_thread_executions("t-term").await.unwrap();
+        assert_eq!(execs.len(), 1, "should only have original execution");
+    }
+
+    #[tokio::test]
+    async fn test_handle_trigger_output_terminal_at_max_retries() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+
+        let configs = vec![test_agent_config("worker-a", 1)]; // max_retries = 1
+
+        store.ensure_thread("t-max", None).await.unwrap();
+        let msg_id = store
+            .insert_message("t-max", "operator", "worker-a", "dispatch", "task", None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-max", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // attempt_number = 1 means we've already done the first retry
+        // max_retries = 1 → no more retries
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-max".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: false,
+            output: Some("connection refused again".to_string()),
+            exit_code: Some(1),
+            duration_ms: 500,
+            parsed_intent: None,
+            error_category: Some(crate::backend::ErrorCategory::Transient),
+            attempt_number: 1, // already at the limit
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+
+        // Thread should be Failed — max retries exceeded
+        let status = store.get_thread_status("t-max").await.unwrap();
+        assert_eq!(status.as_deref(), Some("Failed"));
+    }
 }
