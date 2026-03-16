@@ -245,39 +245,90 @@ impl Backend for CodexBackend {
         let start = std::time::Instant::now();
         let args = Self::build_ping_args(agent);
         let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        match spawn_cli(
-            "codex",
-            &arg_refs,
-            agent.env.as_ref(),
-            self.effective_workdir(agent),
-        ) {
+        let workdir = self.effective_workdir(agent);
+        tracing::debug!(
+            alias = %agent.alias,
+            args = ?arg_refs,
+            workdir = ?workdir,
+            "codex ping: spawning"
+        );
+        match spawn_cli("codex", &arg_refs, agent.env.as_ref(), workdir) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
                 match wait_with_timeout(child, Some(timeout), None, None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
+                        let stdout_str = String::from_utf8_lossy(&out.stdout);
+                        let stderr_str = String::from_utf8_lossy(&out.stderr);
+                        if !out.status.success() {
+                            tracing::warn!(
+                                alias = %agent.alias,
+                                exit_code = ?out.status.code(),
+                                latency_ms,
+                                stdout_len = out.stdout.len(),
+                                stderr_len = out.stderr.len(),
+                                stdout = %stdout_str.chars().take(500).collect::<String>(),
+                                stderr = %stderr_str.chars().take(500).collect::<String>(),
+                                "codex ping: failed"
+                            );
+                        } else {
+                            tracing::debug!(
+                                alias = %agent.alias,
+                                latency_ms,
+                                "codex ping: success"
+                            );
+                        }
                         PingResult {
                             alive: out.status.success(),
                             latency_ms,
                             detail: if out.status.success() {
                                 None
                             } else {
-                                Some(format!("exit code {}", out.status.code().unwrap_or(-1)))
+                                let mut detail =
+                                    format!("exit code {}", out.status.code().unwrap_or(-1));
+                                if !stdout_str.is_empty() {
+                                    let snippet: String = stdout_str.chars().take(300).collect();
+                                    detail.push_str(&format!(" | stdout: {}", snippet));
+                                }
+                                if !stderr_str.is_empty() {
+                                    let snippet: String = stderr_str.chars().take(300).collect();
+                                    detail.push_str(&format!(" | stderr: {}", snippet));
+                                }
+                                if stdout_str.is_empty() && stderr_str.is_empty() {
+                                    detail.push_str(" | no output captured");
+                                }
+                                Some(detail)
                             },
                         }
                     }
-                    Err(e) => PingResult {
-                        alive: false,
-                        latency_ms: start.elapsed().as_millis() as u64,
-                        detail: Some(e.to_string()),
-                    },
+                    Err(e) => {
+                        let latency_ms = start.elapsed().as_millis() as u64;
+                        tracing::warn!(
+                            alias = %agent.alias,
+                            latency_ms,
+                            error = %e,
+                            "codex ping: wait failed"
+                        );
+                        PingResult {
+                            alive: false,
+                            latency_ms,
+                            detail: Some(e.to_string()),
+                        }
+                    }
                 }
             }
-            Err(e) => PingResult {
-                alive: false,
-                latency_ms: start.elapsed().as_millis() as u64,
-                detail: Some(e.to_string()),
-            },
+            Err(e) => {
+                tracing::warn!(
+                    alias = %agent.alias,
+                    error = %e,
+                    "codex ping: spawn failed"
+                );
+                PingResult {
+                    alive: false,
+                    latency_ms: start.elapsed().as_millis() as u64,
+                    detail: Some(e.to_string()),
+                }
+            }
         }
     }
 
