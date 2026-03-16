@@ -47,12 +47,14 @@ Created: 2026-03-16
 - Goal: Remove `on_review_request`, `on_escalation`, `on_changes_requested` from HandoffConfig. Keep only `on_response` and `max_chain_depth`.
 - In scope:
   - `src/config/types.rs`: Remove `on_review_request`, `on_escalation`, `on_changes_requested` fields from `HandoffConfig`. Remove `HandoffTarget::Gated` variant (no longer needed for forward compat — the gated concept is dead). `HandoffTarget` becomes just a `String` (alias or "operator"). Simplified struct:
+
     ```rust
     pub struct HandoffConfig {
         pub on_response: Option<String>,
         pub max_chain_depth: Option<u32>,
     }
     ```
+
   - `src/config/validation.rs`: Remove validation for deleted fields (gated target rejection, all `on_*` field validations except `on_response`). Simplify to: validate `on_response` is a valid agent alias or "operator", validate `max_chain_depth` bounds, validate no self-loop. Remove all tests for deleted fields.
   - `src/worker/loop_runner.rs`: Simplify `maybe_auto_handoff()` — only check `on_response` route. Remove all other intent-to-route matching branches.
   - `src/store/mod.rs`: Keep `count_handoff_messages` and `insert_handoff_if_under_depth` (still used).
@@ -181,12 +183,9 @@ Created: 2026-03-16
 - Duration:
 - Notes:
 
-
 - Start: 2026-03-16 21:16 UTC
 
-
 - End: 2026-03-16 21:16 UTC
-
 
 - Duration: 00:00:07
 

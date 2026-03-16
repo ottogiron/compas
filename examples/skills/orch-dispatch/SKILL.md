@@ -73,6 +73,7 @@ orch_dispatch(
 Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 
 **Tips for effective dispatch prompts:**
+
 - Be specific about what to implement and where
 - Include acceptance criteria (what does "done" look like?)
 - Reference relevant files or modules if you know them

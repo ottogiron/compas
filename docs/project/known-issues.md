@@ -73,6 +73,7 @@ Notifications say "aster-orch: focused completed / Execution completed in 2m 15s
 **Root cause:** `ExecutionCompleted` event only carries `agent_alias`, `success`, `duration_ms` — no task description. Including context requires a store lookup by `thread_id` to fetch the original dispatch message, adding a store dependency to the notification consumer.
 
 **Options:**
+
 - Add `batch_id` and/or a short `description` field to `ExecutionCompleted` event (enriches the event at emission time)
 - Notification consumer does a store lookup on each completion (adds coupling)
 - Include first N chars of the dispatch body in `ExecutionStarted` and carry forward

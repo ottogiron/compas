@@ -49,6 +49,7 @@ Extracted aster-orch from aster as a fully independent repository with its own d
 **Why:** Submodule git workflow (two-step commits, detached HEAD) added friction. Parallel development on aster (compiler) and aster-orch (orchestrator) was blocked by the single-session ticket system. Independent repos enable independent development cadences.
 
 **How it works:**
+
 - Production orch (`aster-orch` MCP server) dispatches agents to work on any repo, including aster-orch itself.
 - Dev orch (`aster-orch-dev` MCP server, via `cargo run`) uses a local state directory (`.aster-orch/state/`) for testing MCP changes.
 - Both MCP servers are configured globally (user scope) in Claude Code, Codex, and OpenCode — available from any project.
@@ -66,6 +67,7 @@ Extracted aster-orch from aster as a fully independent repository with its own d
 **Decision:** Dashboard sends SIGTERM to the worker on exit. Worker handles SIGTERM (and SIGINT) by breaking its poll loop and draining in-flight executions via semaphore permit acquisition with a timeout of `execution_timeout_secs`.
 
 **Alternatives considered:**
+
 - Kill worker immediately on dashboard exit — rejected because it kills running agent executions mid-task.
 - Embed worker in-process (same tokio runtime) — rejected because dashboard exit always kills the worker, even during long executions.
 
@@ -92,6 +94,7 @@ Switched Claude Code CLI from `--output-format json` (single JSON blob after com
 macOS desktop notifications on execution completion/failure via `osascript -e 'display notification ...'`. Consumer subscribes to EventBus in the worker process.
 
 **Key decisions:**
+
 - `osascript` over `notify-rust` crate or `terminal-notifier` — zero dependencies, built into macOS
 - Consumer in worker process (always running) rather than dashboard (interactive, may be closed)
 - Only notifies on `ExecutionCompleted` — other events are too noisy
@@ -157,6 +160,7 @@ The default config location for the production `aster_orch` binary is now `~/.as
 **Decision:** Default to `~/.aster-orch/config.yaml`. The `--config` flag remains available to override for non-default setups (e.g., the repo-level dev config at `.aster-orch/config.yaml`).
 
 **Rationale:**
+
 - Neutral, user-scoped location — no dependency on a specific repo being checked out.
 - Simplifies MCP server registration: `aster_orch mcp-server` with no flags just works.
 - Prepares for multi-project config support (ORCH-TEAM-6) where a single user-level config defines agents across multiple repos via per-agent `workdir`.
@@ -193,6 +197,7 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 **Decision:** Removed `parse_intent_from_text()`. All successful agent replies automatically get `response` intent. Routing is exclusively via the `on_response` handoff config field. `HandoffConfig` simplified from 5 fields to 2 (`on_response` + `max_chain_depth`). `changes-requested` added to the default `trigger_intents` list so operator change-request dispatches trigger execution without extra config.
 
 **What was removed:**
+
 - `parse_intent_from_text()` function and all its tests
 - `HandoffTarget` enum — `on_response` is now a plain `String`
 - `on_review_request`, `on_changes_requested`, `on_escalation` handoff fields

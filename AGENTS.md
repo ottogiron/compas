@@ -76,10 +76,10 @@ Backlogs live in `docs/project/backlog/`. See `docs/project/backlog/template.md`
 ## Quality Gates (Required Before Every Push)
 
 ```bash
-make verify    # always — fmt-check + clippy + test
+make verify    # always — fmt-check + clippy + test + lint-md
 ```
 
-This matches the CI pipeline (`.github/workflows/ci.yml`). All three checks must pass locally before pushing. **CI runs on Linux (Ubuntu).** Code that compiles on macOS may fail CI due to `#[cfg(target_os = "macos")]` gating — clippy will flag dead code that is only reachable on macOS. Always run `make verify` to catch these issues locally.
+This matches the CI pipeline (`.github/workflows/ci.yml`). All four checks must pass locally before pushing. **CI runs on Linux (Ubuntu).** Code that compiles on macOS may fail CI due to `#[cfg(target_os = "macos")]` gating — clippy will flag dead code that is only reachable on macOS. Always run `make verify` to catch these issues locally.
 
 ### Pre-commit hook vs CI
 

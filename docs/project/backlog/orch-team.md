@@ -144,6 +144,7 @@ Created: 2026-03-14
 - Goal: Allow a single aster-orch instance to manage agents and work across multiple project repositories.
 - In scope:
   - Config supports multiple project definitions:
+
     ```yaml
     projects:
       - id: aster
@@ -153,6 +154,7 @@ Created: 2026-03-14
         repo_root: /path/to/webapp
         agents: [frontend, backend]
     ```
+
   - Agents scoped to projects (backend CLI runs in project's repo_root)
   - Dispatches specify `project` field (defaults to first/only project)
   - Threads and batches carry project context
@@ -181,6 +183,7 @@ Created: 2026-03-14
 - Goal: Implement per-project and per-batch spending limits with alerts and automatic dispatch pausing when budgets are exceeded.
 - In scope:
   - Budget configuration per project and per batch:
+
     ```yaml
     projects:
       - id: aster
@@ -189,6 +192,7 @@ Created: 2026-03-14
           monthly_limit_usd: 500.0
           alert_threshold_pct: 80
     ```
+
   - Budget checks before dispatch: reject new dispatches when budget exceeded
   - Alert events (via event broadcast from EVO-2) when approaching threshold
   - Webhook/notification integration for budget alerts (via EVO-10)

@@ -17,6 +17,7 @@ Created: 2026-03-16
 - Goal: Add `handoff` config section to agent config and implement auto-chain routing in the worker.
 - In scope:
   - Add `HandoffConfig` struct to `src/config/types.rs`:
+
     ```rust
     #[derive(Deserialize)]
     pub struct HandoffConfig {
@@ -35,6 +36,7 @@ Created: 2026-03-16
         Gated { target: String, gate: String, gate_timeout_secs: Option<u64> },
     }
     ```
+
   - Add `handoff: Option<HandoffConfig>` to `AgentConfig`
   - Config validation: reject `Gated` variant with clear error ("gate conditions are not yet supported")
   - Validate handoff targets reference valid agent aliases or "operator"

@@ -2,7 +2,7 @@
 
 ## Overview
 
-```
+```text
 Operator (MCP client)
     │
     ▼
@@ -98,7 +98,7 @@ Main loop (concurrent via `tokio::select!`):
 
 ## Execution Status Lifecycle
 
-```
+```text
 queued → picked_up → executing → completed
                                → failed (transient) → re-queued (retry backoff)
                                → failed (non-retryable / retries exhausted)
@@ -127,7 +127,7 @@ queued → picked_up → executing → completed
 
 ## Module Structure
 
-```
+```text
 src/
 ├── bin/aster_orch.rs    # CLI binary (worker, mcp-server)
 ├── lib.rs               # Module declarations

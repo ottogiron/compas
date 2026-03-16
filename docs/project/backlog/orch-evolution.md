@@ -240,12 +240,14 @@ Created: 2026-03-14
 - Goal: Send notifications to external services (Slack, Discord, generic HTTP) on orchestrator events.
 - In scope:
   - Webhook configuration in `aster-orch.yaml`:
+
     ```yaml
     webhooks:
       - url: https://hooks.slack.com/...
         events: [execution_completed, execution_failed, batch_completed]
         format: slack
     ```
+
   - Supported formats: slack, discord, generic (raw JSON)
   - Async delivery with retry (1 retry, no queue persistence)
   - Subscribe to event broadcast channel (ORCH-EVO-2) for triggers

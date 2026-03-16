@@ -357,6 +357,7 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 > "Show me recent tasks and their status"
 
 **Stale state / corrupted DB:**
+
 ```bash
 # Stop all processes, remove state, restart
 kill $(pgrep aster_orch)

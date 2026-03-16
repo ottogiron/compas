@@ -1,4 +1,4 @@
-.PHONY: build release test fmt fmt-check clippy check clean verify install worker dashboard dashboard-dev mcp-server setup-hooks
+.PHONY: build release test fmt fmt-check clippy check clean verify lint-md install worker dashboard dashboard-dev mcp-server setup-hooks
 
 # ── Build ────────────────────────────────────────────────────────────
 build:
@@ -26,8 +26,11 @@ fmt-check:
 clippy:
 	cargo clippy --all-targets -- -D warnings
 
-# ── Quality gate (fmt-check + clippy + test) ─────────────────────────
-verify: fmt-check clippy test
+lint-md:
+	npx markdownlint-cli2 "**/*.md"
+
+# ── Quality gate (fmt-check + clippy + test + markdown lint) ─────────
+verify: fmt-check clippy test lint-md
 
 # ── Install ──────────────────────────────────────────────────────────
 install:

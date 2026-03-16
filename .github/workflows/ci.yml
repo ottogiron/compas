@@ -27,3 +27,9 @@ jobs:
       run: make clippy
     - name: Run tests
       run: make test
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - name: Markdown lint
+      run: make lint-md

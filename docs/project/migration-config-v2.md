@@ -15,6 +15,7 @@ The production config moved from inside the aster project repo to a standard hom
 | Dashboard launch | `aster_orch dashboard --config <path> --with-worker` | `aster_orch dashboard --with-worker` |
 
 **Also changed:**
+
 - REPLY PROTOCOL removed from all agent prompts (agents reply naturally, no JSON intent lines)
 - `HandoffConfig` simplified to 2 fields: `on_response` + `max_chain_depth`
 - New agent: `orch-reviewer` (code reviewer for aster-orch work)
@@ -49,6 +50,7 @@ Where `<old-config-path>` is wherever your production config currently lives (e.
 Edit `~/.aster-orch/config.yaml`:
 
 **a) Fix `state_dir`:**
+
 ```yaml
 # Before
 state_dir: /Users/<you>/.aster/orch
@@ -58,6 +60,7 @@ state_dir: /Users/<you>/.aster-orch/state
 ```
 
 **b) Fix `target_repo_root`** (if it was relative):
+
 ```yaml
 # Before (relative — worked when config was inside the aster repo)
 target_repo_root: ..
@@ -69,7 +72,8 @@ target_repo_root: /Users/<you>/workspace/github.com/<you>/aster
 **c) Remove REPLY PROTOCOL from all agent prompts:**
 
 Delete the entire `REPLY PROTOCOL:` block from every agent's `prompt:` field. This typically looks like:
-```
+
+```text
 REPLY PROTOCOL: When your task is complete, end your response with
 a JSON line on its own line. Use review-request when submitting work:
 {"intent":"review-request","to":"operator"}
@@ -82,6 +86,7 @@ Agents no longer need this — all routing is handled by config. See ADR-015.
 **d) Update handoff config** (if you had one):
 
 The `HandoffConfig` is now 2 fields only. Remove any `on_review_request`, `on_escalation`, `on_changes_requested` fields:
+
 ```yaml
 # Before
 handoff:
@@ -98,6 +103,7 @@ handoff:
 **e) Add orch-reviewer** (optional, recommended):
 
 Add a dedicated reviewer agent for aster-orch work:
+
 ```yaml
   - alias: orch-reviewer
     backend: claude
@@ -129,6 +135,7 @@ If you want a fresh start, skip this step.
 The binary now defaults to `~/.aster-orch/config.yaml`, so you can remove the `--config` argument.
 
 **Claude Code** (`~/.claude.json`):
+
 ```json
 "aster-orch": {
   "type": "stdio",
@@ -139,6 +146,7 @@ The binary now defaults to `~/.aster-orch/config.yaml`, so you can remove the `-
 ```
 
 **Codex** (`~/.codex/config.toml`):
+
 ```toml
 [mcp_servers.aster-orch]
 command = "aster_orch"
@@ -146,6 +154,7 @@ args = ["mcp-server"]
 ```
 
 **OpenCode** (`~/.config/opencode/opencode.json`):
+
 ```json
 "aster-orch": {
   "type": "local",
