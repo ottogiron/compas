@@ -10,7 +10,7 @@ The production config moved from inside the aster project repo to a standard hom
 | | Before (v1) | After (v2) |
 |---|---|---|
 | Config location | `<project-repo>/.aster-orch/config.yaml` | `~/.aster-orch/config.yaml` |
-| State directory | `/Users/<you>/.aster/orch/` | `~/.aster-orch/state/` |
+| State directory | `~/.aster/orch/` | `~/.aster-orch/state/` |
 | MCP server args | `aster_orch mcp-server --config <path>` | `aster_orch mcp-server` |
 | Dashboard launch | `aster_orch dashboard --config <path> --with-worker` | `aster_orch dashboard --with-worker` |
 

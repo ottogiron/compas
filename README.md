@@ -39,7 +39,7 @@ Create `~/.aster-orch/config.yaml` (the default location):
 
 ```yaml
 target_repo_root: /path/to/your/project
-state_dir: ~/.aster/orch
+state_dir: ~/.aster-orch/state
 poll_interval_secs: 1
 
 orchestration:
@@ -240,7 +240,7 @@ The default config location is `~/.aster-orch/config.yaml`. Use `--config <path>
 
 ```yaml
 target_repo_root: /path/to/repo        # Where agents work (required)
-state_dir: ~/.aster/orch               # Runtime state: DB, logs (required)
+state_dir: ~/.aster-orch/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
 
 orchestration:
@@ -360,7 +360,7 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 ```bash
 # Stop all processes, remove state, restart
 kill $(pgrep aster_orch)
-rm ~/.aster/orch/jobs.sqlite*
+rm ~/.aster-orch/state/jobs.sqlite*
 aster_orch dashboard --with-worker
 ```
 
