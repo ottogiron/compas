@@ -116,11 +116,11 @@ If you change a layer, update/review the paired artifacts in the same commit set
 
 ### Production config
 
-The production orch config lives in the **aster repo** at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. It defines agents for both the aster repo (via `target_repo_root: ..`) and the aster-orch repo (via per-agent `workdir`). See ADR-010 in `docs/project/DECISIONS.md` for the rationale.
+The production orch config defaults to `~/.aster-orch/config.yaml`. It defines agents for one or more repos, using `target_repo_root` for the default repo and per-agent `workdir` overrides for agents that work in different directories. See ADR-010 and ADR-013 in `docs/project/DECISIONS.md` for rationale.
 
 ### Dev config
 
-`.aster-orch/config.yaml` configures the dev instance with a local state directory. The dev DB (`.aster-orch/state/jobs.sqlite`) is completely isolated from production.
+`.aster-orch/config.yaml` (repo-relative) configures the **dev** instance with a local state directory. This is distinct from the production default at `~/.aster-orch/config.yaml`. The dev DB (`.aster-orch/state/jobs.sqlite`) is completely isolated from production.
 
 ```bash
 make dashboard-dev   # dashboard + embedded worker on dev DB

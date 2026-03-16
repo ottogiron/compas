@@ -113,7 +113,7 @@ Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in dif
 
 **Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) was deferred to ORCH-TEAM-6. Per-agent `workdir` is the interim solution that solves the immediate need. When project-based config is implemented, it would set `workdir` on its agents, making `workdir` the underlying primitive either way.
 
-**Config lives in the aster repo:** The production orch config is at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. It defines agents for both the aster repo (via `target_repo_root: ..`) and the aster-orch repo (via per-agent `workdir`). The aster-orch repo has its own dev config at `.aster-orch/config.yaml` for testing MCP changes.
+**Config location:** The production orch config has migrated to `~/.aster-orch/config.yaml` (the new default). See ADR-013. The aster-orch repo retains `.aster-orch/config.yaml` as the **dev** config for testing MCP changes — this is distinct from the production default.
 
 ## ADR-011: Retry with error classification
 
@@ -144,3 +144,22 @@ Backend stdout lines are streamed through a `sync_channel(128)` from the reader 
 **Storage:** Batch SQLite inserts reduce write amplification. Events are queryable via `orch_execution_events` MCP tool, enabling mid-execution progress inspection without waiting for the agent to finish.
 
 **EventBus emission:** `ExecutionProgress` events are broadcast on the shared EventBus so the dashboard can update the active execution view in real time without polling.
+
+## ADR-013: Production Config at ~/.aster-orch/
+
+**Date:** 2026-03
+**Status:** Active
+
+The default config location for the production `aster_orch` binary is now `~/.aster-orch/config.yaml`. All subcommands (`worker`, `mcp-server`, `dashboard`, `wait`) fall back to this path when `--config` is not provided.
+
+**Context:** Previously the config was coupled to the aster repo at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. This created a discovery problem: every MCP server registration, every `aster_orch` CLI invocation, and every doc example had to hardcode that path. Moving to a machine-installed binary (via `cargo install`) made the old path a portability liability.
+
+**Decision:** Default to `~/.aster-orch/config.yaml`. The `--config` flag remains available to override for non-default setups (e.g., the repo-level dev config at `.aster-orch/config.yaml`).
+
+**Rationale:**
+- Neutral, user-scoped location — no dependency on a specific repo being checked out.
+- Simplifies MCP server registration: `aster_orch mcp-server` with no flags just works.
+- Prepares for multi-project config support (ORCH-TEAM-6) where a single user-level config defines agents across multiple repos via per-agent `workdir`.
+- Consistent with Unix conventions for user-scoped tool config (`~/.tool/`).
+
+**Dev config distinction:** The repo-relative `.aster-orch/config.yaml` remains the dev config for testing MCP changes. It is loaded via `make dashboard-dev` or `cargo run` with an explicit `--config` flag, keeping it fully isolated from the production default.

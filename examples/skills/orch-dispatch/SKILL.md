@@ -84,11 +84,11 @@ Use the CLI wait (not the MCP tool — it was removed due to transport timeout i
 
 ```bash
 aster_orch wait \
-  --config <path-to-config> \
   --thread-id <thread-id> \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach.
 >
@@ -157,11 +157,11 @@ Save the reviewer `thread_id` and `reference`.
 
 ```bash
 aster_orch wait \
-  --config <path-to-config> \
   --thread-id <reviewer-thread-id> \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 

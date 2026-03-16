@@ -81,15 +81,13 @@ Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 
 Use the CLI wait (not MCP `orch_wait` — removed due to stdio transport timeout issues).
 
-The production orch config path depends on your setup. Check the `aster-orch` MCP server config for the `--config` value, or use the release binary directly:
-
 ```bash
 aster_orch wait \
-  --config <production-config-path> \
   --thread-id <thread-id> \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach — you get the worker's reply regardless of which intent they chose.
 >
@@ -142,11 +140,11 @@ Save the reviewer `thread_id` and `reference`.
 
 ```bash
 aster_orch wait \
-  --config <production-config-path> \
   --thread-id <reviewer-thread-id> \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 

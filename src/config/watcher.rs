@@ -1,4 +1,4 @@
-//! Config live-reload: watch `.aster-orch/config.yaml` for changes and
+//! Config live-reload: watch the config file for changes and
 //! atomically swap the active `OrchestratorConfig` via `ArcSwap`.
 //!
 //! Usage:

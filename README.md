@@ -35,7 +35,7 @@ cargo build --release
 
 ### 1. Create a config
 
-Create `.aster-orch/config.yaml` in your project (or anywhere):
+Create `~/.aster-orch/config.yaml` (the default location):
 
 ```yaml
 target_repo_root: /path/to/your/project
@@ -66,14 +66,16 @@ Add the MCP server to your preferred tool. If you used `cargo install`, you can 
 
 **Claude Code:**
 ```bash
+# --config is optional if using the default location (~/.aster-orch/config.yaml)
 claude mcp add --scope user --transport stdio aster-orch -- \
-  aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
+  aster_orch mcp-server
 ```
 
 **Codex:**
 ```bash
+# --config is optional if using the default location (~/.aster-orch/config.yaml)
 codex mcp add aster-orch -- \
-  aster_orch mcp-server --config /path/to/.aster-orch/config.yaml
+  aster_orch mcp-server
 ```
 
 **OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
@@ -82,11 +84,12 @@ codex mcp add aster-orch -- \
   "mcp": {
     "aster-orch": {
       "type": "local",
-      "command": ["aster_orch", "mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
+      "command": ["aster_orch", "mcp-server"]
     }
   }
 }
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 **Gemini CLI** — add to `.gemini/settings.json`:
 ```json
@@ -94,11 +97,12 @@ codex mcp add aster-orch -- \
   "mcpServers": {
     "aster-orch": {
       "command": "aster_orch",
-      "args": ["mcp-server", "--config", "/path/to/.aster-orch/config.yaml"]
+      "args": ["mcp-server"]
     }
   }
 }
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 ### 3. Start the worker
 
@@ -106,12 +110,13 @@ The worker is the background process that picks up dispatched tasks and runs you
 
 ```bash
 # Dashboard + worker together (recommended for getting started)
-aster_orch dashboard --with-worker --config .aster-orch/config.yaml
+aster_orch dashboard --with-worker
 
 # Or run them separately
-aster_orch worker --config .aster-orch/config.yaml &
-aster_orch dashboard --config .aster-orch/config.yaml
+aster_orch worker &
+aster_orch dashboard
 ```
+`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 The worker continues running after the dashboard exits. Without a running worker, dispatched tasks will queue but not execute.
 
@@ -224,6 +229,8 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 
 ## Configuration Reference
 
+The default config location is `~/.aster-orch/config.yaml`. Use `--config <path>` to override it for any subcommand (`worker`, `mcp-server`, `dashboard`, `wait`).
+
 ```yaml
 target_repo_root: /path/to/repo        # Where agents work (required)
 state_dir: ~/.aster/orch               # Runtime state: DB, logs (required)
@@ -318,7 +325,7 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 # Stop all processes, remove state, restart
 kill $(pgrep aster_orch)
 rm ~/.aster/orch/jobs.sqlite*
-aster_orch dashboard --with-worker --config .aster-orch/config.yaml
+aster_orch dashboard --with-worker
 ```
 
 **Worker not picking up work:**
