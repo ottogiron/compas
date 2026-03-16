@@ -33,6 +33,12 @@ agents:
     # workspace: worktree             # "worktree" for git isolation, "shared" (default)
     # max_retries: 0                  # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
+    # handoff:                          # Auto-handoff chain routing
+    #   on_response: other-agent        # Route on response intent (agent alias or "operator")
+    #   on_review_request: reviewer     # Route on review-request intent
+    #   on_changes_requested: dev       # Route on changes-requested intent
+    #   on_escalation: operator         # Route on escalation intent
+    #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
     prompt: >
       You implement changes in this repository and report verification results.
       End with a JSON line: {"intent":"response","to":"operator"}.

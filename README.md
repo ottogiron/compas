@@ -56,6 +56,15 @@ agents:
       You are a development agent. Follow the project's AGENTS.md.
       When done, end your response with:
       {"intent":"review-request","to":"operator"}
+    # handoff:                          # Auto-chain to another agent based on reply intent
+    #   on_review_request: reviewer     # Send review-requests to the reviewer agent
+    #   max_chain_depth: 3              # Stop after 3 auto-handoffs, force operator review
+  # - alias: reviewer
+  #   backend: claude
+  #   model: claude-sonnet-4-6
+  #   prompt: "You review code changes..."
+  #   handoff:
+  #     on_changes_requested: dev       # Route change requests back to dev
 ```
 
 Supported backends: `claude`, `codex`, `gemini`, `opencode`.
@@ -259,6 +268,12 @@ agents:
     # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
     # max_retries: 0              # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30      # Base delay between retries (doubles each attempt)
+    # handoff:                          # Auto-handoff chain routing
+    #   on_response: other-agent        # Route on response intent (agent alias or "operator")
+    #   on_review_request: reviewer     # Route on review-request intent
+    #   on_changes_requested: dev       # Route on changes-requested intent
+    #   on_escalation: operator         # Route on escalation intent
+    #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
 ```
 
 **Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
@@ -299,14 +314,42 @@ When `max_retries` is set on an agent, transient failures (network blips, tempor
 
 Each retry creates a new execution entry. Check `orch_tasks` for `attempt_number` to see retry history. The thread stays Active during retries — it only fails when all retries are exhausted.
 
+### Auto-Handoff Chains
+
+Agents can automatically chain to other agents based on reply intent. Configure `handoff` routes on an agent to dispatch its output to the next agent without operator intervention — for example, an implementer that auto-routes review requests to a reviewer, which routes change requests back to the implementer.
+
+```yaml
+agents:
+  - alias: dev
+    backend: claude
+    model: claude-sonnet-4-6
+    prompt: "You implement changes. End with {\"intent\":\"review-request\",\"to\":\"operator\"}"
+    handoff:
+      on_review_request: reviewer      # Dev's review-requests go to reviewer
+
+  - alias: reviewer
+    backend: claude
+    model: claude-sonnet-4-6
+    prompt: "You review code. End with {\"intent\":\"response\",\"to\":\"operator\"} or {\"intent\":\"changes-requested\",\"to\":\"operator\"}"
+    handoff:
+      on_changes_requested: dev        # Reviewer's change requests go back to dev
+```
+
+**Chain depth limit:** `max_chain_depth` (default: 3) caps the number of consecutive auto-handoffs on a thread. When the limit is reached, the chain stops and a review-request is inserted for the operator. This prevents runaway loops.
+
+**Escalation intent:** If an agent replies with `{"intent":"escalation",...}`, the `on_escalation` route is checked. Set it to `"operator"` (or omit it) to ensure escalations always reach you.
+
+**Viewing chains:** In the dashboard, open a thread's conversation (`Enter` on the execution) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
+
 ## How It Works
 
 1. **You dispatch** — ask your CLI to send a task to an agent
 2. **Worker claims it** — the background worker picks up the queued execution
 3. **Agent executes** — the backend CLI (Claude Code, Codex, Gemini, OpenCode) runs in your repo
 4. **Agent replies** — sends a structured response (response, review-request, etc.)
-5. **You review** — read the output in the dashboard or via `orch_transcript`
-6. **You close** — mark the thread as completed, or dispatch follow-up work
+5. **Auto-handoff** (optional) — if the agent has a `handoff` route matching the reply intent, a new handoff message is auto-inserted, triggering the target agent. The chain runs autonomously up to `max_chain_depth`, then forces operator review.
+6. **You review** — read the output in the dashboard or via `orch_transcript`
+7. **You close** — mark the thread as completed, or dispatch follow-up work
 
 The dashboard shows all of this in real time. For the full architecture, see [docs/project/architecture.md](docs/project/architecture.md).
 

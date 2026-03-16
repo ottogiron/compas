@@ -163,3 +163,21 @@ The default config location for the production `aster_orch` binary is now `~/.as
 - Consistent with Unix conventions for user-scoped tool config (`~/.tool/`).
 
 **Dev config distinction:** The repo-relative `.aster-orch/config.yaml` remains the dev config for testing MCP changes. It is loaded via `make dashboard-dev` or `cargo run` with an explicit `--config` flag, keeping it fully isolated from the production default.
+
+## ADR-014: Config-driven auto-handoff chains
+
+**Date:** 2026-03
+**Status:** Active
+
+Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., implement → review → fix → re-review). Auto-handoff chains let agents route their output to the next agent automatically based on reply intent.
+
+**Decision:** Added a `handoff` config section to agent definitions with intent-based routing fields (`on_response`, `on_review_request`, `on_changes_requested`, `on_escalation`) and a `max_chain_depth` safety limit (default: 3).
+
+**Key choices:**
+
+- **Config declares routes, not agents** — the `handoff` section is config on the producing agent, not a property of the consuming agent. This keeps agent definitions self-contained and makes chains visible from the config.
+- **Untagged enum for `HandoffTarget`** — `HandoffTarget` is `#[serde(untagged)]` with `Simple(String)` and `Gated { target, gate, gate_timeout_secs }` variants. Simple targets work today; gated targets parse without error but are rejected at validation, providing forward-compatibility for Phase 2 gated handoffs.
+- **Atomic depth check + insert transaction** — `insert_handoff_if_under_depth()` counts existing `handoff`-intent messages and inserts the new one in a single SQL transaction. This prevents TOCTOU races where concurrent executions on the same thread could both pass the depth check before either inserts.
+- **Chain depth via message count** — depth is the count of `handoff`-intent messages on the thread, not a counter on the execution. This is durable (survives crashes) and visible in the transcript.
+- **Forced operator escalation at limit** — when `max_chain_depth` is reached, a review-request message is inserted for the operator instead of the handoff. The chain stops cleanly and the operator can decide next steps.
+- **"operator" as target alias** — setting a route to `"operator"` explicitly stops the chain for that intent. Omitting the route has the same effect.
