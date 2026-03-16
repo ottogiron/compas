@@ -20,6 +20,7 @@ Created: 2026-03-16
   - Config validation: `handoff_prompt` is optional, no validation needed beyond serde
   - Integration test: agent with `handoff_prompt` set, verify the handoff message body starts with the custom prompt
   - Unit test: verify body composition order (prompt → separator → original dispatch → reply)
+  - `examples/config-generic.yaml`: Add `handoff_prompt` field to the agent config example
 - Out of scope:
   - Template variables in the prompt (`{{agent_reply}}` etc.)
   - Per-target prompts (same prompt for all targets)
@@ -48,10 +49,12 @@ Created: 2026-03-16
     }
     ```
 
-  - `src/config/validation.rs`: Validate all targets in `FanOut` are valid agent aliases or "operator". Validate no self-loops. Validate `FanOut` has at least 2 targets (single-element list should use `Single`).
+  - `src/config/validation.rs`: Validate all targets in `FanOut` are valid agent aliases or "operator". Validate no self-loops. Validate no duplicates. At least 1 target (single-element FanOut degrades to Single behavior). Do NOT require minimum 2.
   - `src/worker/loop_runner.rs`: In `maybe_auto_handoff()`, branch on `Single` vs `FanOut`:
     - `Single`: existing behavior (insert handoff message on same thread)
-    - `FanOut`: for each target, create a new thread with a shared batch ID (auto-generated as `{original_batch}-fanout` or inherited), insert a handoff message on each new thread. Each thread has its own depth counter.
+    - `FanOut` with 1 target: degrade to Single behavior (same-thread handoff)
+    - `FanOut` with 2+ targets: for each target, create a new thread with a shared batch ID. Batch ID scheme: inherit from originating thread if exists, else generate `fanout-{thread_id}`. Insert a handoff message on each new thread.
+  - Fan-out threads start at depth 0 (independent chains, independent depth counters). Total fan is managed by `max_chain_depth` on the downstream agents.
   - `src/store/mod.rs`: Add `insert_fanout_handoffs()` method that creates N threads + N handoff messages in a single transaction, all sharing a batch ID
   - Config validation tests for `HandoffTarget` enum
   - Integration tests: fan-out creates N threads, each with correct handoff message, each linked by batch
@@ -77,8 +80,20 @@ Created: 2026-03-16
 - Goal: Add `--await-chain` flag to `aster_orch wait` that keeps polling until the thread has no active/queued executions and there's a non-trigger reply after the last handoff message.
 - In scope:
   - `src/bin/aster_orch.rs`: Add `--await-chain` boolean flag to the wait subcommand
-  - `src/wait.rs`: When `await_chain` is true, after finding a matching reply, additionally check `store.count_active_executions(thread_id)`. If count > 0, skip the match and keep polling. Only return when count == 0 AND a non-trigger reply exists.
-  - `src/store/mod.rs`: Add `count_active_executions(thread_id)` method — count executions for the thread where status is `queued` or `executing`
+  - `src/wait.rs`: When `await_chain` is true, after finding a matching reply, additionally check for pending work on the thread. Only return when pending_work == 0 AND a non-trigger reply exists. Pending work = active executions + untriggered handoff messages (closes the race window where handoff message is inserted but execution not yet enqueued).
+  - `src/store/mod.rs`: Add `count_pending_chain_work(thread_id)` method — single query that counts active executions (status in queued/picked_up/executing) PLUS untriggered handoff messages (handoff intent messages with no linked execution):
+
+    ```sql
+    SELECT
+      (SELECT COUNT(*) FROM executions
+       WHERE thread_id = ? AND status IN ('queued', 'picked_up', 'executing')) +
+      (SELECT COUNT(*) FROM messages m
+       WHERE m.thread_id = ? AND m.intent = 'handoff'
+       AND NOT EXISTS (
+         SELECT 1 FROM executions e WHERE e.dispatch_message_id = m.id
+       ))
+    AS pending_work
+    ```
   - When chain hits `max_chain_depth` and forces operator review, `--await-chain` returns naturally — the `review-request` message is a non-trigger reply and no further executions are queued
   - Integration tests: await-chain waits through handoff, returns final reply; await-chain returns on depth-limit pause
 - Out of scope:
