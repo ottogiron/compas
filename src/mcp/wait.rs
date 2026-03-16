@@ -38,6 +38,7 @@ impl OrchestratorMcpServer {
             strict_new: params.strict_new.unwrap_or(false),
             timeout: Duration::from_secs(timeout_secs),
             trigger_intents: config.orchestration.trigger_intents.clone(),
+            await_chain: false,
         };
 
         // Spawn a background task that sends progress notifications at regular

@@ -78,6 +78,10 @@ enum Commands {
         /// Timeout in seconds (default 120)
         #[arg(long, default_value = "120")]
         timeout: u64,
+        /// Keep waiting until the entire handoff chain settles (no active executions
+        /// and no untriggered handoff messages on the thread).
+        #[arg(long, default_value_t = false)]
+        await_chain: bool,
     },
 }
 
@@ -122,10 +126,20 @@ async fn main() -> ExitCode {
             since,
             strict_new,
             timeout,
+            await_chain,
         } => {
             let config = effective_config_path(config);
             // Wait outputs key=value to stdout — no tracing there
-            return run_wait(config, thread_id, intent, since, strict_new, timeout).await;
+            return run_wait(
+                config,
+                thread_id,
+                intent,
+                since,
+                strict_new,
+                timeout,
+                await_chain,
+            )
+            .await;
         }
     }
 
@@ -609,6 +623,7 @@ async fn run_wait(
     since: Option<String>,
     strict_new: bool,
     timeout: u64,
+    await_chain: bool,
 ) -> ExitCode {
     let config = match aster_orch::config::load_config(&config_path) {
         Ok(c) => c,
@@ -634,6 +649,7 @@ async fn run_wait(
         strict_new,
         timeout: Duration::from_secs(timeout),
         trigger_intents: config.orchestration.trigger_intents.clone(),
+        await_chain,
     };
 
     match wait::wait_for_message(&store, &req).await {
@@ -993,5 +1009,34 @@ mod tests {
             Some("0.2.0".to_string()),
         ));
         assert!(!is_worker_alive(&hb, WORKER_HEARTBEAT_MAX_AGE_SECS));
+    }
+
+    #[test]
+    fn test_wait_parses_await_chain_flag() {
+        let parsed = Cli::try_parse_from([
+            "aster-orch",
+            "wait",
+            "--thread-id",
+            "t-xyz",
+            "--await-chain",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Wait { await_chain, .. } = cli.command {
+                assert!(await_chain);
+            } else {
+                panic!("expected Wait command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_wait_await_chain_defaults_false() {
+        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--thread-id", "t-abc"]).unwrap();
+        if let Commands::Wait { await_chain, .. } = parsed.command {
+            assert!(!await_chain);
+        } else {
+            panic!("expected Wait command");
+        }
     }
 }

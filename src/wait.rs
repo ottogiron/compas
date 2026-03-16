@@ -18,6 +18,9 @@ pub struct WaitRequest {
     pub timeout: Duration,
     /// Trigger intents to auto-exclude when no explicit intent or cursor is set.
     pub trigger_intents: Vec<String>,
+    /// When true, keep polling until the entire handoff chain settles
+    /// (no active executions AND no untriggered handoff messages on the thread).
+    pub await_chain: bool,
 }
 
 /// Outcome of a wait operation.
@@ -74,6 +77,24 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
         };
 
         if let Some(&msg) = matching.last() {
+            if req.await_chain {
+                let pending = store
+                    .count_pending_chain_work(&req.thread_id)
+                    .await
+                    .map_err(|e| format!("chain settlement check failed: {}", e))?;
+                if pending > 0 {
+                    // Chain still has work in progress or pending handoffs — keep polling.
+                    if tokio::time::Instant::now() >= deadline {
+                        return Ok(WaitOutcome::Timeout {
+                            thread_id: req.thread_id.clone(),
+                            timeout_secs: req.timeout.as_secs(),
+                            intent_filter: req.intent.clone(),
+                        });
+                    }
+                    tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+                    continue;
+                }
+            }
             return Ok(WaitOutcome::Found(msg.clone()));
         }
 

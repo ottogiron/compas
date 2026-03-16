@@ -3541,3 +3541,274 @@ agents:
         assert!(reviewer.handoff.is_none());
     }
 }
+
+mod pending_chain_work_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_no_work() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        let count = store.count_pending_chain_work("t-chain").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_active_execution() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert a queued execution — counts as pending
+        store.insert_execution("t-chain", "focused").await.unwrap();
+
+        let count = store.count_pending_chain_work("t-chain").await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_untriggered_handoff() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert a handoff message with no linked execution — counts as pending
+        store
+            .insert_message(
+                "t-chain",
+                "agent-a",
+                "agent-b",
+                "handoff",
+                "take over",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let count = store.count_pending_chain_work("t-chain").await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_triggered_handoff() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert a handoff message
+        let msg_id = store
+            .insert_message(
+                "t-chain",
+                "agent-a",
+                "agent-b",
+                "handoff",
+                "take over",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Link an execution to that handoff message — it's now "triggered"
+        store
+            .insert_execution_with_dispatch("t-chain", "agent-b", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        // Triggered handoff does not count as pending (but the queued execution does)
+        // Total: 0 untriggered handoffs + 1 queued execution = 1
+        let count = store.count_pending_chain_work("t-chain").await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_completed_execution_not_counted() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert and complete an execution
+        let exec_id = store.insert_execution("t-chain", "focused").await.unwrap();
+        store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .complete_execution(&exec_id, Some(0), None, None, 100)
+            .await
+            .unwrap();
+
+        let count = store.count_pending_chain_work("t-chain").await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_count_pending_chain_work_nonexistent_thread() {
+        let store = test_store().await;
+
+        // Non-existent thread returns 0 (no rows match)
+        let count = store
+            .count_pending_chain_work("no-such-thread")
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}
+
+mod await_chain_wait_tests {
+    use super::*;
+    use aster_orch::wait::{self, WaitOutcome, WaitRequest};
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn test_await_chain_returns_immediately_when_no_pending_work() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert a response message — no pending chain work
+        store
+            .insert_message(
+                "t-chain",
+                "reviewer",
+                "operator",
+                "response",
+                "review done",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let req = WaitRequest {
+            thread_id: "t-chain".to_string(),
+            intent: Some("response".to_string()),
+            since_reference: None,
+            strict_new: false,
+            timeout: Duration::from_secs(5),
+            trigger_intents: vec![],
+            await_chain: true,
+        };
+
+        let outcome = wait::wait_for_message(&store, &req).await.unwrap();
+        match outcome {
+            WaitOutcome::Found(msg) => {
+                assert_eq!(msg.from_alias, "reviewer");
+                assert_eq!(msg.body, "review done");
+            }
+            WaitOutcome::Timeout { .. } => panic!("should not timeout"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_await_chain_waits_through_handoff() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Insert implementer's response message (found first during polling)
+        store
+            .insert_message(
+                "t-chain",
+                "implementer",
+                "operator",
+                "response",
+                "impl done",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Insert a queued execution (simulating a handoff-triggered execution in progress)
+        let exec_id = store.insert_execution("t-chain", "reviewer").await.unwrap();
+
+        // Background task: complete the execution and insert reviewer's response
+        let store2 = store.clone();
+        let exec_id2 = exec_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            store2.claim_next_execution(10).await.unwrap();
+            store2.mark_execution_executing(&exec_id2).await.unwrap();
+            store2
+                .complete_execution(&exec_id2, Some(0), None, None, 200)
+                .await
+                .unwrap();
+            store2
+                .insert_message(
+                    "t-chain",
+                    "reviewer",
+                    "operator",
+                    "response",
+                    "review done",
+                    None,
+                )
+                .await
+                .unwrap();
+        });
+
+        let req = WaitRequest {
+            thread_id: "t-chain".to_string(),
+            intent: Some("response".to_string()),
+            since_reference: None,
+            strict_new: false,
+            timeout: Duration::from_secs(10),
+            trigger_intents: vec![],
+            await_chain: true,
+        };
+
+        let outcome = wait::wait_for_message(&store, &req).await.unwrap();
+        match outcome {
+            WaitOutcome::Found(msg) => {
+                // Should return the reviewer's reply, not the implementer's
+                assert_eq!(msg.from_alias, "reviewer");
+                assert_eq!(msg.body, "review done");
+            }
+            WaitOutcome::Timeout { .. } => panic!("should not timeout"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_await_chain_returns_on_depth_limit() {
+        let store = test_store().await;
+        store.ensure_thread("t-chain", None).await.unwrap();
+
+        // Simulate a depth-limit escalation: an escalation message is posted
+        // with no pending chain work (no active executions, no untriggered handoffs)
+        store
+            .insert_message(
+                "t-chain",
+                "orchestrator",
+                "operator",
+                "response",
+                "chain depth limit reached; escalating to operator",
+                None,
+            )
+            .await
+            .unwrap();
+
+        let req = WaitRequest {
+            thread_id: "t-chain".to_string(),
+            intent: None,
+            since_reference: None,
+            strict_new: false,
+            timeout: Duration::from_secs(5),
+            trigger_intents: vec![],
+            await_chain: true,
+        };
+
+        let outcome = wait::wait_for_message(&store, &req).await.unwrap();
+        match outcome {
+            WaitOutcome::Found(msg) => {
+                assert_eq!(msg.from_alias, "orchestrator");
+                assert!(msg.body.contains("depth limit"));
+            }
+            WaitOutcome::Timeout { .. } => panic!("should not timeout"),
+        }
+    }
+
+    #[test]
+    fn test_await_chain_false_is_default_behavior() {
+        // Without await_chain, the request struct still works as before.
+        // This is a compile-time check via construction.
+        let _req = WaitRequest {
+            thread_id: "t-1".to_string(),
+            intent: None,
+            since_reference: None,
+            strict_new: false,
+            timeout: Duration::from_secs(1),
+            trigger_intents: vec![],
+            await_chain: false,
+        };
+    }
+}

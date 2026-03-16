@@ -736,6 +736,34 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Count pending chain work for a thread.
+    ///
+    /// Returns the sum of:
+    /// - Active executions (queued, picked_up, or executing) on the thread.
+    /// - Handoff messages that have not yet been linked to an execution.
+    ///
+    /// A single compound query closes the race window between handoff message
+    /// insertion and execution enqueue.
+    pub async fn count_pending_chain_work(&self, thread_id: &str) -> Result<i64, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT
+              (SELECT COUNT(*) FROM executions
+               WHERE thread_id = ? AND status IN ('queued', 'picked_up', 'executing')) +
+              (SELECT COUNT(*) FROM messages m
+               WHERE m.thread_id = ? AND m.intent = 'handoff'
+               AND NOT EXISTS (
+                 SELECT 1 FROM executions e WHERE e.dispatch_message_id = m.id
+               ))
+            AS pending_work",
+        )
+        .bind(thread_id)
+        .bind(thread_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("count_pending_chain_work failed: {}", e))?;
+        Ok(row.0)
+    }
+
     /// Atomically check chain depth and insert a handoff message if under the limit.
     ///
     /// Returns:
