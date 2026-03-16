@@ -297,7 +297,7 @@ Each retry creates a new execution entry. Check `orch_tasks` for `attempt_number
 1. **You dispatch** — ask your CLI to send a task to an agent
 2. **Worker claims it** — the background worker picks up the queued execution
 3. **Agent executes** — the backend CLI (Claude Code, Codex, Gemini, OpenCode) runs in your repo
-4. **Agent replies** — sends a structured response (review-request, status-update, etc.)
+4. **Agent replies** — sends a structured response (response, review-request, etc.)
 5. **You review** — read the output in the dashboard or via `orch_transcript`
 6. **You close** — mark the thread as completed, or dispatch follow-up work
 

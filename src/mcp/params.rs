@@ -15,7 +15,7 @@ pub struct DispatchParams {
     pub body: String,
     /// Optional batch/ticket ID
     pub batch: Option<String>,
-    /// Intent label (e.g. dispatch, handoff, status-update)
+    /// Intent label (e.g. dispatch, handoff, response)
     pub intent: String,
     /// Optional thread ID (auto-generated if omitted)
     pub thread_id: Option<String>,
@@ -86,7 +86,7 @@ pub struct DiagnoseParams {
 pub struct WaitParams {
     /// Thread ID to poll
     pub thread_id: String,
-    /// Optional intent to wait for (e.g. "status-update", "completion")
+    /// Optional intent to wait for (e.g. "response", "review-request")
     pub intent: Option<String>,
     /// Optional message cursor (`db:<id>` or numeric ID). Only newer messages are considered.
     pub since_reference: Option<String>,
@@ -100,7 +100,7 @@ pub struct WaitParams {
 pub struct PollParams {
     /// Thread ID to check
     pub thread_id: String,
-    /// Optional intent to look for (e.g. "status-update", "completion")
+    /// Optional intent to look for (e.g. "response", "review-request")
     pub intent: Option<String>,
     /// Optional message cursor (`db:<id>` or numeric ID). Only newer messages are considered.
     pub since_reference: Option<String>,

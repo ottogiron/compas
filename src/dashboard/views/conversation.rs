@@ -180,6 +180,7 @@ fn format_timestamp(ts_secs: i64) -> String {
 fn intent_color(intent: &str) -> Color {
     match intent {
         "dispatch" => Color::Cyan,
+        "response" => Color::Green,
         "review-request" => Color::Yellow,
         "changes-requested" => Color::Red,
         "error" => Color::Red,
@@ -758,7 +759,13 @@ mod tests {
     }
 
     #[test]
-    fn test_intent_color_status_update() {
+    fn test_intent_color_response() {
+        assert_eq!(intent_color("response"), Color::Green);
+    }
+
+    #[test]
+    fn test_intent_color_status_update_fallback() {
+        // "status-update" is a legacy intent; it falls through to DarkGray for backward compat.
         assert_eq!(intent_color("status-update"), Color::DarkGray);
     }
 

@@ -612,7 +612,7 @@ async fn handle_trigger_output(
 
     if output.success {
         // ── Success path ──
-        let reply_intent = output.parsed_intent.as_deref().unwrap_or("status-update");
+        let reply_intent = output.parsed_intent.as_deref().unwrap_or("response");
         let reply_body = output
             .output
             .as_deref()
@@ -1251,5 +1251,56 @@ mod tests {
         // Thread should be Failed — max retries exceeded
         let status = store.get_thread_status("t-max").await.unwrap();
         assert_eq!(status.as_deref(), Some("Failed"));
+    }
+
+    #[tokio::test]
+    async fn test_handle_trigger_output_success_no_intent_defaults_to_response() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let configs = vec![test_agent_config("worker-a", 0)];
+
+        store.ensure_thread("t-default-intent", None).await.unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-default-intent",
+                "operator",
+                "worker-a",
+                "dispatch",
+                "task",
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-default-intent", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // parsed_intent is None — should fall back to "response"
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-default-intent".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: true,
+            output: Some("all done".to_string()),
+            exit_code: Some(0),
+            duration_ms: 100,
+            parsed_intent: None,
+            error_category: None,
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+
+        // The reply message should have intent "response", not "status-update"
+        let messages = store.get_thread_messages("t-default-intent").await.unwrap();
+        let reply = messages
+            .iter()
+            .find(|m| m.from_alias == "worker-a")
+            .expect("should have a reply from the agent");
+        assert_eq!(reply.intent, "response");
     }
 }

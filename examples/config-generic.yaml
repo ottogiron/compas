@@ -35,13 +35,13 @@ agents:
     # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
     prompt: >
       You implement changes in this repository and report verification results.
-      End with a JSON line: {"intent":"status-update","to":"operator"}.
+      End with a JSON line: {"intent":"response","to":"operator"}.
   - alias: analyst
     backend: codex
     model: gpt-5.3-codex
     prompt: >
       You investigate issues and return status updates with clear next steps.
-      End with a JSON line: {"intent":"status-update","to":"operator"}.
+      End with a JSON line: {"intent":"response","to":"operator"}.
 
   # Example: agent working in a different repository
   # - alias: infra-dev

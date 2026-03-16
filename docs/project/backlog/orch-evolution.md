@@ -124,7 +124,7 @@ Created: 2026-03-14
 - Acceptance criteria:
   - Selecting a thread shows its full message history in a readable format
   - Messages are visually distinguished by sender (operator vs agent vs system)
-  - Intent badges are shown (dispatch, status-update, completion, etc.)
+  - Intent badges are shown (dispatch, response, review-request, etc.)
   - Timestamps are displayed relative or absolute
 - Verification:
   - Manual: dispatch to an agent, wait for reply, verify conversation view shows both messages

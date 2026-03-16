@@ -92,6 +92,8 @@ aster_orch wait \
   --timeout 900
 ```
 
+> **Why `--intent review-request`?** Implementers explicitly signal `review-request` to gate on operator approval before merging. This is intentional — it distinguishes "I need a decision" from a plain status reply.
+
 ### Step 4 — Contract check
 
 Verify the worker's `review-request` message contains the 4 required fields (see `references/review-request-contract.md`):
@@ -141,10 +143,11 @@ Save the reviewer `thread_id` and `reference`.
 aster_orch wait \
   --config <production-config-path> \
   --thread-id <reviewer-thread-id> \
-  --intent review-request \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
+
+> **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 
 ### Step 8 — Act on findings
 

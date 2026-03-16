@@ -160,7 +160,7 @@ pub struct BackendOutput {
     pub success: bool,
     /// The agent's response text (extracted from backend-specific format).
     pub result_text: String,
-    /// Parsed intent from the agent's response (e.g., "review-request", "status-update").
+    /// Parsed intent from the agent's response (e.g., "review-request", "response").
     /// `None` if no intent could be parsed.
     pub parsed_intent: Option<String>,
     /// Backend-specific session ID for resume (Claude session_id, Codex thread_id,

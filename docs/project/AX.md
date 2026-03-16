@@ -48,7 +48,7 @@ This makes the system self-correcting. The agent doesn't need to know the protoc
 On timeout or failure, include what DID happen — not just what didn't.
 
 **Bad:** `{"found": false, "timeout_secs": 120}`
-**Good:** `{"found": false, "timeout_secs": 120, "unmatched_messages": [{"intent": "status-update", "from": "focused"}], "hint": "Agent responded with 'status-update' instead of 'review-request'."}`
+**Good:** `{"found": false, "timeout_secs": 120, "unmatched_messages": [{"intent": "response", "from": "focused"}], "hint": "Agent responded with 'response' instead of 'review-request'."}`
 
 The operator can immediately see the problem and recover, instead of manually investigating the thread.
 

@@ -66,7 +66,7 @@ enum Commands {
         /// Thread ID to wait on
         #[arg(long)]
         thread_id: String,
-        /// Wait for a specific intent (e.g. "status-update", "completion")
+        /// Wait for a specific intent (e.g. "response", "review-request")
         #[arg(long)]
         intent: Option<String>,
         /// Message cursor — only consider messages newer than this (db:<id> or numeric)

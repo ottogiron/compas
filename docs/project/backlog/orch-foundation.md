@@ -55,7 +55,7 @@ Created: 2026-03-14
     - Gemini: JSON output — map to envelope
   - Unified `BackendOutput` struct in Rust (replaces ad-hoc parsing per backend)
   - Intent parsing moves from executor to a single `parse_intent()` function on the unified output
-  - Graceful fallback: if a backend returns non-conforming output, wrap it as `{"intent": "status-update", "result": "<raw text>", "error": null}`
+  - Graceful fallback: if a backend returns non-conforming output, wrap it as `{"intent": "response", "result": "<raw text>", "error": null}`
 - Out of scope:
   - Changing what backends actually output (we wrap, not enforce)
   - Backend-specific error code classification (separate ticket: retry with error classification)
@@ -65,7 +65,7 @@ Created: 2026-03-14
   - All 4 backends produce a unified `BackendOutput` struct after trigger
   - Intent is parsed from the unified output, not per-backend text extraction
   - Existing intent parsing behavior is preserved (no regression)
-  - Non-conforming output gracefully falls back to raw text with `status-update` intent
+  - Non-conforming output gracefully falls back to raw text with `response` intent
   - All existing tests pass with the unified output format
   - New unit tests for each backend's output mapping
 - Verification:
