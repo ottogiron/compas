@@ -10,7 +10,7 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — po
 - At least one backend CLI installed and authenticated:
 
 | Backend | Install | Authenticate |
-|---------|---------|-------------|
+| --- | --- | --- |
 | Claude Code | `npm install -g @anthropic-ai/claude-code` | `claude login` |
 | Codex | `npm install -g @openai/codex` | `codex login` |
 | Gemini CLI | `npm install -g @google/gemini-cli` | `gemini auth` |
@@ -66,6 +66,7 @@ Supported backends: `claude`, `codex`, `gemini`, `opencode`.
 Add the MCP server to your preferred tool. If you used `cargo install`, you can use `aster_orch` directly. For source builds, use the full path to `target/release/aster_orch`.
 
 **Claude Code:**
+
 ```bash
 # --config is optional if using the default location (~/.aster-orch/config.yaml)
 claude mcp add --scope user --transport stdio aster-orch -- \
@@ -73,6 +74,7 @@ claude mcp add --scope user --transport stdio aster-orch -- \
 ```
 
 **Codex:**
+
 ```bash
 # --config is optional if using the default location (~/.aster-orch/config.yaml)
 codex mcp add aster-orch -- \
@@ -80,6 +82,7 @@ codex mcp add aster-orch -- \
 ```
 
 **OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
+
 ```json
 {
   "mcp": {
@@ -90,9 +93,11 @@ codex mcp add aster-orch -- \
   }
 }
 ```
+
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 **Gemini CLI** — add to `.gemini/settings.json`:
+
 ```json
 {
   "mcpServers": {
@@ -103,6 +108,7 @@ codex mcp add aster-orch -- \
   }
 }
 ```
+
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 ### 3. Start the worker
@@ -134,7 +140,6 @@ Your CLI uses `orch_dispatch` behind the scenes. You can let it infer the dispat
 The agent works in your repo while the dashboard shows progress in real time. When the agent finishes, it sends a review request. Review the work in the dashboard log viewer (`Enter` on the execution) or ask your CLI:
 
 > "Check the status of my dispatch to dev"
-
 > "Show me the transcript for that thread"
 
 Once you're satisfied with the result:
@@ -173,7 +178,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 - **Settings** — current configuration
 
 | Key | Action |
-|-----|--------|
+| --- | --- |
 | `Tab` / `1-4` | Switch tabs |
 | `↑/↓` or `j/k` | Navigate |
 | `Enter` | Open log viewer / drill into batch |
@@ -185,7 +190,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 **Log viewer** (`Enter` on an execution):
 
 | Key | Action |
-|-----|--------|
+| --- | --- |
 | `Tab` | Switch Input/Output sections |
 | `←/→` | Collapse/expand section |
 | `f` | Toggle follow mode |
@@ -199,7 +204,7 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 ### Core
 
 | Tool | What it does |
-|------|-------------|
+| --- | --- |
 | `orch_dispatch` | Send a task to an agent (creates a thread, queues execution) |
 | `orch_close` | Close a thread as `completed` or `failed` |
 | `orch_abandon` | Cancel a thread and its active executions |
@@ -208,7 +213,7 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 ### Monitor
 
 | Tool | What it does |
-|------|-------------|
+| --- | --- |
 | `orch_status` | Thread and execution status (filter by agent or thread) |
 | `orch_poll` | Quick non-blocking check for new messages |
 | `orch_transcript` | Full conversation history for a thread |
@@ -222,7 +227,7 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300
 ### System
 
 | Tool | What it does |
-|------|-------------|
+| --- | --- |
 | `orch_health` | Worker heartbeat + backend health pings |
 | `orch_list_agents` | List configured agents with backend/model info |
 | `orch_session_info` | Current MCP session metadata |
@@ -347,9 +352,7 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 **Agent not responding?** Ask your CLI:
 
 > "Run orch_health to check the worker"
-
 > "Diagnose that thread"
-
 > "Show me recent tasks and their status"
 
 **Stale state / corrupted DB:**
@@ -361,6 +364,7 @@ aster_orch dashboard --with-worker
 ```
 
 **Worker not picking up work:**
+
 - Ask *"Run orch_health"* — is there a recent heartbeat?
 - Ask *"Check orch_metrics"* — is `queue_depth > 0`?
 - Verify the agent's backend CLI is installed and authenticated (see Prerequisites)

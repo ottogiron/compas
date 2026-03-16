@@ -108,7 +108,7 @@ If you change a layer, update/review the paired artifacts in the same commit set
 
 | MCP Server | Points to | State dir | Use for |
 |---|---|---|---|
-| `aster-orch` | `aster_orch` (installed via `cargo install`, on PATH) | `~/.aster/orch/` | Dispatching agents, daily orchestration |
+| `aster-orch` | `aster_orch` (installed via `cargo install`, on PATH) | `~/.aster-orch/state/` | Dispatching agents, daily orchestration |
 | `aster-orch-dev` | `cargo run` (repo-level config, latest build) | `.aster-orch/state/` | Testing MCP changes during development |
 
 `aster-orch` is configured globally (user scope) in Claude Code, Codex, and OpenCode.

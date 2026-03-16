@@ -20,7 +20,7 @@ Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/de
 
 - Active ticket or batch context from `/dev-workflow`
 - Target worker alias (routing: `orch-dev` for aster-orch development work)
-- Reviewer alias: `chill` (configured in the production orch config). Verify with `orch_list_agents()`.
+- Reviewer alias: `orch-reviewer` (configured in the production orch config). Verify with `orch_list_agents()`.
 - Task description with acceptance criteria
 
 ---
@@ -123,11 +123,11 @@ The operator does NOT review code. A reviewer agent does.
 For non-trivial work:
 
 ```
-orch_health(alias="chill")
+orch_health(alias="orch-reviewer")
 
 orch_dispatch(
   from="operator",
-  to="chill",
+  to="orch-reviewer",
   intent="dispatch",
   body="Review the following changes. Report findings ordered by severity (blocking, major, minor, nit) with file:line references.\n\n## Scope\n<git diff --stat summary + key file diffs>\n\n## Context\n<ticket ID, batch, what the worker was asked to do>\n\n## Focus\nCorrectness, test coverage, doc alignment, scope creep, no unrelated changes.\n\nIf no issues, state residual risks and verification gaps.",
   batch="<ticket-or-batch-id>"
@@ -194,7 +194,7 @@ Based on reviewer response:
   ```
   orch_dispatch(
     from="operator",
-    to="chill",
+    to="orch-reviewer",
     thread_id="<reviewer-thread-id>",
     intent="dispatch",
     body="Clarify finding #N: <question>"
@@ -228,11 +228,11 @@ git diff
 ```
 
 ```
-orch_health(alias="chill")
+orch_health(alias="orch-reviewer")
 
 orch_dispatch(
   from="operator",
-  to="chill",
+  to="orch-reviewer",
   intent="dispatch",
   body="Review my changes before commit. Report findings ordered by severity with file:line references.\n\n## Scope\n<git diff --stat + key diffs>\n\n## Context\n<what was changed and why>\n\n## Focus\nCorrectness, test coverage, no regressions.",
   batch="<ticket-or-batch-id>"
@@ -283,5 +283,5 @@ Completion Status: completed / rejected / abandoned
 - **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.
-- **Reviewer unresponsive:** Check `orch_health(alias="chill")`. If unhealthy, operator may do a manual code review as fallback (read the full diff) and document that reviewer was bypassed.
+- **Reviewer unresponsive:** Check `orch_health(alias="orch-reviewer")`. If unhealthy, operator may do a manual code review as fallback (read the full diff) and document that reviewer was bypassed.
 - **Debugging slow executions:** Use `orch_execution_events(execution_id=...)` to see what tool calls the agent has made so far.

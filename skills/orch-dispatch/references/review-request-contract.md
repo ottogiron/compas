@@ -5,7 +5,7 @@ Every `review-request` from a worker agent must include these fields.
 ## Required Fields
 
 | Field | Description | Example |
-|---|---|---|
+| --- | --- | --- |
 | **TL;DR** | One-line summary of what was done | "Added event broadcast channel with tokio::broadcast" |
 | **Files Changed** | List of file paths modified | `src/events.rs`, `src/worker/loop_runner.rs`, `tests/integration_tests.rs` |
 | **Verification** | Command run + pass/fail result | `make verify` — all tests pass |
@@ -14,7 +14,7 @@ Every `review-request` from a worker agent must include these fields.
 ## Additional Fields (Multi-Ticket/Batch Work)
 
 | Field | Description |
-|---|---|
+| --- | --- |
 | **Ticket/Batch ID** | Reference to active ticket or batch |
 | **Design Intent** | Why this approach was chosen |
 | **Known Risks/Gaps** | Anything deferred or uncertain |
