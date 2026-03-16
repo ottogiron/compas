@@ -50,10 +50,12 @@ impl CodexBackend {
             args.push(model.clone());
         }
 
-        // Working directory
-        if let Some(dir) = workdir {
-            args.push("-C".to_string());
-            args.push(dir.to_string_lossy().to_string());
+        // Working directory — `-C` is only valid for new sessions, not `exec resume`.
+        if resume_session_id.is_none() {
+            if let Some(dir) = workdir {
+                args.push("-C".to_string());
+                args.push(dir.to_string_lossy().to_string());
+            }
         }
 
         // Full auto mode.
@@ -457,6 +459,24 @@ mod tests {
         assert_eq!(args[0], "exec");
         assert_eq!(args[1], "resume");
         assert_eq!(args[2], "thread-abc-123");
+    }
+
+    /// `-C` (workdir) is only valid for new sessions; `codex exec resume` rejects it.
+    #[test]
+    fn test_build_args_resume_excludes_workdir_flag() {
+        let agent = test_agent();
+        let workdir = PathBuf::from("/home/user/project");
+        let args =
+            CodexBackend::build_args(&agent, "continue", Some("thread-abc-123"), Some(&workdir));
+
+        assert_eq!(args[0], "exec");
+        assert_eq!(args[1], "resume");
+        assert_eq!(args[2], "thread-abc-123");
+        assert!(
+            !args.contains(&"-C".to_string()),
+            "-C should be absent on resume; got: {:?}",
+            args
+        );
     }
 
     #[test]

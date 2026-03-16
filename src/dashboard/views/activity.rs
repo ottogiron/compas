@@ -247,6 +247,12 @@ pub fn ops_selectable_targets(
                 .map(OpsSelectable::Thread),
         );
     }
+    out.extend(
+        capped_recently_completed(&classified.recently_completed)
+            .iter()
+            .copied()
+            .map(OpsSelectable::Thread),
+    );
     if drill_batch.is_none() {
         out.extend(
             capped_batches(&classified.batches)
@@ -254,12 +260,6 @@ pub fn ops_selectable_targets(
                 .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
         );
     }
-    out.extend(
-        capped_recently_completed(&classified.recently_completed)
-            .iter()
-            .copied()
-            .map(OpsSelectable::Thread),
-    );
 
     out
 }
@@ -562,6 +562,31 @@ fn render_ops_list(
         }
     }
 
+    items.push(ListItem::new(Line::from(Span::raw(""))));
+    push_section_header(
+        &mut items,
+        "Recently Completed",
+        recent_indices.len(),
+        theme::SUCCESS_DIM,
+    );
+    if recent_indices.is_empty() {
+        items.push(empty_line("  none"));
+    } else {
+        for src_idx in recent_indices {
+            let Some(row) = data.rows.get(*src_idx) else {
+                continue;
+            };
+            let is_selected = selectable_slot == selected_slot;
+            sel_to_row.push(items.len());
+            let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
+            if is_selected {
+                lines.push(make_thread_detail_line(row));
+            }
+            items.push(ListItem::new(lines));
+            selectable_slot += 1;
+        }
+    }
+
     if app.drill_batch.is_none() {
         items.push(ListItem::new(Line::from(Span::raw(""))));
         push_section_header(
@@ -590,31 +615,6 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
-        }
-    }
-
-    items.push(ListItem::new(Line::from(Span::raw(""))));
-    push_section_header(
-        &mut items,
-        "Recently Completed",
-        recent_indices.len(),
-        theme::SUCCESS_DIM,
-    );
-    if recent_indices.is_empty() {
-        items.push(empty_line("  none"));
-    } else {
-        for src_idx in recent_indices {
-            let Some(row) = data.rows.get(*src_idx) else {
-                continue;
-            };
-            let is_selected = selectable_slot == selected_slot;
-            sel_to_row.push(items.len());
-            let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
-            if is_selected {
-                lines.push(make_thread_detail_line(row));
-            }
-            items.push(ListItem::new(lines));
-            selectable_slot += 1;
         }
     }
 
