@@ -774,11 +774,17 @@ fn make_batch_line(
     } else {
         (batch.completed * bar_len / batch.total).min(bar_len)
     };
-    let bar = format!(
-        "{}{}",
-        theme::BATCH_PROGRESS_FILLED.repeat(fill),
-        theme::BATCH_PROGRESS_EMPTY.repeat(bar_len - fill)
-    );
+    let bar_filled = theme::BATCH_PROGRESS_FILLED.repeat(fill);
+    let bar_empty = theme::BATCH_PROGRESS_EMPTY.repeat(bar_len - fill);
+
+    // State-aware bar color: green when complete, red when failures, amber in-progress.
+    let bar_color = if batch.completed == batch.total && batch.total > 0 {
+        theme::SUCCESS
+    } else if batch.failed > 0 {
+        theme::FAILURE
+    } else {
+        theme::ACCENT
+    };
     let age = batch
         .oldest_active_updated_at
         .map(|ts| format_duration_secs((now_unix - ts).max(0)))
@@ -823,8 +829,15 @@ fn make_batch_line(
                 .add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<w$}", bar, w = bar_width),
-            Style::new().fg(theme::ACCENT).bg(bg).add_modifier(base_mod),
+            bar_filled,
+            Style::new().fg(bar_color).bg(bg).add_modifier(base_mod),
+        ),
+        Span::styled(
+            format!("{:<w$}", bar_empty, w = bar_width - fill),
+            Style::new()
+                .fg(theme::TEXT_DIM)
+                .bg(bg)
+                .add_modifier(base_mod),
         ),
     ];
 

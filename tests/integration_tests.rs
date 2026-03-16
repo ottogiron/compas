@@ -3710,8 +3710,25 @@ mod await_chain_wait_tests {
             .await
             .unwrap();
 
-        // Insert a queued execution (simulating a handoff-triggered execution in progress)
-        let exec_id = store.insert_execution("t-chain", "reviewer").await.unwrap();
+        // Insert handoff message (simulates auto-handoff from implementer to reviewer)
+        let handoff_msg_id = store
+            .insert_message(
+                "t-chain",
+                "implementer",
+                "reviewer",
+                "handoff",
+                "handoff context",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Insert a queued execution linked to the handoff message
+        let exec_id = store
+            .insert_execution_with_dispatch("t-chain", "reviewer", Some(handoff_msg_id), None)
+            .await
+            .unwrap()
+            .expect("execution should be created");
 
         // Background task: complete the execution and insert reviewer's response
         let store2 = store.clone();

@@ -73,17 +73,11 @@ pub const WARNING: Color = Color::Rgb(200, 170, 50);
 
 // ── Progress bar characters ──────────────────────────────────────────────────
 
-/// Filled segment for progress bars.
-pub const PROGRESS_FILLED: &str = "━";
+/// Filled segment for batch progress bars (thin line).
+pub const BATCH_PROGRESS_FILLED: &str = "━";
 
-/// Unfilled segment for progress bars.
-pub const PROGRESS_EMPTY: &str = "╌";
-
-/// Filled block for batch progress.
-pub const BATCH_PROGRESS_FILLED: &str = "█";
-
-/// Unfilled block for batch progress.
-pub const BATCH_PROGRESS_EMPTY: &str = "░";
+/// Unfilled segment for batch progress bars (thin dashed line).
+pub const BATCH_PROGRESS_EMPTY: &str = "╌";
 
 // ── Status markers ───────────────────────────────────────────────────────────
 
