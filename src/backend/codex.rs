@@ -123,8 +123,26 @@ impl CodexBackend {
         // not need filesystem/network bypass, so no conflict can arise here.
         args.push("--full-auto".to_string());
         args.push("--json".to_string());
+        // Forward `--skip-git-repo-check` when the agent has it in `backend_args`.
+        // Without this, the ping fails with exit code 1 when `target_repo_root` is
+        // not a git repository, causing all such agents to appear unhealthy.
+        let has_skip_git = agent
+            .backend_args
+            .as_ref()
+            .map(|a| a.iter().any(|s| s == "--skip-git-repo-check"))
+            .unwrap_or(false);
+        if has_skip_git {
+            args.push("--skip-git-repo-check".to_string());
+        }
         args.push("Reply with: ok".to_string());
         args
+    }
+
+    fn effective_workdir<'a>(&'a self, agent: &'a Agent) -> Option<&'a std::path::Path> {
+        agent
+            .execution_workdir
+            .as_deref()
+            .or(self.workdir.as_deref())
     }
 }
 
@@ -162,7 +180,7 @@ impl Backend for CodexBackend {
 
         // Resume the prior Codex session when the DB provided a thread_id from
         // a previous completed execution for this thread+agent.
-        let effective_workdir = agent.execution_workdir.clone().or(self.workdir.clone());
+        let effective_workdir = self.effective_workdir(agent).map(|p| p.to_path_buf());
         let args = Self::build_args(
             agent,
             instruction,
@@ -231,7 +249,7 @@ impl Backend for CodexBackend {
             "codex",
             &arg_refs,
             agent.env.as_ref(),
-            self.workdir.as_deref(),
+            self.effective_workdir(agent),
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
@@ -446,6 +464,57 @@ mod tests {
         let args = CodexBackend::build_ping_args(&agent);
         assert!(args.contains(&"-m".to_string()));
         assert!(args.contains(&"gpt-5.3-codex".to_string()));
+    }
+
+    #[test]
+    fn test_effective_workdir_prefers_execution_workdir() {
+        let mut agent = test_agent();
+        agent.execution_workdir = Some(PathBuf::from("/tmp/agent-workdir"));
+        let backend = CodexBackend::new(Some(PathBuf::from("/tmp/backend-workdir")));
+
+        assert_eq!(
+            backend.effective_workdir(&agent),
+            Some(std::path::Path::new("/tmp/agent-workdir"))
+        );
+    }
+
+    #[test]
+    fn test_effective_workdir_falls_back_to_backend_workdir() {
+        let agent = test_agent();
+        let backend = CodexBackend::new(Some(PathBuf::from("/tmp/backend-workdir")));
+
+        assert_eq!(
+            backend.effective_workdir(&agent),
+            Some(std::path::Path::new("/tmp/backend-workdir"))
+        );
+    }
+
+    /// `--skip-git-repo-check` must be forwarded to the ping command when the
+    /// agent declares it in `backend_args`, so that health checks succeed in
+    /// repos where the working directory is not a git repository.
+    #[test]
+    fn test_build_ping_args_includes_skip_git_repo_check() {
+        let mut agent = test_agent();
+        agent.backend_args = Some(vec!["--skip-git-repo-check".into()]);
+        let args = CodexBackend::build_ping_args(&agent);
+        assert!(
+            args.contains(&"--skip-git-repo-check".to_string()),
+            "--skip-git-repo-check should be forwarded to ping args; got: {:?}",
+            args
+        );
+    }
+
+    /// When `--skip-git-repo-check` is absent from `backend_args`, it must not
+    /// appear in the ping args (no accidental injection).
+    #[test]
+    fn test_build_ping_args_excludes_skip_git_repo_check_when_absent() {
+        let agent = test_agent(); // backend_args: None
+        let args = CodexBackend::build_ping_args(&agent);
+        assert!(
+            !args.contains(&"--skip-git-repo-check".to_string()),
+            "--skip-git-repo-check should be absent when not in backend_args; got: {:?}",
+            args
+        );
     }
 
     #[tokio::test]

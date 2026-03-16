@@ -76,7 +76,7 @@ impl OrchestratorMcpServer {
                 backend_args: agent_cfg.backend_args.clone(),
                 env: agent_cfg.env.clone(),
                 log_path: None,
-                execution_workdir: None,
+                execution_workdir: agent_cfg.workdir.clone(),
             };
 
             let ping = match self.backend_registry.get(agent_cfg) {
