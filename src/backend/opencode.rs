@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::process::{
     extract_output_text, kill_process, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{classify_error, parse_intent_from_text, Backend, BackendOutput, PingResult};
+use super::{classify_error, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -226,7 +226,7 @@ impl Backend for OpenCodeBackend {
                 // We do NOT clean up dispatch sessions — they need to persist
                 // for resumption. Only ping sessions (below) are cleaned up.
                 let session_id = Self::extract_session_id_from_output(&out.stdout);
-                let parsed_intent = parse_intent_from_text(&result_text);
+                let parsed_intent = None;
                 let success = out.status.success();
 
                 let error_category = if !success {

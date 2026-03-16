@@ -5,7 +5,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use super::process::{kill_process, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker};
-use super::{classify_error, parse_intent_from_text, Backend, BackendOutput, PingResult};
+use super::{classify_error, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -217,7 +217,7 @@ impl Backend for ClaudeCodeBackend {
                 // Claude Code can exit non-zero while still producing valid output.
                 let success = out.status.success() || found_result;
 
-                let parsed_intent = parse_intent_from_text(&result_text);
+                let parsed_intent = None;
 
                 let error_category = if !success {
                     Some(classify_error(false, found_result, &result_text))

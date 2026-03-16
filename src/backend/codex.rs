@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::process::{
     extract_output_text, kill_process, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{classify_error, parse_intent_from_text, Backend, BackendOutput, PingResult};
+use super::{classify_error, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -221,7 +221,7 @@ impl Backend for CodexBackend {
                 // dispatch for this thread+agent can resume via
                 // `codex exec resume <thread_id>`.
                 let session_id = Self::extract_thread_id_from_output(&out.stdout);
-                let parsed_intent = parse_intent_from_text(&result_text);
+                let parsed_intent = None;
                 let success = out.status.success();
 
                 let error_category = if !success {
