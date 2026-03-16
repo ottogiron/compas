@@ -59,7 +59,7 @@ fn resolve_path(base_dir: &Path, path: &Path) -> PathBuf {
     }
 }
 
-fn expand_tilde(path: &Path) -> PathBuf {
+pub fn expand_tilde(path: &Path) -> PathBuf {
     let Some(raw) = path.to_str() else {
         return path.to_path_buf();
     };

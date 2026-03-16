@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_CONFIG_PATH: &str = ".aster-orch/config.yaml";
+const DEFAULT_CONFIG_PATH: &str = "~/.aster-orch/config.yaml";
 
 #[derive(Parser)]
 #[command(name = "aster-orch", version, about = "Agent orchestrator")]
@@ -33,19 +33,19 @@ struct Cli {
 enum Commands {
     /// Run the trigger worker only
     Worker {
-        /// Path to config YAML
+        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Run the MCP server only (stdio transport)
     McpServer {
-        /// Path to config YAML
+        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Launch the TUI dashboard (reads SQLite directly, no MCP required)
     Dashboard {
-        /// Path to config YAML
+        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
         /// How often (in seconds) to re-query SQLite for fresh metrics
@@ -60,7 +60,7 @@ enum Commands {
     /// Exits 0 when a matching message is found, 1 on timeout, 2 on error.
     /// Output is key=value lines on stdout for easy bash parsing.
     Wait {
-        /// Path to config YAML
+        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
         /// Thread ID to wait on
@@ -133,7 +133,8 @@ async fn main() -> ExitCode {
 }
 
 fn effective_config_path(config: Option<PathBuf>) -> PathBuf {
-    config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH))
+    let raw = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
+    aster_orch::config::expand_tilde(&raw)
 }
 
 fn init_tracing() {
@@ -884,17 +885,27 @@ mod tests {
 
     #[test]
     fn test_effective_config_path_defaults_to_standard_location() {
-        assert_eq!(
-            effective_config_path(None),
-            PathBuf::from(".aster-orch/config.yaml")
-        );
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let expected = PathBuf::from(format!("{}/.aster-orch/config.yaml", home));
+        assert_eq!(effective_config_path(None), expected);
     }
 
     #[test]
     fn test_effective_config_path_honors_override() {
+        // A plain relative path with no tilde passes through unchanged.
         assert_eq!(
             effective_config_path(Some(PathBuf::from("custom.yaml"))),
             PathBuf::from("custom.yaml")
+        );
+    }
+
+    #[test]
+    fn test_effective_config_path_expands_tilde_in_override() {
+        let home = std::env::var("HOME").expect("HOME must be set");
+        let expected = PathBuf::from(format!("{}/.aster-orch/config.yaml", home));
+        assert_eq!(
+            effective_config_path(Some(PathBuf::from("~/.aster-orch/config.yaml"))),
+            expected
         );
     }
 
