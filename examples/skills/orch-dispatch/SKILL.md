@@ -52,7 +52,7 @@ Check `orch_tasks` for `attempt_number` to see if an execution was a retry.
 
 ### Step 1 — Health check
 
-```
+```text
 orch_health(alias="<worker>")
 ```
 
@@ -60,7 +60,7 @@ Verify the worker is available and the backend is responsive.
 
 ### Step 2 — Dispatch to worker
 
-```
+```text
 orch_dispatch(
   from="operator",
   to="<worker>",
@@ -88,6 +88,7 @@ aster_orch wait \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
+
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach.
@@ -127,7 +128,7 @@ The operator does NOT review code. A reviewer agent does.
 
 For non-trivial work:
 
-```
+```text
 orch_health(alias="<reviewer>")
 
 orch_dispatch(
@@ -161,6 +162,7 @@ aster_orch wait \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
+
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 > **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
@@ -171,7 +173,7 @@ Based on reviewer response:
 
 - **No blocking findings → close both threads:**
 
-  ```
+  ```text
   orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Review passed")
   orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review")
   ```
@@ -180,7 +182,7 @@ Based on reviewer response:
 
 - **Blocking findings → request changes from worker:**
 
-  ```
+  ```text
   orch_dispatch(
     from="operator",
     to="<worker>",
@@ -192,7 +194,7 @@ Based on reviewer response:
 
   Close the reviewer thread:
 
-  ```
+  ```text
   orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Changes requested from worker based on findings")
   ```
 
@@ -208,7 +210,7 @@ Based on reviewer response:
 
 - **Unclear findings → ask reviewer for clarification:**
 
-  ```
+  ```text
   orch_dispatch(
     from="operator",
     to="<reviewer>",
@@ -245,7 +247,7 @@ git diff --stat
 git diff
 ```
 
-```
+```text
 orch_health(alias="<reviewer>")
 
 orch_dispatch(
@@ -295,7 +297,7 @@ When skipping, state the reason out loud so the decision is auditable:
 
 ## Output Format
 
-```
+```text
 Thread ID: <worker-thread-id>
 Worker: <alias>
 Review Thread: <reviewer-thread-id> (or "skipped — <reason>")

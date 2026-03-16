@@ -123,6 +123,7 @@ aster_orch dashboard --with-worker
 aster_orch worker &
 aster_orch dashboard
 ```
+
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
 The worker continues running after the dashboard exits. Without a running worker, dispatched tasks will queue but not execute.
