@@ -171,13 +171,31 @@ The default config location for the production `aster_orch` binary is now `~/.as
 
 Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., implement → review → fix → re-review). Auto-handoff chains let agents route their output to the next agent automatically based on reply intent.
 
-**Decision:** Added a `handoff` config section to agent definitions with intent-based routing fields (`on_response`, `on_review_request`, `on_changes_requested`, `on_escalation`) and a `max_chain_depth` safety limit (default: 3).
+**Decision:** Added a `handoff` config section to agent definitions with `on_response` routing and a `max_chain_depth` safety limit (default: 3).
+
+**Amendment (2026-03):** Simplified from 5 routing fields (`on_response`, `on_review_request`, `on_changes_requested`, `on_escalation`) to 2 fields (`on_response`, `max_chain_depth`) as part of intent simplification (see ADR-015). `HandoffTarget` enum removed — `on_response` is now a plain `String` (agent alias or `"operator"`).
 
 **Key choices:**
 
 - **Config declares routes, not agents** — the `handoff` section is config on the producing agent, not a property of the consuming agent. This keeps agent definitions self-contained and makes chains visible from the config.
-- **Untagged enum for `HandoffTarget`** — `HandoffTarget` is `#[serde(untagged)]` with `Simple(String)` and `Gated { target, gate, gate_timeout_secs }` variants. Simple targets work today; gated targets parse without error but are rejected at validation, providing forward-compatibility for Phase 2 gated handoffs.
 - **Atomic depth check + insert transaction** — `insert_handoff_if_under_depth()` counts existing `handoff`-intent messages and inserts the new one in a single SQL transaction. This prevents TOCTOU races where concurrent executions on the same thread could both pass the depth check before either inserts.
 - **Chain depth via message count** — depth is the count of `handoff`-intent messages on the thread, not a counter on the execution. This is durable (survives crashes) and visible in the transcript.
 - **Forced operator escalation at limit** — when `max_chain_depth` is reached, a review-request message is inserted for the operator instead of the handoff. The chain stops cleanly and the operator can decide next steps.
-- **"operator" as target alias** — setting a route to `"operator"` explicitly stops the chain for that intent. Omitting the route has the same effect.
+- **"operator" as target alias** — setting `on_response` to `"operator"` explicitly stops the chain. Omitting `on_response` has the same effect.
+
+## ADR-015: Intent simplification — agents don't manage intents
+
+**Date:** 2026-03
+**Status:** Active
+
+Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from agent output) was unreliable and created cognitive overhead. Agents had to follow a REPLY PROTOCOL, and `parse_intent_from_text()` attempted to extract structured intents from free-form text — a fragile heuristic.
+
+**Decision:** Removed `parse_intent_from_text()`. All successful agent replies automatically get `response` intent. Routing is exclusively via the `on_response` handoff config field. `HandoffConfig` simplified from 5 fields to 2 (`on_response` + `max_chain_depth`). `changes-requested` added to the default `trigger_intents` list so operator change-request dispatches trigger execution without extra config.
+
+**What was removed:**
+- `parse_intent_from_text()` function and all its tests
+- `HandoffTarget` enum — `on_response` is now a plain `String`
+- `on_review_request`, `on_changes_requested`, `on_escalation` handoff fields
+- Agent REPLY PROTOCOL requirement — agents reply naturally
+
+**Rationale:** Agents are pure workers. Intent management and routing are config/operator concerns, not agent concerns. This eliminates a class of bugs where agents produced malformed intent JSON, and simplifies agent prompts by removing protocol overhead.

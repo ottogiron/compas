@@ -26,7 +26,3 @@ agents:
     prompt: >
       You are a development agent for aster-orch.
       Follow AGENTS.md. Run make verify before submitting.
-
-      REPLY PROTOCOL: When your task is complete, end your response with
-      a JSON line on its own line:
-      {"intent":"review-request","to":"operator"}

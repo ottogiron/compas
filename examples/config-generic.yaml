@@ -34,20 +34,15 @@ agents:
     # max_retries: 0                  # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
     # handoff:                          # Auto-handoff chain routing
-    #   on_response: other-agent        # Route on response intent (agent alias or "operator")
-    #   on_review_request: reviewer     # Route on review-request intent
-    #   on_changes_requested: dev       # Route on changes-requested intent
-    #   on_escalation: operator         # Route on escalation intent
+    #   on_response: other-agent        # Route agent replies to another agent (alias or "operator")
     #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
     prompt: >
       You implement changes in this repository and report verification results.
-      End with a JSON line: {"intent":"response","to":"operator"}.
   - alias: analyst
     backend: codex
     model: gpt-5.3-codex
     prompt: >
       You investigate issues and return status updates with clear next steps.
-      End with a JSON line: {"intent":"response","to":"operator"}.
 
   # Example: agent working in a different repository
   # - alias: infra-dev

@@ -79,10 +79,10 @@ When `orch_dispatch` is called:
    - Worker picks it up on next poll cycle via `claim_next_execution()`
    - Worker resolves agent config → backend → starts session
    - Backend CLI process spawned inside `tokio::task::spawn_blocking`
-   - Output parsed for structured intent (JSON auto-reply)
+   - All agent replies get `response` intent (agents reply naturally, no intent parsing)
    - Execution status updated (completed/failed/timed_out)
    - Reply message inserted into `messages` table
-   - If agent has `handoff` config matching the reply intent, a new `handoff` message is auto-inserted targeting the next agent, triggering a new execution on the next poll cycle. Chain depth is tracked by counting `handoff` messages on the thread; when `max_chain_depth` is reached, a review-request to the operator is inserted instead.
+   - If agent has `on_response` handoff config, a new `handoff` message is auto-inserted targeting the next agent, triggering a new execution on the next poll cycle. Chain depth is tracked by counting `handoff` messages on the thread; when `max_chain_depth` is reached, a review-request to the operator is inserted instead.
 
 ## Worker Lifecycle
 
@@ -123,7 +123,7 @@ queued → picked_up → executing → completed
 - **Five tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker), `worker_heartbeats` (liveness), `execution_events` (telemetry).
 - **Retry via store re-enqueue** — failed executions with transient errors are retried by inserting a new queued execution with a `retry_after` timestamp. The poll loop claims retries only when the backoff expires. No synchronous sleep.
 - **Execution telemetry via line-level channel** — backend stdout lines flow through a `sync_channel(128)` from the reader thread to a tokio consumer that parses JSONL and batch-inserts events.
-- **Auto-handoff chains** — config-driven agent-to-agent routing based on reply intent. Chain depth is tracked by counting `handoff`-intent messages on the thread. Depth check and handoff insert run in a single SQL transaction to prevent TOCTOU races. Forced operator escalation at `max_chain_depth` (default: 3).
+- **Auto-handoff chains** — config-driven agent-to-agent routing via `on_response`. All agent replies get `response` intent automatically (no agent-side intent parsing). Chain depth is tracked by counting `handoff`-intent messages on the thread. Depth check and handoff insert run in a single SQL transaction to prevent TOCTOU races. Forced operator escalation at `max_chain_depth` (default: 3).
 
 ## Module Structure
 
