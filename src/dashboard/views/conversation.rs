@@ -176,15 +176,14 @@ fn format_timestamp(ts_secs: i64) -> String {
     }
 }
 
-/// Color for intent badge label.
-fn intent_color(intent: &str) -> Color {
-    match intent {
-        "dispatch" => Color::Cyan,
-        "response" => Color::Green,
-        "review-request" => Color::Yellow,
-        "changes-requested" => Color::Red,
-        "error" => Color::Red,
-        _ => Color::DarkGray,
+/// Color for message badge — based on source (operator/agent/system), not intent.
+fn message_color(from: &str, intent: &str) -> Color {
+    if from == "operator" {
+        Color::Cyan
+    } else if intent == "handoff" {
+        Color::DarkGray
+    } else {
+        Color::Green
     }
 }
 
@@ -360,7 +359,7 @@ fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
     } else {
         Color::Green
     };
-    let badge_color = intent_color(&msg.intent);
+    let badge_color = message_color(&msg.from_alias, &msg.intent);
 
     // Header line: "from → to  [intent]  timestamp"
     lines.push(Line::from(vec![
@@ -739,34 +738,28 @@ mod tests {
     }
 
     #[test]
-    fn test_intent_color_dispatch() {
-        assert_eq!(intent_color("dispatch"), Color::Cyan);
+    fn test_message_color_operator_dispatch() {
+        assert_eq!(message_color("operator", "dispatch"), Color::Cyan);
     }
 
     #[test]
-    fn test_intent_color_review_request() {
-        assert_eq!(intent_color("review-request"), Color::Yellow);
+    fn test_message_color_operator_changes_requested() {
+        assert_eq!(message_color("operator", "changes-requested"), Color::Cyan);
     }
 
     #[test]
-    fn test_intent_color_changes_requested() {
-        assert_eq!(intent_color("changes-requested"), Color::Red);
+    fn test_message_color_agent_response() {
+        assert_eq!(message_color("orch-dev", "response"), Color::Green);
     }
 
     #[test]
-    fn test_intent_color_error() {
-        assert_eq!(intent_color("error"), Color::Red);
+    fn test_message_color_handoff() {
+        assert_eq!(message_color("orch-dev", "handoff"), Color::DarkGray);
     }
 
     #[test]
-    fn test_intent_color_response() {
-        assert_eq!(intent_color("response"), Color::Green);
-    }
-
-    #[test]
-    fn test_intent_color_status_update_fallback() {
-        // "status-update" is a legacy intent; it falls through to DarkGray for backward compat.
-        assert_eq!(intent_color("status-update"), Color::DarkGray);
+    fn test_message_color_agent_any_intent() {
+        assert_eq!(message_color("chill", "review-request"), Color::Green);
     }
 
     #[test]
