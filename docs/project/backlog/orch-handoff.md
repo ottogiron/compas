@@ -32,7 +32,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Integration test: dispatch to agent with `handoff_prompt`, verify handoff message body
-- Status: Todo
+- Status: In Progress
 
 ## Ticket ORCH-HANDOFF-2 — Multi-Target Fan-Out
 
@@ -93,7 +93,9 @@ Created: 2026-03-16
          SELECT 1 FROM executions e WHERE e.dispatch_message_id = m.id
        ))
     AS pending_work
+
     ```
+
   - When chain hits `max_chain_depth` and forces operator review, `--await-chain` returns naturally — the `review-request` message is a non-trigger reply and no further executions are queued
   - Integration tests: await-chain waits through handoff, returns final reply; await-chain returns on depth-limit pause
 - Out of scope:
@@ -172,6 +174,8 @@ Parallelization: HANDOFF-1 and HANDOFF-3 can be dispatched in parallel (differen
 - End:
 - Duration:
 - Notes:
+
+- Start: 2026-03-16 22:41 UTC
 
 - Ticket: ORCH-HANDOFF-2
 - Owner: TBD

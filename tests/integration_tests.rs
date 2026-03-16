@@ -2983,6 +2983,7 @@ mod handoff_chain_tests {
                     retry_backoff_secs: 30,
                     handoff: Some(HandoffConfig {
                         on_response: Some("agent-b".to_string()),
+                        handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
                 },
@@ -3348,5 +3349,195 @@ agents:
         let reviewer = &config.agents[1];
         let handoff = reviewer.handoff.as_ref().unwrap();
         assert_eq!(handoff.on_response.as_deref(), Some("operator"));
+    }
+
+    #[tokio::test]
+    async fn test_handoff_custom_prompt_prepended() {
+        // Agent A has on_response: agent-b with a custom handoff_prompt.
+        // Dispatch to A → A completes → handoff body should start with custom prompt.
+        let store = test_store().await;
+        let mut config = chain_config();
+        config.agents[0].handoff.as_mut().unwrap().handoff_prompt =
+            Some("Review for correctness and test coverage.".to_string());
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "handoff-prompt-test";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature Y",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for reply + handoff events.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(message_count >= 2, "expected reply + handoff events");
+
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff_msg = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "agent-b")
+            .expect("expected handoff message to agent-b");
+
+        // Body should start with the custom prompt.
+        assert!(
+            handoff_msg
+                .body
+                .starts_with("Review for correctness and test coverage."),
+            "handoff body should start with custom prompt, got: {}",
+            &handoff_msg.body[..handoff_msg.body.len().min(200)]
+        );
+        // And still contain the auto-generated context.
+        assert!(
+            handoff_msg.body.contains("## Original dispatch"),
+            "handoff body should contain auto-generated context"
+        );
+        assert!(
+            handoff_msg.body.contains("implement feature Y"),
+            "handoff body should contain original dispatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handoff_without_custom_prompt_unchanged() {
+        // Agent A has on_response: agent-b but NO handoff_prompt.
+        // Handoff body should start directly with "## Original dispatch".
+        let store = test_store().await;
+        let config = chain_config(); // default: no handoff_prompt
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "handoff-no-prompt-test";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature Z",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(message_count >= 2, "expected reply + handoff events");
+
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff_msg = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "agent-b")
+            .expect("expected handoff message to agent-b");
+
+        // Body should start with auto-generated context (no custom prompt prefix).
+        assert!(
+            handoff_msg.body.starts_with("## Original dispatch"),
+            "handoff body without custom prompt should start with '## Original dispatch', got: {}",
+            &handoff_msg.body[..handoff_msg.body.len().min(200)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_handoff_prompt_yaml_roundtrip() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: reviewer
+      handoff_prompt: |
+        Review for correctness, test coverage, and AGENTS.md compliance.
+      max_chain_depth: 3
+  - alias: reviewer
+    backend: stub
+"#;
+        let config = aster_orch::config::load_config_from_str(yaml).unwrap();
+
+        let coder = &config.agents[0];
+        let handoff = coder.handoff.as_ref().unwrap();
+        assert_eq!(handoff.on_response.as_deref(), Some("reviewer"));
+        assert!(
+            handoff
+                .handoff_prompt
+                .as_ref()
+                .unwrap()
+                .contains("Review for correctness"),
+            "handoff_prompt should be parsed from YAML"
+        );
+        assert_eq!(handoff.max_chain_depth, Some(3));
+
+        // Agent without handoff_prompt should have None.
+        let reviewer = &config.agents[1];
+        assert!(reviewer.handoff.is_none());
     }
 }

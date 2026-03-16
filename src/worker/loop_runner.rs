@@ -880,10 +880,15 @@ async fn maybe_auto_handoff(
         Err(_) => String::new(),
     };
 
-    let handoff_body = format!(
+    let mut handoff_body = String::new();
+    if let Some(ref prompt) = handoff.handoff_prompt {
+        handoff_body.push_str(prompt);
+        handoff_body.push_str("\n\n");
+    }
+    handoff_body.push_str(&format!(
         "## Original dispatch\n{}\n\n## Reply from {}\n{}",
         dispatch_context, output.agent_alias, reply_body
-    );
+    ));
 
     // Atomic depth check + insert (ORCH-CHAIN-1 H-2 fix: prevents TOCTOU race).
     let max_depth = handoff.max_chain_depth.unwrap_or(3) as i64;

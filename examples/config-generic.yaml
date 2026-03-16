@@ -35,6 +35,8 @@ agents:
     # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
     # handoff:                          # Auto-handoff chain routing
     #   on_response: other-agent        # Route agent replies to another agent (alias or "operator")
+    #   handoff_prompt: |               # Custom prompt prepended to auto-generated handoff context
+    #     Review for correctness, test coverage, and AGENTS.md compliance.
     #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
     prompt: >
       You implement changes in this repository and report verification results.

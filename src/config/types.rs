@@ -292,6 +292,9 @@ pub struct HandoffConfig {
     /// Agent alias (or "operator") to route to when agent completes successfully.
     #[serde(default)]
     pub on_response: Option<String>,
+    /// Custom prompt prepended to the auto-generated handoff context.
+    #[serde(default)]
+    pub handoff_prompt: Option<String>,
     /// Maximum consecutive auto-handoffs before forcing operator review (default: 3).
     #[serde(default)]
     pub max_chain_depth: Option<u32>,
