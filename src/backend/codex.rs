@@ -56,8 +56,23 @@ impl CodexBackend {
             args.push(dir.to_string_lossy().to_string());
         }
 
-        // Full auto mode
-        args.push("--full-auto".to_string());
+        // Full auto mode.
+        // `--full-auto` is mutually exclusive with `--dangerously-bypass-approvals-and-sandbox`:
+        // when the bypass flag is present (agents that need unrestricted filesystem/network
+        // access, e.g. to run `./gradlew check`), skip `--full-auto` so the Codex CLI does
+        // not error out on conflicting flags.
+        let has_sandbox_bypass = agent
+            .backend_args
+            .as_ref()
+            .map(|args| {
+                args.iter()
+                    .any(|a| a == "--dangerously-bypass-approvals-and-sandbox")
+            })
+            .unwrap_or(false);
+
+        if !has_sandbox_bypass {
+            args.push("--full-auto".to_string());
+        }
 
         // JSON output
         args.push("--json".to_string());
@@ -104,6 +119,8 @@ impl CodexBackend {
             args.push("-m".to_string());
             args.push(model.clone());
         }
+        // Ping always uses `--full-auto`; it is a lightweight health-check that does
+        // not need filesystem/network bypass, so no conflict can arise here.
         args.push("--full-auto".to_string());
         args.push("--json".to_string());
         args.push("Reply with: ok".to_string());
@@ -388,6 +405,39 @@ mod tests {
         let args = CodexBackend::build_args(&agent, "task", None, None);
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
+    }
+
+    /// When `--dangerously-bypass-approvals-and-sandbox` is in `backend_args`,
+    /// `--full-auto` must NOT be emitted (the two flags are mutually exclusive in
+    /// the Codex CLI).
+    #[test]
+    fn test_build_args_with_bypass_skips_full_auto() {
+        let mut agent = test_agent();
+        agent.backend_args = Some(vec!["--dangerously-bypass-approvals-and-sandbox".into()]);
+        let args = CodexBackend::build_args(&agent, "task", None, None);
+        assert!(
+            !args.contains(&"--full-auto".to_string()),
+            "--full-auto should be absent when bypass flag is set; got: {:?}",
+            args
+        );
+        assert!(
+            args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+            "bypass flag should be present; got: {:?}",
+            args
+        );
+    }
+
+    /// Without the bypass flag, `--full-auto` must still be emitted (existing
+    /// behaviour preserved).
+    #[test]
+    fn test_build_args_without_bypass_includes_full_auto() {
+        let agent = test_agent();
+        let args = CodexBackend::build_args(&agent, "task", None, None);
+        assert!(
+            args.contains(&"--full-auto".to_string()),
+            "--full-auto should be present when bypass flag is absent; got: {:?}",
+            args
+        );
     }
 
     #[test]
