@@ -87,12 +87,13 @@ The production orch config path depends on your setup. Check the `aster-orch` MC
 aster_orch wait \
   --config <production-config-path> \
   --thread-id <thread-id> \
-  --intent review-request \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
 
-> **Why `--intent review-request`?** Implementers explicitly signal `review-request` to gate on operator approval before merging. This is intentional — it distinguishes "I need a decision" from a plain status reply.
+> **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach — you get the worker's reply regardless of which intent they chose.
+>
+> Use `--intent review-request` only when you specifically need to skip intermediate `response` messages and wait for an explicit approval gate.
 
 ### Step 4 — Contract check
 
