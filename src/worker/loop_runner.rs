@@ -624,6 +624,17 @@ async fn handle_trigger_output(
         });
 
         insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+
+        // ── Auto-handoff chain (ORCH-CHAIN-1) ──
+        maybe_auto_handoff(
+            store,
+            event_bus,
+            output,
+            agent_configs,
+            reply_intent,
+            reply_body,
+        )
+        .await;
     } else {
         // ── Failure path — check for retry eligibility ──
         let should_retry = should_retry_execution(output, agent_configs);
@@ -817,6 +828,171 @@ async fn insert_reply_message(
     }
 }
 
+/// Check handoff config for the completing agent and auto-dispatch to the
+/// next agent if a matching route exists.
+///
+/// Handoff logic (ORCH-CHAIN-1):
+/// 1. Look up the agent's `HandoffConfig` from config.
+/// 2. Match the reply intent to a `handoff.on_<intent>` route.
+/// 3. If target is "operator" or no route → do nothing (chain stops).
+/// 4. If target is another agent: check chain depth vs max_chain_depth.
+///    - Over limit → insert review-request to operator.
+///    - Under limit → insert handoff message to target agent.
+async fn maybe_auto_handoff(
+    store: &Store,
+    event_bus: &EventBus,
+    output: &TriggerOutput,
+    agent_configs: &[AgentConfig],
+    reply_intent: &str,
+    reply_body: &str,
+) {
+    // Find the completing agent's config.
+    let agent_config = match agent_configs.iter().find(|a| a.alias == output.agent_alias) {
+        Some(c) => c,
+        None => {
+            tracing::warn!(
+                agent_alias = %output.agent_alias,
+                thread_id = %output.thread_id,
+                "agent alias not found in config during handoff lookup"
+            );
+            return;
+        }
+    };
+
+    // No handoff config → no auto-dispatch.
+    let handoff = match agent_config.handoff.as_ref() {
+        Some(h) => h,
+        None => return,
+    };
+
+    // Match intent to route.
+    let target = match reply_intent {
+        "response" => handoff.on_response.as_ref(),
+        "review-request" => handoff.on_review_request.as_ref(),
+        "changes-requested" => handoff.on_changes_requested.as_ref(),
+        "escalation" => handoff.on_escalation.as_ref(),
+        _ => None,
+    };
+
+    let target = match target {
+        Some(t) => t,
+        None => return, // No matching route → operator decides.
+    };
+
+    let target_alias = target.target_alias();
+
+    // "operator" means stop chain.
+    if target_alias == "operator" {
+        return;
+    }
+
+    // Build handoff message body: include original dispatch context + current reply.
+    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
+        Ok(msgs) => {
+            // First message is typically the original dispatch.
+            msgs.first().map(|m| m.body.clone()).unwrap_or_default()
+        }
+        Err(_) => String::new(),
+    };
+
+    let handoff_body = format!(
+        "## Original dispatch\n{}\n\n## Reply from {}\n{}",
+        dispatch_context, output.agent_alias, reply_body
+    );
+
+    // Atomic depth check + insert (ORCH-CHAIN-1 H-2 fix: prevents TOCTOU race).
+    let max_depth = handoff.max_chain_depth.unwrap_or(3) as i64;
+    match store
+        .insert_handoff_if_under_depth(
+            &output.thread_id,
+            &output.agent_alias,
+            target_alias,
+            &handoff_body,
+            max_depth,
+        )
+        .await
+    {
+        Ok(Some(message_id)) => {
+            tracing::info!(
+                thread_id = %output.thread_id,
+                from = %output.agent_alias,
+                to = %target_alias,
+                max_depth = max_depth,
+                "auto-handoff dispatched"
+            );
+            event_bus.emit(OrchestratorEvent::MessageReceived {
+                thread_id: output.thread_id.clone(),
+                message_id,
+                from_alias: output.agent_alias.clone(),
+                intent: "handoff".to_string(),
+            });
+        }
+        Ok(None) => {
+            // Chain depth exceeded — collect involved agents and notify operator.
+            let agents_involved = match store.get_thread_messages(&output.thread_id).await {
+                Ok(msgs) => {
+                    let mut agents: Vec<String> = Vec::new();
+                    for msg in &msgs {
+                        if !agents.contains(&msg.from_alias) {
+                            agents.push(msg.from_alias.clone());
+                        }
+                    }
+                    agents.join(", ")
+                }
+                Err(_) => "(unknown)".to_string(),
+            };
+
+            let interrupt_body = format!(
+                "Auto-handoff chain interrupted at depth limit {}. Agents involved: {}. \
+                 Last agent ({}) replied with intent '{}'. \
+                 Please review and decide next step.",
+                max_depth, agents_involved, output.agent_alias, reply_intent
+            );
+
+            match store
+                .insert_message(
+                    &output.thread_id,
+                    &output.agent_alias,
+                    "operator",
+                    "review-request",
+                    &interrupt_body,
+                    None,
+                )
+                .await
+            {
+                Ok(message_id) => {
+                    tracing::info!(
+                        thread_id = %output.thread_id,
+                        max_depth = max_depth,
+                        "auto-handoff chain interrupted at depth limit"
+                    );
+                    event_bus.emit(OrchestratorEvent::MessageReceived {
+                        thread_id: output.thread_id.clone(),
+                        message_id,
+                        from_alias: output.agent_alias.clone(),
+                        intent: "review-request".to_string(),
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(
+                        thread_id = %output.thread_id,
+                        error = %e,
+                        "failed to insert chain-interrupt message"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                thread_id = %output.thread_id,
+                target = %target_alias,
+                error = %e,
+                "failed to insert handoff message"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -947,6 +1123,7 @@ mod tests {
             workspace: None,
             max_retries,
             retry_backoff_secs: 10,
+            handoff: None,
         }
     }
 

@@ -724,6 +724,92 @@ impl Store {
         Ok(rows.into_iter().map(row_to_message).collect())
     }
 
+    /// Count messages with `intent = 'handoff'` in a thread (for chain depth tracking).
+    pub async fn count_handoff_messages(&self, thread_id: &str) -> Result<i64, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM messages WHERE thread_id = ? AND intent = 'handoff'",
+        )
+        .bind(thread_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("count_handoff_messages failed: {}", e))?;
+        Ok(row.0)
+    }
+
+    /// Atomically check chain depth and insert a handoff message if under the limit.
+    ///
+    /// Returns:
+    /// - `Ok(Some(message_id))` — handoff inserted (depth was under limit).
+    /// - `Ok(None)` — depth limit reached, no message inserted.
+    /// - `Err(...)` — DB error.
+    ///
+    /// The depth check and insert run in a single SQLite transaction to prevent
+    /// TOCTOU races where concurrent executions could both pass the depth check
+    /// before either inserts.
+    pub async fn insert_handoff_if_under_depth(
+        &self,
+        thread_id: &str,
+        from_alias: &str,
+        to_alias: &str,
+        body: &str,
+        max_depth: i64,
+    ) -> Result<Option<i64>, String> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("insert_handoff_if_under_depth: begin failed: {}", e))?;
+
+        // Ensure thread exists inside the transaction.
+        sqlx::query(
+            "INSERT INTO threads (thread_id)
+             VALUES (?)
+             ON CONFLICT(thread_id) DO UPDATE SET
+               updated_at = strftime('%s','now')",
+        )
+        .bind(thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("insert_handoff_if_under_depth: ensure_thread failed: {}", e))?;
+
+        // Count existing handoff messages inside the same transaction.
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM messages WHERE thread_id = ? AND intent = 'handoff'",
+        )
+        .bind(thread_id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| format!("insert_handoff_if_under_depth: count failed: {}", e))?;
+        let current_depth = row.0;
+
+        if current_depth >= max_depth {
+            tx.commit()
+                .await
+                .map_err(|e| format!("insert_handoff_if_under_depth: commit failed: {}", e))?;
+            return Ok(None);
+        }
+
+        // Insert the handoff message.
+        let row: (i64,) = sqlx::query_as(
+            "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body)
+             VALUES (?, ?, ?, 'handoff', ?)
+             RETURNING id",
+        )
+        .bind(thread_id)
+        .bind(from_alias)
+        .bind(to_alias)
+        .bind(body)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| format!("insert_handoff_if_under_depth: insert failed: {}", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("insert_handoff_if_under_depth: commit failed: {}", e))?;
+
+        Ok(Some(row.0))
+    }
+
     pub async fn get_message(&self, id: i64) -> Result<Option<MessageRow>, sqlx::Error> {
         let row: Option<(
             i64,

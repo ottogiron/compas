@@ -270,8 +270,65 @@ pub struct AgentConfig {
     /// Backoff base in seconds between retries (exponential: base * 2^attempt). Default 30.
     #[serde(default = "default_retry_backoff_secs")]
     pub retry_backoff_secs: u64,
+    /// Handoff routing: auto-chain to another agent based on reply intent.
+    #[serde(default)]
+    pub handoff: Option<HandoffConfig>,
 }
 
 fn default_retry_backoff_secs() -> u64 {
     30
+}
+
+/// Handoff routing configuration for automatic agent chaining.
+///
+/// When an agent completes with a recognized intent, the worker checks the
+/// matching `on_<intent>` route and auto-dispatches to the target agent.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct HandoffConfig {
+    /// Route when agent replies with `response` intent.
+    #[serde(default)]
+    pub on_response: Option<HandoffTarget>,
+    /// Route when agent replies with `review-request` intent.
+    #[serde(default)]
+    pub on_review_request: Option<HandoffTarget>,
+    /// Route when agent replies with `changes-requested` intent.
+    #[serde(default)]
+    pub on_changes_requested: Option<HandoffTarget>,
+    /// Route when agent replies with `escalation` intent.
+    #[serde(default)]
+    pub on_escalation: Option<HandoffTarget>,
+    /// Maximum consecutive auto-handoffs before forcing operator review (default: 3).
+    #[serde(default)]
+    pub max_chain_depth: Option<u32>,
+}
+
+/// Handoff target — currently only Simple (string alias) is supported.
+/// Gated variant is parsed for forward-compatibility but rejected at validation.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum HandoffTarget {
+    /// Simple target: just an agent alias or "operator".
+    Simple(String),
+    /// Gated target: dispatch after a signal (Phase 2, not yet implemented).
+    Gated {
+        target: String,
+        gate: String,
+        #[serde(default)]
+        gate_timeout_secs: Option<u64>,
+    },
+}
+
+impl HandoffTarget {
+    /// Returns the target alias regardless of variant.
+    pub fn target_alias(&self) -> &str {
+        match self {
+            HandoffTarget::Simple(alias) => alias,
+            HandoffTarget::Gated { target, .. } => target,
+        }
+    }
+
+    /// Returns true if this is a gated target.
+    pub fn is_gated(&self) -> bool {
+        matches!(self, HandoffTarget::Gated { .. })
+    }
 }

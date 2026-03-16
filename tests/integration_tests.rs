@@ -108,6 +108,7 @@ fn test_config() -> OrchestratorConfig {
                 workspace: None,
                 max_retries: 0,
                 retry_backoff_secs: 30,
+                handoff: None,
             },
             AgentConfig {
                 alias: "spark".to_string(),
@@ -123,6 +124,7 @@ fn test_config() -> OrchestratorConfig {
                 workspace: None,
                 max_retries: 0,
                 retry_backoff_secs: 30,
+                handoff: None,
             },
         ],
         worktree_dir: None,
@@ -840,6 +842,7 @@ mod registry_tests {
             workspace: None,
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         };
 
         let backend = registry.get(&agent_cfg);
@@ -865,6 +868,7 @@ mod registry_tests {
             workspace: None,
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         };
 
         let result = registry.get(&agent_cfg);
@@ -2509,6 +2513,7 @@ mod worktree_tests {
             workspace: Some("worktree".to_string()),
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -2592,6 +2597,7 @@ mod worktree_tests {
             workspace: None, // shared (default)
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -2938,6 +2944,427 @@ mod prompt_hash_tests {
         assert_eq!(
             view.prompt_hash, None,
             "prompt_hash must be None when the agent has no prompt field"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Handoff Chain Tests (ORCH-CHAIN-1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod handoff_chain_tests {
+    use super::*;
+    use aster_orch::config::types::HandoffConfig;
+    use aster_orch::events::{EventBus, OrchestratorEvent};
+    use aster_orch::worker::WorkerRunner;
+    use tokio::sync::Semaphore;
+
+    /// Config with agent A handing off `response` to agent B.
+    fn chain_config() -> OrchestratorConfig {
+        OrchestratorConfig {
+            target_repo_root: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/aster-orch-test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![
+                AgentConfig {
+                    alias: "agent-a".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: Some(HandoffConfig {
+                        on_response: Some(aster_orch::config::types::HandoffTarget::Simple(
+                            "agent-b".to_string(),
+                        )),
+                        on_review_request: None,
+                        on_changes_requested: None,
+                        on_escalation: None,
+                        max_chain_depth: Some(3),
+                    }),
+                },
+                AgentConfig {
+                    alias: "agent-b".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: None, // agent-b does NOT chain further
+                },
+            ],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_basic_auto_handoff_chain() {
+        // Agent A has on_response: agent-b.
+        // Dispatch to A → A completes with "response" → auto-handoff to B.
+        let store = test_store().await;
+        let config = chain_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Seed: dispatch to agent-a.
+        let thread_id = "chain-test-1";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature X",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        // Run poll_once → agent-a executes.
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for TWO MessageReceived events: the reply + the handoff.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(
+            message_count >= 2,
+            "expected 2 MessageReceived events (reply + handoff), got {}",
+            message_count
+        );
+
+        // Verify: a handoff message was inserted to agent-b.
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff_msg = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "agent-b");
+        assert!(
+            handoff_msg.is_some(),
+            "expected handoff message to agent-b; messages: {:?}",
+            messages
+                .iter()
+                .map(|m| format!("{}→{} ({})", m.from_alias, m.to_alias, m.intent))
+                .collect::<Vec<_>>()
+        );
+
+        // The handoff message body should contain the original dispatch context.
+        let hm = handoff_msg.unwrap();
+        assert!(
+            hm.body.contains("implement feature X"),
+            "handoff body should include original dispatch context"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_chain_depth_limit_interrupts() {
+        // Set max_chain_depth=1 on agent-a. After 1 handoff, subsequent should
+        // be interrupted with a review-request to operator.
+        let store = test_store().await;
+
+        let mut config = chain_config();
+        // Set max_chain_depth to 1.
+        config.agents[0].handoff.as_mut().unwrap().max_chain_depth = Some(1);
+
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "chain-depth-test";
+
+        // Pre-seed: insert an existing handoff message so depth = 1 already.
+        let _msg0 = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "original task",
+                None,
+            )
+            .await
+            .unwrap();
+        let _handoff_msg = store
+            .insert_message(
+                thread_id,
+                "agent-b",
+                "agent-a",
+                "handoff",
+                "previous handoff",
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Now dispatch to agent-a again.
+        let dispatch_msg = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "follow-up work",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(dispatch_msg), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for TWO MessageReceived events: reply + chain-interrupt review-request.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+
+        // Verify: chain should be interrupted (no new handoff, but a review-request).
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let new_handoff_count = messages
+            .iter()
+            .filter(|m| m.intent == "handoff" && m.from_alias == "agent-a")
+            .count();
+
+        // Should still be 1 (the pre-seeded one), not 2.
+        assert_eq!(
+            new_handoff_count, 0,
+            "no new handoff should be created from agent-a when depth limit is hit"
+        );
+
+        // There should be a review-request message about chain interruption.
+        let interrupt = messages
+            .iter()
+            .find(|m| m.intent == "review-request" && m.body.contains("chain interrupted"));
+        assert!(
+            interrupt.is_some(),
+            "expected chain-interrupt review-request; messages: {:?}",
+            messages
+                .iter()
+                .map(|m| format!(
+                    "{}→{} ({}: {})",
+                    m.from_alias,
+                    m.to_alias,
+                    m.intent,
+                    &m.body[..m.body.len().min(50)]
+                ))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_handoff_config_preserves_behavior() {
+        // Agent without handoff config should not auto-dispatch.
+        let store = test_store().await;
+        let config = test_config(); // default config, no handoff
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "no-handoff-test";
+        let msg_id = store
+            .insert_message(
+                thread_id, "operator", "focused", "dispatch", "do work", None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "focused", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for completion.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(OrchestratorEvent::MessageReceived { .. })) => {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+
+        // Verify: no handoff message was inserted.
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff_count = messages.iter().filter(|m| m.intent == "handoff").count();
+        assert_eq!(
+            handoff_count, 0,
+            "no handoff messages should exist for agent without handoff config"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_count_handoff_messages_store() {
+        let store = test_store().await;
+        let thread_id = "count-handoff-test";
+
+        store.ensure_thread(thread_id, None).await.unwrap();
+
+        // Initially zero.
+        let count = store.count_handoff_messages(thread_id).await.unwrap();
+        assert_eq!(count, 0);
+
+        // Insert a non-handoff message.
+        store
+            .insert_message(thread_id, "operator", "agent-a", "dispatch", "task", None)
+            .await
+            .unwrap();
+        let count = store.count_handoff_messages(thread_id).await.unwrap();
+        assert_eq!(count, 0);
+
+        // Insert handoff messages.
+        store
+            .insert_message(
+                thread_id,
+                "agent-a",
+                "agent-b",
+                "handoff",
+                "pass along",
+                None,
+            )
+            .await
+            .unwrap();
+        let count = store.count_handoff_messages(thread_id).await.unwrap();
+        assert_eq!(count, 1);
+
+        store
+            .insert_message(
+                thread_id,
+                "agent-b",
+                "agent-a",
+                "handoff",
+                "back to you",
+                None,
+            )
+            .await
+            .unwrap();
+        let count = store.count_handoff_messages(thread_id).await.unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_handoff_config_yaml_roundtrip() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: reviewer
+      on_escalation: operator
+      max_chain_depth: 5
+  - alias: reviewer
+    backend: stub
+    handoff:
+      on_review_request: operator
+"#;
+        let config = aster_orch::config::load_config_from_str(yaml).unwrap();
+
+        let coder = &config.agents[0];
+        let handoff = coder.handoff.as_ref().unwrap();
+        assert_eq!(
+            handoff.on_response.as_ref().unwrap().target_alias(),
+            "reviewer"
+        );
+        assert_eq!(
+            handoff.on_escalation.as_ref().unwrap().target_alias(),
+            "operator"
+        );
+        assert!(handoff.on_review_request.is_none());
+        assert!(handoff.on_changes_requested.is_none());
+        assert_eq!(handoff.max_chain_depth, Some(5));
+
+        let reviewer = &config.agents[1];
+        let handoff = reviewer.handoff.as_ref().unwrap();
+        assert_eq!(
+            handoff.on_review_request.as_ref().unwrap().target_alias(),
+            "operator"
         );
     }
 }

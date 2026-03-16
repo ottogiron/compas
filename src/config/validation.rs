@@ -1,4 +1,4 @@
-use super::types::{AgentRole, OrchestratorConfig};
+use super::types::{AgentRole, HandoffTarget, OrchestratorConfig};
 use crate::error::{OrchestratorError, Result};
 use std::collections::HashSet;
 
@@ -83,6 +83,68 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                     "agent '{}' workspace must be \"worktree\" or \"shared\", got \"{}\"",
                     agent.alias, ws
                 )));
+            }
+        }
+    }
+
+    // ── Handoff validation (ORCH-CHAIN-1) ──
+    // Collect all valid aliases for target resolution.
+    let all_aliases: HashSet<&str> = config.agents.iter().map(|a| a.alias.as_str()).collect();
+
+    for agent in &config.agents {
+        if let Some(ref handoff) = agent.handoff {
+            // Validate max_chain_depth bounds (1..=20)
+            if let Some(depth) = handoff.max_chain_depth {
+                if !(1..=20).contains(&depth) {
+                    return Err(OrchestratorError::Config(format!(
+                        "agent '{}' handoff.max_chain_depth must be 1..=20, got {}",
+                        agent.alias, depth
+                    )));
+                }
+            }
+
+            // Collect all handoff targets for this agent.
+            let targets: Vec<(&str, &HandoffTarget)> = [
+                ("on_response", handoff.on_response.as_ref()),
+                ("on_review_request", handoff.on_review_request.as_ref()),
+                (
+                    "on_changes_requested",
+                    handoff.on_changes_requested.as_ref(),
+                ),
+                ("on_escalation", handoff.on_escalation.as_ref()),
+            ]
+            .into_iter()
+            .filter_map(|(name, target)| target.map(|t| (name, t)))
+            .collect();
+
+            for (route_name, target) in &targets {
+                // Gated targets are not yet supported.
+                if target.is_gated() {
+                    return Err(OrchestratorError::Config(format!(
+                        "agent '{}' handoff.{}: gated handoff conditions are not yet supported. \
+                         Use a simple agent alias or 'operator'.",
+                        agent.alias, route_name
+                    )));
+                }
+
+                let alias = target.target_alias();
+
+                // Self-loop detection.
+                // ORCH-CHAIN-2: indirect cycle detection not yet implemented
+                if alias == agent.alias {
+                    return Err(OrchestratorError::Config(format!(
+                        "agent '{}' handoff.{} points to itself (self-loop not allowed)",
+                        agent.alias, route_name
+                    )));
+                }
+
+                // Target must be "operator" or a valid agent alias.
+                if alias != "operator" && !all_aliases.contains(alias) {
+                    return Err(OrchestratorError::Config(format!(
+                        "agent '{}' handoff.{} references unknown agent alias '{}'",
+                        agent.alias, route_name, alias
+                    )));
+                }
             }
         }
     }
@@ -219,6 +281,7 @@ mod tests {
                 workspace: None,
                 max_retries: 0,
                 retry_backoff_secs: 30,
+                handoff: None,
             }],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -302,6 +365,7 @@ mod tests {
             workspace: None,
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         });
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("duplicate agent alias"));
@@ -484,6 +548,7 @@ agents:
             workspace: None,
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -503,6 +568,7 @@ agents:
             workspace: None,
             max_retries: 0,
             retry_backoff_secs: 30,
+            handoff: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -655,5 +721,162 @@ agents:
         let err = crate::config::load_config_from_str(yaml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
         assert!(err.to_string().contains("project_root"));
+    }
+
+    // ── Handoff config validation tests (ORCH-CHAIN-1) ──
+
+    #[test]
+    fn test_handoff_valid_simple_targets() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: reviewer
+  - alias: reviewer
+    backend: stub
+    handoff:
+      on_review_request: operator
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert!(config.agents[0].handoff.is_some());
+    }
+
+    #[test]
+    fn test_handoff_gated_target_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        target: reviewer
+        gate: ci-pass
+  - alias: reviewer
+    backend: stub
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("gated handoff conditions are not yet supported"));
+    }
+
+    #[test]
+    fn test_handoff_invalid_target_alias_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: nonexistent
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("unknown agent alias 'nonexistent'"));
+    }
+
+    #[test]
+    fn test_handoff_self_loop_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: coder
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("self-loop"));
+    }
+
+    #[test]
+    fn test_handoff_max_chain_depth_zero_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      max_chain_depth: 0
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("max_chain_depth"));
+    }
+
+    #[test]
+    fn test_handoff_max_chain_depth_bounds() {
+        // Depth 1 is valid
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      max_chain_depth: 1
+"#;
+        assert!(crate::config::load_config_from_str(yaml).is_ok());
+
+        // Depth 20 is valid
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      max_chain_depth: 20
+"#;
+        assert!(crate::config::load_config_from_str(yaml).is_ok());
+
+        // Depth 21 is rejected
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      max_chain_depth: 21
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("max_chain_depth"));
+    }
+
+    #[test]
+    fn test_handoff_operator_target_is_valid() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: operator
+      on_escalation: operator
+"#;
+        assert!(crate::config::load_config_from_str(yaml).is_ok());
+    }
+
+    #[test]
+    fn test_handoff_no_config_preserves_behavior() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert!(config.agents[0].handoff.is_none());
     }
 }
