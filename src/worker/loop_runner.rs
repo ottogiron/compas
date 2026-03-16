@@ -829,12 +829,12 @@ async fn insert_reply_message(
 }
 
 /// Check handoff config for the completing agent and auto-dispatch to the
-/// next agent if a matching route exists.
+/// next agent if a route exists.
 ///
-/// Handoff logic (ORCH-CHAIN-1):
+/// Handoff logic (ORCH-INTENT-2):
 /// 1. Look up the agent's `HandoffConfig` from config.
-/// 2. Match the reply intent to a `handoff.on_<intent>` route.
-/// 3. If target is "operator" or no route → do nothing (chain stops).
+/// 2. Check `on_response` — the single route, regardless of reply intent.
+/// 3. If target is "operator" or `None` → do nothing (chain stops).
 /// 4. If target is another agent: check chain depth vs max_chain_depth.
 ///    - Over limit → insert review-request to operator.
 ///    - Under limit → insert handoff message to target agent.
@@ -865,26 +865,11 @@ async fn maybe_auto_handoff(
         None => return,
     };
 
-    // Match intent to route.
-    let target = match reply_intent {
-        "response" => handoff.on_response.as_ref(),
-        "review-request" => handoff.on_review_request.as_ref(),
-        "changes-requested" => handoff.on_changes_requested.as_ref(),
-        "escalation" => handoff.on_escalation.as_ref(),
-        _ => None,
+    // Single route: on_response. Reply intent is irrelevant for routing.
+    let target_alias = match handoff.on_response.as_deref() {
+        Some(alias) if alias != "operator" => alias,
+        _ => return, // No route or "operator" → chain stops.
     };
-
-    let target = match target {
-        Some(t) => t,
-        None => return, // No matching route → operator decides.
-    };
-
-    let target_alias = target.target_alias();
-
-    // "operator" means stop chain.
-    if target_alias == "operator" {
-        return;
-    }
 
     // Build handoff message body: include original dispatch context + current reply.
     let dispatch_context = match store.get_thread_messages(&output.thread_id).await {

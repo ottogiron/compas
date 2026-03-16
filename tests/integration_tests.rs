@@ -2982,12 +2982,7 @@ mod handoff_chain_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: Some(HandoffConfig {
-                        on_response: Some(aster_orch::config::types::HandoffTarget::Simple(
-                            "agent-b".to_string(),
-                        )),
-                        on_review_request: None,
-                        on_changes_requested: None,
-                        on_escalation: None,
+                        on_response: Some("agent-b".to_string()),
                         max_chain_depth: Some(3),
                     }),
                 },
@@ -3337,34 +3332,21 @@ agents:
     backend: stub
     handoff:
       on_response: reviewer
-      on_escalation: operator
       max_chain_depth: 5
   - alias: reviewer
     backend: stub
     handoff:
-      on_review_request: operator
+      on_response: operator
 "#;
         let config = aster_orch::config::load_config_from_str(yaml).unwrap();
 
         let coder = &config.agents[0];
         let handoff = coder.handoff.as_ref().unwrap();
-        assert_eq!(
-            handoff.on_response.as_ref().unwrap().target_alias(),
-            "reviewer"
-        );
-        assert_eq!(
-            handoff.on_escalation.as_ref().unwrap().target_alias(),
-            "operator"
-        );
-        assert!(handoff.on_review_request.is_none());
-        assert!(handoff.on_changes_requested.is_none());
+        assert_eq!(handoff.on_response.as_deref(), Some("reviewer"));
         assert_eq!(handoff.max_chain_depth, Some(5));
 
         let reviewer = &config.agents[1];
         let handoff = reviewer.handoff.as_ref().unwrap();
-        assert_eq!(
-            handoff.on_review_request.as_ref().unwrap().target_alias(),
-            "operator"
-        );
+        assert_eq!(handoff.on_response.as_deref(), Some("operator"));
     }
 }
