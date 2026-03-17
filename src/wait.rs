@@ -79,7 +79,7 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
         if let Some(&msg) = matching.last() {
             if req.await_chain {
                 let pending = store
-                    .count_pending_chain_work(&req.thread_id)
+                    .count_pending_chain_and_fanout_work(&req.thread_id)
                     .await
                     .map_err(|e| format!("chain settlement check failed: {}", e))?;
                 if pending > 0 {

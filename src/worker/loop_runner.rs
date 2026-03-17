@@ -623,18 +623,144 @@ async fn handle_trigger_output(
             new_status: "Active".to_string(),
         });
 
-        insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+        // Resolve the handoff type BEFORE inserting the reply so that
+        // fan-out can use a single transaction (reply + fan-out threads).
+        let handoff_resolution = resolve_handoff(store, output, agent_configs, reply_body).await;
 
-        // ── Auto-handoff chain (ORCH-CHAIN-1) ──
-        maybe_auto_handoff(
-            store,
-            event_bus,
-            output,
-            agent_configs,
-            reply_intent,
-            reply_body,
-        )
-        .await;
+        match handoff_resolution {
+            HandoffResolution::FanOut {
+                batch_id,
+                targets,
+                handoff_body,
+            } => {
+                // Atomic: reply + fan-out threads in one transaction.
+                let params = crate::store::ReplyAndFanoutParams {
+                    reply_thread_id: &output.thread_id,
+                    reply_from: &output.agent_alias,
+                    reply_to: "operator",
+                    reply_intent,
+                    reply_body,
+                    source_thread_id: &output.thread_id,
+                    batch_id: &batch_id,
+                    targets: &targets,
+                    handoff_from: &output.agent_alias,
+                    handoff_body: &handoff_body,
+                };
+                match store.insert_reply_and_fanout(&params).await {
+                    Ok((reply_msg_id, fanout_results)) => {
+                        // Emit reply event
+                        event_bus.emit(OrchestratorEvent::MessageReceived {
+                            thread_id: output.thread_id.clone(),
+                            message_id: reply_msg_id,
+                            from_alias: output.agent_alias.clone(),
+                            intent: reply_intent.to_string(),
+                        });
+                        // Emit fan-out events
+                        for (idx, (thread_id, message_id)) in fanout_results.iter().enumerate() {
+                            let target_alias = &targets[idx];
+                            tracing::info!(
+                                source_thread_id = %output.thread_id,
+                                fanout_thread_id = %thread_id,
+                                fanout_message_id = %message_id,
+                                from = %output.agent_alias,
+                                to = %target_alias,
+                                batch_id = %batch_id,
+                                "fan-out handoff dispatched (atomic)"
+                            );
+                            event_bus.emit(OrchestratorEvent::MessageReceived {
+                                thread_id: thread_id.clone(),
+                                message_id: *message_id,
+                                from_alias: output.agent_alias.clone(),
+                                intent: "handoff".to_string(),
+                            });
+                            event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+                                thread_id: thread_id.clone(),
+                                new_status: "Active".to_string(),
+                            });
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            thread_id = %output.thread_id,
+                            error = %e,
+                            "atomic reply + fan-out failed; falling back to non-transactional reply"
+                        );
+                        // Fallback: insert reply separately so the agent's response
+                        // is never silently lost.
+                        insert_reply_message(store, event_bus, output, reply_intent, reply_body)
+                            .await;
+                        // Notify operator that fan-out failed so --await-chain
+                        // doesn't silently return with 0 pending.
+                        let fail_body = format!(
+                            "Fan-out dispatch failed after agent '{}' completed. \
+                             The agent's reply was saved but reviewer targets {:?} \
+                             were not dispatched. Error: {}",
+                            output.agent_alias, targets, e
+                        );
+                        if let Ok(msg_id) = store
+                            .insert_message(
+                                &output.thread_id,
+                                &output.agent_alias,
+                                "operator",
+                                "review-request",
+                                &fail_body,
+                                None,
+                            )
+                            .await
+                        {
+                            event_bus.emit(OrchestratorEvent::MessageReceived {
+                                thread_id: output.thread_id.clone(),
+                                message_id: msg_id,
+                                from_alias: output.agent_alias.clone(),
+                                intent: "review-request".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            HandoffResolution::FanOutDepthExceeded { max_depth } => {
+                // Fan-out depth limit reached — insert reply + review-request.
+                insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+
+                let interrupt_body = format!(
+                    "Fan-out auto-handoff chain interrupted at depth limit {}. \
+                     Agent '{}' completed but fan-out targets were not dispatched. \
+                     Please review and decide next step.",
+                    max_depth, output.agent_alias
+                );
+                if let Ok(msg_id) = store
+                    .insert_message(
+                        &output.thread_id,
+                        &output.agent_alias,
+                        "operator",
+                        "review-request",
+                        &interrupt_body,
+                        None,
+                    )
+                    .await
+                {
+                    event_bus.emit(OrchestratorEvent::MessageReceived {
+                        thread_id: output.thread_id.clone(),
+                        message_id: msg_id,
+                        from_alias: output.agent_alias.clone(),
+                        intent: "review-request".to_string(),
+                    });
+                }
+            }
+            HandoffResolution::SingleOrNone => {
+                // Non-fan-out: insert reply then maybe handoff (existing behavior).
+                insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+                maybe_auto_handoff(
+                    store,
+                    event_bus,
+                    output,
+                    agent_configs,
+                    reply_intent,
+                    reply_body,
+                )
+                .await;
+            }
+        }
     } else {
         // ── Failure path — check for retry eligibility ──
         let should_retry = should_retry_execution(output, agent_configs);
@@ -828,6 +954,115 @@ async fn insert_reply_message(
     }
 }
 
+/// Pre-resolved handoff type — determined BEFORE the reply is inserted so
+/// that the fan-out case can use a single atomic transaction.
+enum HandoffResolution {
+    /// Fan-out to multiple targets: reply + fan-out must be transactional.
+    FanOut {
+        batch_id: String,
+        targets: Vec<String>,
+        handoff_body: String,
+    },
+    /// Fan-out depth limit reached — insert reply + review-request to operator.
+    FanOutDepthExceeded { max_depth: i64 },
+    /// Single-target handoff or no handoff — existing non-transactional path.
+    SingleOrNone,
+}
+
+/// Determine the handoff type for a completing agent WITHOUT executing DB writes.
+///
+/// Returns `FanOut` when the agent has multi-target fan-out configured, so the
+/// caller can use an atomic transaction. Returns `SingleOrNone` for everything
+/// else (no handoff, single target, operator target, single-element fan-out).
+async fn resolve_handoff(
+    store: &Store,
+    output: &TriggerOutput,
+    agent_configs: &[AgentConfig],
+    reply_body: &str,
+) -> HandoffResolution {
+    let agent_config = match agent_configs.iter().find(|a| a.alias == output.agent_alias) {
+        Some(c) => c,
+        None => return HandoffResolution::SingleOrNone,
+    };
+
+    let handoff = match agent_config.handoff.as_ref() {
+        Some(h) => h,
+        None => return HandoffResolution::SingleOrNone,
+    };
+
+    let target = match handoff.on_response.as_ref() {
+        Some(t) => t,
+        None => return HandoffResolution::SingleOrNone,
+    };
+
+    // Only multi-element FanOut gets the transactional path.
+    let aliases = match target {
+        HandoffTarget::FanOut(aliases) if aliases.len() > 1 => aliases,
+        _ => return HandoffResolution::SingleOrNone,
+    };
+
+    // Check chain depth before building fan-out (same safety as single-target).
+    let max_depth = handoff.max_chain_depth.unwrap_or(3) as i64;
+    let current_depth = match store.count_handoff_messages(&output.thread_id).await {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "failed to count handoff depth for fan-out; allowing fan-out"
+            );
+            0
+        }
+    };
+    if current_depth >= max_depth {
+        tracing::info!(
+            thread_id = %output.thread_id,
+            current_depth = current_depth,
+            max_depth = max_depth,
+            "fan-out chain depth exceeded"
+        );
+        return HandoffResolution::FanOutDepthExceeded { max_depth };
+    }
+
+    // Build the handoff body.
+    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
+        Ok(msgs) => msgs.first().map(|m| m.body.clone()).unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+
+    let mut handoff_body = String::new();
+    if let Some(ref prompt) = handoff.handoff_prompt {
+        handoff_body.push_str(prompt);
+        handoff_body.push_str("\n\n");
+    }
+    handoff_body.push_str(&format!(
+        "## Original dispatch\n{}\n\n## Reply from {}\n{}",
+        dispatch_context, output.agent_alias, reply_body
+    ));
+
+    // Determine batch_id: inherit from originating thread or generate.
+    let batch_id = match store.get_thread(&output.thread_id).await {
+        Ok(Some(t)) => t
+            .batch_id
+            .unwrap_or_else(|| format!("fanout-{}", output.thread_id)),
+        Ok(None) => format!("fanout-{}", output.thread_id),
+        Err(e) => {
+            tracing::warn!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "failed to fetch thread for batch_id; generating fallback"
+            );
+            format!("fanout-{}", output.thread_id)
+        }
+    };
+
+    HandoffResolution::FanOut {
+        batch_id,
+        targets: aliases.clone(),
+        handoff_body,
+    }
+}
+
 /// Check handoff config for the completing agent and auto-dispatch to the
 /// next agent if a route exists.
 ///
@@ -838,6 +1073,10 @@ async fn insert_reply_message(
 /// 4. If target is another agent: check chain depth vs max_chain_depth.
 ///    - Over limit → insert review-request to operator.
 ///    - Under limit → insert handoff message to target agent.
+///
+/// NOTE: Multi-element fan-out is handled atomically in `handle_trigger_output`
+/// via `insert_reply_and_fanout`. This function only handles single-target
+/// handoffs and single-element fan-out (which degrades to single).
 async fn maybe_auto_handoff(
     store: &Store,
     event_bus: &EventBus,
@@ -901,8 +1140,10 @@ async fn maybe_auto_handoff(
             )
             .await;
         }
-        HandoffTarget::FanOut(aliases) => {
-            handle_fanout_handoff(store, event_bus, output, handoff, aliases, reply_body).await;
+        HandoffTarget::FanOut(_aliases) => {
+            // Multi-element fan-out is handled atomically in handle_trigger_output
+            // via insert_reply_and_fanout. This branch is a no-op because the
+            // caller already resolved the fan-out and used the transactional path.
         }
     }
 }
@@ -1019,90 +1260,6 @@ async fn handle_single_handoff(
                 target = %target_alias,
                 error = %e,
                 "failed to insert handoff message"
-            );
-        }
-    }
-}
-
-/// Handle fan-out handoff: create separate threads per target, linked by batch.
-async fn handle_fanout_handoff(
-    store: &Store,
-    event_bus: &EventBus,
-    output: &TriggerOutput,
-    handoff: &crate::config::types::HandoffConfig,
-    targets: &[String],
-    reply_body: &str,
-) {
-    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
-        Ok(msgs) => msgs.first().map(|m| m.body.clone()).unwrap_or_default(),
-        Err(_) => String::new(),
-    };
-
-    let mut handoff_body = String::new();
-    if let Some(ref prompt) = handoff.handoff_prompt {
-        handoff_body.push_str(prompt);
-        handoff_body.push_str("\n\n");
-    }
-    handoff_body.push_str(&format!(
-        "## Original dispatch\n{}\n\n## Reply from {}\n{}",
-        dispatch_context, output.agent_alias, reply_body
-    ));
-
-    // Determine batch_id: inherit from originating thread or generate.
-    let batch_id = match store.get_thread(&output.thread_id).await {
-        Ok(Some(t)) => t
-            .batch_id
-            .unwrap_or_else(|| format!("fanout-{}", output.thread_id)),
-        Ok(None) => format!("fanout-{}", output.thread_id),
-        Err(e) => {
-            tracing::warn!(
-                thread_id = %output.thread_id,
-                error = %e,
-                "failed to fetch thread for batch_id; generating fallback"
-            );
-            format!("fanout-{}", output.thread_id)
-        }
-    };
-
-    match store
-        .insert_fanout_handoffs(
-            &output.thread_id,
-            &batch_id,
-            targets,
-            &output.agent_alias,
-            &handoff_body,
-        )
-        .await
-    {
-        Ok(results) => {
-            for (idx, (thread_id, message_id)) in results.iter().enumerate() {
-                let target_alias = &targets[idx];
-                tracing::info!(
-                    source_thread_id = %output.thread_id,
-                    fanout_thread_id = %thread_id,
-                    fanout_message_id = %message_id,
-                    from = %output.agent_alias,
-                    to = %target_alias,
-                    batch_id = %batch_id,
-                    "fan-out handoff dispatched"
-                );
-                event_bus.emit(OrchestratorEvent::MessageReceived {
-                    thread_id: thread_id.clone(),
-                    message_id: *message_id,
-                    from_alias: output.agent_alias.clone(),
-                    intent: "handoff".to_string(),
-                });
-                event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
-                    thread_id: thread_id.clone(),
-                    new_status: "Active".to_string(),
-                });
-            }
-        }
-        Err(e) => {
-            tracing::error!(
-                thread_id = %output.thread_id,
-                error = %e,
-                "fan-out handoff failed"
             );
         }
     }

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- `--await-chain` now waits for fan-out child threads to settle before returning (ADR-014 Phase 2)
+- Fan-out child threads linked via `source_thread_id` column instead of batch_id heuristics
+- Reply message and fan-out thread creation are atomic (single transaction) to prevent race conditions
+
 ## [0.2.0]
 
 ### Added

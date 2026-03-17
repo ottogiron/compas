@@ -177,7 +177,7 @@ Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., imple
 
 **Decision:** Added a `handoff` config section to agent definitions with `on_response` routing and a `max_chain_depth` safety limit (default: 3).
 
-**Amendment (2026-03):** Simplified from 5 routing fields to 3: `on_response` (now `HandoffTarget` — string or list via serde untagged enum), `handoff_prompt` (custom text prepended to handoff context), `max_chain_depth` (safety limit). Removed agent-side intent management (see ADR-015). Added fan-out: when `on_response` is a list, each target gets its own batch-linked thread. Added `--await-chain` CLI wait flag for blocking until a single thread's chain settles (fan-out batch-level wait is Phase 2).
+**Amendment (2026-03):** Simplified from 5 routing fields to 3: `on_response` (now `HandoffTarget` — string or list via serde untagged enum), `handoff_prompt` (custom text prepended to handoff context), `max_chain_depth` (safety limit). Removed agent-side intent management (see ADR-015). Added fan-out: when `on_response` is a list, each target gets its own batch-linked thread. Added `--await-chain` CLI wait flag for blocking until chain and direct fan-out child threads settle (single-depth; grandchildren not tracked).
 
 **Key choices:**
 
@@ -189,7 +189,7 @@ Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., imple
 - **Fan-out via batch-linked threads** — when `on_response` is a list, each target gets its own independent thread sharing a batch ID. Parallel execution runs across threads, not within a single thread. The operator is the join point; `orch_batch_status` provides aggregate results. This avoids same-thread parallel execution complexity and keeps the single-active-execution-per-thread invariant.
 - **`handoff_prompt` composition** — custom prompt text is prepended first, then the auto-generated context (originating thread ID, agent alias, transcript). This lets the receiving agent read task-specific instructions before the context dump.
 - **`HandoffTarget` untagged enum** — YAML `on_response: reviewer` (string) and `on_response: [reviewer, reviewer-2]` (list) both deserialize correctly without a type tag. This preserves backward compatibility for existing configs using the string form.
-- **`--await-chain` CLI wait flag** — `aster_orch wait --thread-id <id> --await-chain` polls until all threads in the originating batch (fan-out threads) have settled. Useful for scripting or operator workflows where you need to know when all reviewers have finished.
+- **`--await-chain` CLI wait flag** — `aster_orch wait --thread-id <id> --await-chain` polls until the thread's chain AND direct fan-out child threads (linked via `source_thread_id`) have settled. Only direct children are tracked — if a fan-out child itself triggers further fan-out, those grandchildren are not counted (`max_chain_depth` prevents this in practice). Reply message and fan-out thread creation are atomic (single transaction) to prevent the wait loop from seeing the reply without the fan-out.
 
 ## ADR-015: Intent simplification — agents don't manage intents
 

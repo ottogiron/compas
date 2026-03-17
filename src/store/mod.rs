@@ -174,6 +174,7 @@ pub struct ExecutionEventRow {
 pub struct ThreadRow {
     pub thread_id: String,
     pub batch_id: Option<String>,
+    pub source_thread_id: Option<String>,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -183,6 +184,20 @@ pub struct ThreadRow {
 pub struct ThreadWorktreeEntry {
     pub thread_id: String,
     pub worktree_path: String,
+}
+
+/// Parameters for the atomic reply + fan-out transaction.
+pub struct ReplyAndFanoutParams<'a> {
+    pub reply_thread_id: &'a str,
+    pub reply_from: &'a str,
+    pub reply_to: &'a str,
+    pub reply_intent: &'a str,
+    pub reply_body: &'a str,
+    pub source_thread_id: &'a str,
+    pub batch_id: &'a str,
+    pub targets: &'a [String],
+    pub handoff_from: &'a str,
+    pub handoff_body: &'a str,
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -215,11 +230,12 @@ impl Store {
 
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS threads (
-                thread_id  TEXT PRIMARY KEY,
-                batch_id   TEXT,
-                status     TEXT NOT NULL DEFAULT 'Active',
-                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
-                updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                thread_id        TEXT PRIMARY KEY,
+                batch_id         TEXT,
+                source_thread_id TEXT,
+                status           TEXT NOT NULL DEFAULT 'Active',
+                created_at       INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                updated_at       INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             )",
         )
         .execute(&self.pool)
@@ -444,6 +460,18 @@ impl Store {
                 .await?;
         }
 
+        // ADR-014 Phase 2: source_thread_id for fan-out thread linkage
+        let has_source_thread_id = thread_columns.iter().any(|c| c.1 == "source_thread_id");
+        if !has_source_thread_id {
+            sqlx::query("ALTER TABLE threads ADD COLUMN source_thread_id TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        // Index must be created AFTER the column migration for existing DBs.
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(source_thread_id)")
+            .execute(&self.pool)
+            .await?;
+
         Ok(())
     }
 
@@ -508,19 +536,21 @@ impl Store {
     }
 
     pub async fn get_thread(&self, thread_id: &str) -> Result<Option<ThreadRow>, sqlx::Error> {
-        let row: Option<(String, Option<String>, String, i64, i64)> = sqlx::query_as(
-            "SELECT thread_id, batch_id, status, created_at, updated_at
-             FROM threads WHERE thread_id = ?",
-        )
-        .bind(thread_id)
-        .fetch_optional(&self.pool)
-        .await?;
+        let row: Option<(String, Option<String>, Option<String>, String, i64, i64)> =
+            sqlx::query_as(
+                "SELECT thread_id, batch_id, source_thread_id, status, created_at, updated_at
+                 FROM threads WHERE thread_id = ?",
+            )
+            .bind(thread_id)
+            .fetch_optional(&self.pool)
+            .await?;
         Ok(row.map(|r| ThreadRow {
             thread_id: r.0,
             batch_id: r.1,
-            status: r.2,
-            created_at: r.3,
-            updated_at: r.4,
+            source_thread_id: r.2,
+            status: r.3,
+            created_at: r.4,
+            updated_at: r.5,
         }))
     }
 
@@ -532,7 +562,8 @@ impl Store {
         limit: i64,
     ) -> Result<Vec<ThreadRow>, sqlx::Error> {
         let mut sql = String::from(
-            "SELECT thread_id, batch_id, status, created_at, updated_at FROM threads WHERE 1=1",
+            "SELECT thread_id, batch_id, source_thread_id, status, created_at, updated_at \
+             FROM threads WHERE 1=1",
         );
         if batch_id.is_some() {
             sql.push_str(" AND batch_id = ?");
@@ -542,7 +573,8 @@ impl Store {
         }
         sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
-        let mut query = sqlx::query_as::<_, (String, Option<String>, String, i64, i64)>(&sql);
+        let mut query =
+            sqlx::query_as::<_, (String, Option<String>, Option<String>, String, i64, i64)>(&sql);
         if let Some(b) = batch_id {
             query = query.bind(b);
         }
@@ -557,9 +589,10 @@ impl Store {
             .map(|r| ThreadRow {
                 thread_id: r.0,
                 batch_id: r.1,
-                status: r.2,
-                created_at: r.3,
-                updated_at: r.4,
+                source_thread_id: r.2,
+                status: r.3,
+                created_at: r.4,
+                updated_at: r.5,
             })
             .collect())
     }
@@ -764,6 +797,50 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Count pending chain work on a thread AND its direct fan-out child threads.
+    ///
+    /// Extends `count_pending_chain_work` to also check threads linked via
+    /// `source_thread_id`. This ensures `--await-chain` blocks until fan-out
+    /// reviewer threads have settled.
+    ///
+    /// **Scope: direct children only.** If a fan-out child itself triggers
+    /// further fan-out (grandchildren), those threads are NOT counted. This is
+    /// acceptable given `max_chain_depth` limits and the current single-depth
+    /// fan-out design.
+    ///
+    /// Returns the sum of:
+    /// - Active executions on the thread and its direct fan-out children.
+    /// - Untriggered handoff messages on the thread and its direct fan-out children.
+    pub async fn count_pending_chain_and_fanout_work(
+        &self,
+        thread_id: &str,
+    ) -> Result<i64, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT
+              (SELECT COUNT(*) FROM executions
+               WHERE thread_id = ?1 AND status IN ('queued', 'picked_up', 'executing'))
+              +
+              (SELECT COUNT(*) FROM messages m
+               WHERE m.thread_id = ?1 AND m.intent = 'handoff'
+               AND NOT EXISTS (SELECT 1 FROM executions e WHERE e.dispatch_message_id = m.id))
+              +
+              (SELECT COUNT(*) FROM executions
+               WHERE thread_id IN (SELECT thread_id FROM threads WHERE source_thread_id = ?1)
+               AND status IN ('queued', 'picked_up', 'executing'))
+              +
+              (SELECT COUNT(*) FROM messages m
+               WHERE m.thread_id IN (SELECT thread_id FROM threads WHERE source_thread_id = ?1)
+               AND m.intent = 'handoff'
+               AND NOT EXISTS (SELECT 1 FROM executions e WHERE e.dispatch_message_id = m.id))
+            AS total_pending",
+        )
+        .bind(thread_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("count_pending_chain_and_fanout_work failed: {}", e))?;
+        Ok(row.0)
+    }
+
     /// Atomically check chain depth and insert a handoff message if under the limit.
     ///
     /// Returns:
@@ -856,46 +933,85 @@ impl Store {
             .await
             .map_err(|e| format!("insert_fanout_handoffs: begin failed: {}", e))?;
 
-        let mut results = Vec::with_capacity(targets.len());
-        let _ = source_thread_id; // reserved for future tracing/audit
-
-        for target_alias in targets {
-            let thread_id = ulid::Ulid::new().to_string();
-
-            // Create the thread with the shared batch_id (fresh ULID, no conflict possible).
-            sqlx::query(
-                "INSERT INTO threads (thread_id, batch_id)
-                 VALUES (?, ?)",
-            )
-            .bind(&thread_id)
-            .bind(batch_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(|e| format!("insert_fanout_handoffs: ensure_thread failed: {}", e))?;
-
-            // Insert the handoff message.
-            let row: (i64,) = sqlx::query_as(
-                "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body, batch_id)
-                 VALUES (?, ?, ?, 'handoff', ?, ?)
-                 RETURNING id",
-            )
-            .bind(&thread_id)
-            .bind(from_alias)
-            .bind(target_alias)
-            .bind(body)
-            .bind(batch_id)
-            .fetch_one(&mut *tx)
-            .await
-            .map_err(|e| format!("insert_fanout_handoffs: insert message failed: {}", e))?;
-
-            results.push((thread_id, row.0));
-        }
+        let results = insert_fanout_threads_in_tx(
+            &mut tx,
+            source_thread_id,
+            batch_id,
+            targets,
+            from_alias,
+            body,
+            "insert_fanout_handoffs",
+        )
+        .await?;
 
         tx.commit()
             .await
             .map_err(|e| format!("insert_fanout_handoffs: commit failed: {}", e))?;
 
         Ok(results)
+    }
+
+    /// Atomically insert a reply message on the source thread AND create fan-out
+    /// threads + handoff messages in a single transaction.
+    ///
+    /// This prevents the race where `--await-chain` sees the reply message but
+    /// the fan-out threads haven't been created yet.
+    ///
+    /// Returns `(reply_message_id, Vec<(fanout_thread_id, fanout_message_id)>)`.
+    pub async fn insert_reply_and_fanout(
+        &self,
+        params: &ReplyAndFanoutParams<'_>,
+    ) -> Result<(i64, Vec<(String, i64)>), String> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("insert_reply_and_fanout: begin failed: {}", e))?;
+
+        // Ensure the reply thread exists.
+        sqlx::query(
+            "INSERT INTO threads (thread_id)
+             VALUES (?)
+             ON CONFLICT(thread_id) DO UPDATE SET
+               updated_at = strftime('%s','now')",
+        )
+        .bind(params.reply_thread_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("insert_reply_and_fanout: ensure_thread failed: {}", e))?;
+
+        // Insert reply message.
+        let reply_row: (i64,) = sqlx::query_as(
+            "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body)
+             VALUES (?, ?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(params.reply_thread_id)
+        .bind(params.reply_from)
+        .bind(params.reply_to)
+        .bind(params.reply_intent)
+        .bind(params.reply_body)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(|e| format!("insert_reply_and_fanout: insert reply failed: {}", e))?;
+
+        // Create fan-out threads + handoff messages.
+        let fanout_results = insert_fanout_threads_in_tx(
+            &mut tx,
+            params.source_thread_id,
+            params.batch_id,
+            params.targets,
+            params.handoff_from,
+            params.handoff_body,
+            "insert_reply_and_fanout",
+        )
+        .await?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("insert_reply_and_fanout: commit failed: {}", e))?;
+
+        Ok((reply_row.0, fanout_results))
     }
 
     pub async fn get_message(&self, id: i64) -> Result<Option<MessageRow>, sqlx::Error> {
@@ -1726,6 +1842,55 @@ fn row_to_message(
         batch_id: r.6,
         created_at: r.7,
     }
+}
+
+/// Create fan-out threads + handoff messages inside an existing transaction.
+///
+/// Shared by `insert_fanout_handoffs` and `insert_reply_and_fanout` to avoid
+/// duplicating the per-target insert loop.
+async fn insert_fanout_threads_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_thread_id: &str,
+    batch_id: &str,
+    targets: &[String],
+    from_alias: &str,
+    body: &str,
+    caller: &str,
+) -> Result<Vec<(String, i64)>, String> {
+    let mut results = Vec::with_capacity(targets.len());
+
+    for target_alias in targets {
+        let thread_id = ulid::Ulid::new().to_string();
+
+        sqlx::query(
+            "INSERT INTO threads (thread_id, batch_id, source_thread_id)
+             VALUES (?, ?, ?)",
+        )
+        .bind(&thread_id)
+        .bind(batch_id)
+        .bind(source_thread_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| format!("{}: create fanout thread failed: {}", caller, e))?;
+
+        let row: (i64,) = sqlx::query_as(
+            "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body, batch_id)
+             VALUES (?, ?, ?, 'handoff', ?, ?)
+             RETURNING id",
+        )
+        .bind(&thread_id)
+        .bind(from_alias)
+        .bind(target_alias)
+        .bind(body)
+        .bind(batch_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(|e| format!("{}: insert fanout message failed: {}", caller, e))?;
+
+        results.push((thread_id, row.0));
+    }
+
+    Ok(results)
 }
 
 /// Raw row struct for execution queries.
