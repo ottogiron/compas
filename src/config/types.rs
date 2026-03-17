@@ -283,6 +283,17 @@ fn default_retry_backoff_secs() -> u64 {
     30
 }
 
+/// Target for auto-handoff routing.
+/// Deserializes from either a single string or a list of strings.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum HandoffTarget {
+    /// Route to a single agent (or "operator" to stop chain).
+    Single(String),
+    /// Fan-out: create separate threads per target, linked by batch.
+    FanOut(Vec<String>),
+}
+
 /// Handoff routing configuration for automatic agent chaining.
 ///
 /// When an agent completes successfully, the worker checks `on_response` and
@@ -290,8 +301,9 @@ fn default_retry_backoff_secs() -> u64 {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct HandoffConfig {
     /// Agent alias (or "operator") to route to when agent completes successfully.
+    /// Accepts a single string or a list of strings for fan-out.
     #[serde(default)]
-    pub on_response: Option<String>,
+    pub on_response: Option<HandoffTarget>,
     /// Custom prompt prepended to the auto-generated handoff context.
     #[serde(default)]
     pub handoff_prompt: Option<String>,

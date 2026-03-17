@@ -1,4 +1,4 @@
-use super::types::{AgentRole, OrchestratorConfig};
+use super::types::{AgentRole, HandoffTarget, OrchestratorConfig};
 use crate::error::{OrchestratorError, Result};
 use std::collections::HashSet;
 
@@ -103,22 +103,59 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 }
             }
 
-            // Validate on_response target.
-            if let Some(ref alias) = handoff.on_response {
-                // Self-loop detection.
-                if alias == &agent.alias {
-                    return Err(OrchestratorError::Config(format!(
-                        "agent '{}' handoff.on_response points to itself (self-loop not allowed)",
-                        agent.alias
-                    )));
-                }
-
-                // Target must be "operator" or a valid agent alias.
-                if alias != "operator" && !all_aliases.contains(alias.as_str()) {
-                    return Err(OrchestratorError::Config(format!(
-                        "agent '{}' handoff.on_response references unknown agent alias '{}'",
-                        agent.alias, alias
-                    )));
+            // Validate on_response target(s).
+            if let Some(ref target) = handoff.on_response {
+                match target {
+                    HandoffTarget::Single(alias) => {
+                        if alias == &agent.alias {
+                            return Err(OrchestratorError::Config(format!(
+                                "agent '{}' handoff.on_response points to itself (self-loop not allowed)",
+                                agent.alias
+                            )));
+                        }
+                        if alias != "operator" && !all_aliases.contains(alias.as_str()) {
+                            return Err(OrchestratorError::Config(format!(
+                                "agent '{}' handoff.on_response references unknown agent alias '{}'",
+                                agent.alias, alias
+                            )));
+                        }
+                    }
+                    HandoffTarget::FanOut(aliases) => {
+                        if aliases.is_empty() {
+                            return Err(OrchestratorError::Config(format!(
+                                "agent '{}' handoff.on_response fan-out list must not be empty",
+                                agent.alias
+                            )));
+                        }
+                        let mut seen = HashSet::new();
+                        for alias in aliases {
+                            if alias == "operator" {
+                                return Err(OrchestratorError::Config(format!(
+                                    "agent '{}' handoff.on_response fan-out must not contain 'operator' \
+                                     (operator is a chain-stop target, not a dispatch target)",
+                                    agent.alias
+                                )));
+                            }
+                            if !seen.insert(alias.as_str()) {
+                                return Err(OrchestratorError::Config(format!(
+                                    "agent '{}' handoff.on_response fan-out contains duplicate target '{}'",
+                                    agent.alias, alias
+                                )));
+                            }
+                            if alias == &agent.alias {
+                                return Err(OrchestratorError::Config(format!(
+                                    "agent '{}' handoff.on_response points to itself (self-loop not allowed)",
+                                    agent.alias
+                                )));
+                            }
+                            if !all_aliases.contains(alias.as_str()) {
+                                return Err(OrchestratorError::Config(format!(
+                                    "agent '{}' handoff.on_response references unknown agent alias '{}'",
+                                    agent.alias, alias
+                                )));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -231,7 +268,7 @@ fn is_valid_intent_slug(intent: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::{AgentConfig, AgentRole, OrchestratorConfig};
+    use crate::config::types::{AgentConfig, AgentRole, HandoffTarget, OrchestratorConfig};
     use std::path::PathBuf;
 
     fn minimal_config() -> OrchestratorConfig {
@@ -715,15 +752,10 @@ agents:
 "#;
         let config = crate::config::load_config_from_str(yaml).unwrap();
         assert!(config.agents[0].handoff.is_some());
-        assert_eq!(
-            config.agents[0]
-                .handoff
-                .as_ref()
-                .unwrap()
-                .on_response
-                .as_deref(),
-            Some("reviewer")
-        );
+        assert!(matches!(
+            config.agents[0].handoff.as_ref().unwrap().on_response,
+            Some(HandoffTarget::Single(ref s)) if s == "reviewer"
+        ));
     }
 
     #[test]
@@ -838,5 +870,157 @@ agents:
 "#;
         let config = crate::config::load_config_from_str(yaml).unwrap();
         assert!(config.agents[0].handoff.is_none());
+    }
+
+    // ── Fan-out validation tests (ORCH-HANDOFF-2) ──
+
+    #[test]
+    fn test_handoff_fanout_valid() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - reviewer
+        - reviewer-2
+  - alias: reviewer
+    backend: stub
+  - alias: reviewer-2
+    backend: stub
+"#;
+        assert!(crate::config::load_config_from_str(yaml).is_ok());
+    }
+
+    #[test]
+    fn test_handoff_fanout_single_element_valid() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - reviewer
+  - alias: reviewer
+    backend: stub
+"#;
+        assert!(crate::config::load_config_from_str(yaml).is_ok());
+    }
+
+    #[test]
+    fn test_handoff_fanout_duplicates_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - reviewer
+        - reviewer
+  - alias: reviewer
+    backend: stub
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("duplicate target"));
+    }
+
+    #[test]
+    fn test_handoff_fanout_self_loop_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - coder
+  - alias: reviewer
+    backend: stub
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("self-loop"));
+    }
+
+    #[test]
+    fn test_handoff_fanout_operator_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - reviewer
+        - operator
+  - alias: reviewer
+    backend: stub
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("must not contain 'operator'"));
+    }
+
+    #[test]
+    fn test_handoff_fanout_empty_rejected() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: []
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("must not be empty"));
+    }
+
+    #[test]
+    fn test_handoff_fanout_yaml_roundtrip() {
+        // String form
+        let yaml_single = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response: reviewer
+  - alias: reviewer
+    backend: stub
+"#;
+        let config = crate::config::load_config_from_str(yaml_single).unwrap();
+        let handoff = config.agents[0].handoff.as_ref().unwrap();
+        assert!(matches!(
+            handoff.on_response,
+            Some(HandoffTarget::Single(ref s)) if s == "reviewer"
+        ));
+
+        // List form
+        let yaml_list = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+    handoff:
+      on_response:
+        - reviewer
+        - reviewer-2
+  - alias: reviewer
+    backend: stub
+  - alias: reviewer-2
+    backend: stub
+"#;
+        let config = crate::config::load_config_from_str(yaml_list).unwrap();
+        let handoff = config.agents[0].handoff.as_ref().unwrap();
+        assert!(matches!(&handoff.on_response, Some(HandoffTarget::FanOut(v)) if v.len() == 2));
     }
 }

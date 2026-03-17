@@ -838,6 +838,66 @@ impl Store {
         Ok(Some(row.0))
     }
 
+    /// Create N new threads + N handoff messages in a single transaction (fan-out).
+    ///
+    /// Each created thread gets an auto-generated ULID thread_id and the shared
+    /// `batch_id`. Returns vec of `(thread_id, message_id)` pairs in target order.
+    pub async fn insert_fanout_handoffs(
+        &self,
+        source_thread_id: &str,
+        batch_id: &str,
+        targets: &[String],
+        from_alias: &str,
+        body: &str,
+    ) -> Result<Vec<(String, i64)>, String> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("insert_fanout_handoffs: begin failed: {}", e))?;
+
+        let mut results = Vec::with_capacity(targets.len());
+        let _ = source_thread_id; // reserved for future tracing/audit
+
+        for target_alias in targets {
+            let thread_id = ulid::Ulid::new().to_string();
+
+            // Create the thread with the shared batch_id (fresh ULID, no conflict possible).
+            sqlx::query(
+                "INSERT INTO threads (thread_id, batch_id)
+                 VALUES (?, ?)",
+            )
+            .bind(&thread_id)
+            .bind(batch_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| format!("insert_fanout_handoffs: ensure_thread failed: {}", e))?;
+
+            // Insert the handoff message.
+            let row: (i64,) = sqlx::query_as(
+                "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body, batch_id)
+                 VALUES (?, ?, ?, 'handoff', ?, ?)
+                 RETURNING id",
+            )
+            .bind(&thread_id)
+            .bind(from_alias)
+            .bind(target_alias)
+            .bind(body)
+            .bind(batch_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| format!("insert_fanout_handoffs: insert message failed: {}", e))?;
+
+            results.push((thread_id, row.0));
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("insert_fanout_handoffs: commit failed: {}", e))?;
+
+        Ok(results)
+    }
+
     pub async fn get_message(&self, id: i64) -> Result<Option<MessageRow>, sqlx::Error> {
         let row: Option<(
             i64,

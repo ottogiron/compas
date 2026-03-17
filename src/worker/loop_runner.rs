@@ -19,7 +19,7 @@ use std::time::Duration;
 use tokio::sync::Semaphore;
 
 use crate::backend::registry::BackendRegistry;
-use crate::config::types::{AgentConfig, AgentRole};
+use crate::config::types::{AgentConfig, AgentRole, HandoffTarget};
 use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::store::Store;
@@ -865,18 +865,60 @@ async fn maybe_auto_handoff(
         None => return,
     };
 
-    // Single route: on_response. Reply intent is irrelevant for routing.
-    let target_alias = match handoff.on_response.as_deref() {
-        Some(alias) if alias != "operator" => alias,
-        _ => return, // No route or "operator" → chain stops.
+    let target = match handoff.on_response.as_ref() {
+        Some(t) => t,
+        None => return,
     };
 
-    // Build handoff message body: include original dispatch context + current reply.
-    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
-        Ok(msgs) => {
-            // First message is typically the original dispatch.
-            msgs.first().map(|m| m.body.clone()).unwrap_or_default()
+    match target {
+        HandoffTarget::Single(alias) if alias == "operator" => {}
+
+        HandoffTarget::Single(alias) => {
+            handle_single_handoff(
+                store,
+                event_bus,
+                output,
+                handoff,
+                alias,
+                reply_intent,
+                reply_body,
+            )
+            .await;
         }
+        HandoffTarget::FanOut(aliases) if aliases.len() == 1 => {
+            let alias = &aliases[0];
+            if alias == "operator" {
+                return;
+            }
+            handle_single_handoff(
+                store,
+                event_bus,
+                output,
+                handoff,
+                alias,
+                reply_intent,
+                reply_body,
+            )
+            .await;
+        }
+        HandoffTarget::FanOut(aliases) => {
+            handle_fanout_handoff(store, event_bus, output, handoff, aliases, reply_body).await;
+        }
+    }
+}
+
+/// Handle a single-target auto-handoff with chain depth checking.
+async fn handle_single_handoff(
+    store: &Store,
+    event_bus: &EventBus,
+    output: &TriggerOutput,
+    handoff: &crate::config::types::HandoffConfig,
+    target_alias: &str,
+    reply_intent: &str,
+    reply_body: &str,
+) {
+    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
+        Ok(msgs) => msgs.first().map(|m| m.body.clone()).unwrap_or_default(),
         Err(_) => String::new(),
     };
 
@@ -890,7 +932,6 @@ async fn maybe_auto_handoff(
         dispatch_context, output.agent_alias, reply_body
     ));
 
-    // Atomic depth check + insert (ORCH-CHAIN-1 H-2 fix: prevents TOCTOU race).
     let max_depth = handoff.max_chain_depth.unwrap_or(3) as i64;
     match store
         .insert_handoff_if_under_depth(
@@ -978,6 +1019,90 @@ async fn maybe_auto_handoff(
                 target = %target_alias,
                 error = %e,
                 "failed to insert handoff message"
+            );
+        }
+    }
+}
+
+/// Handle fan-out handoff: create separate threads per target, linked by batch.
+async fn handle_fanout_handoff(
+    store: &Store,
+    event_bus: &EventBus,
+    output: &TriggerOutput,
+    handoff: &crate::config::types::HandoffConfig,
+    targets: &[String],
+    reply_body: &str,
+) {
+    let dispatch_context = match store.get_thread_messages(&output.thread_id).await {
+        Ok(msgs) => msgs.first().map(|m| m.body.clone()).unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+
+    let mut handoff_body = String::new();
+    if let Some(ref prompt) = handoff.handoff_prompt {
+        handoff_body.push_str(prompt);
+        handoff_body.push_str("\n\n");
+    }
+    handoff_body.push_str(&format!(
+        "## Original dispatch\n{}\n\n## Reply from {}\n{}",
+        dispatch_context, output.agent_alias, reply_body
+    ));
+
+    // Determine batch_id: inherit from originating thread or generate.
+    let batch_id = match store.get_thread(&output.thread_id).await {
+        Ok(Some(t)) => t
+            .batch_id
+            .unwrap_or_else(|| format!("fanout-{}", output.thread_id)),
+        Ok(None) => format!("fanout-{}", output.thread_id),
+        Err(e) => {
+            tracing::warn!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "failed to fetch thread for batch_id; generating fallback"
+            );
+            format!("fanout-{}", output.thread_id)
+        }
+    };
+
+    match store
+        .insert_fanout_handoffs(
+            &output.thread_id,
+            &batch_id,
+            targets,
+            &output.agent_alias,
+            &handoff_body,
+        )
+        .await
+    {
+        Ok(results) => {
+            for (idx, (thread_id, message_id)) in results.iter().enumerate() {
+                let target_alias = &targets[idx];
+                tracing::info!(
+                    source_thread_id = %output.thread_id,
+                    fanout_thread_id = %thread_id,
+                    fanout_message_id = %message_id,
+                    from = %output.agent_alias,
+                    to = %target_alias,
+                    batch_id = %batch_id,
+                    "fan-out handoff dispatched"
+                );
+                event_bus.emit(OrchestratorEvent::MessageReceived {
+                    thread_id: thread_id.clone(),
+                    message_id: *message_id,
+                    from_alias: output.agent_alias.clone(),
+                    intent: "handoff".to_string(),
+                });
+                event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+                    thread_id: thread_id.clone(),
+                    new_status: "Active".to_string(),
+                });
+            }
+        }
+        Err(e) => {
+            tracing::error!(
+                thread_id = %output.thread_id,
+                error = %e,
+                "fan-out handoff failed"
             );
         }
     }

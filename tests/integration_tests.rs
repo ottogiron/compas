@@ -2954,7 +2954,7 @@ mod prompt_hash_tests {
 
 mod handoff_chain_tests {
     use super::*;
-    use aster_orch::config::types::HandoffConfig;
+    use aster_orch::config::types::{HandoffConfig, HandoffTarget};
     use aster_orch::events::{EventBus, OrchestratorEvent};
     use aster_orch::worker::WorkerRunner;
     use tokio::sync::Semaphore;
@@ -2982,7 +2982,7 @@ mod handoff_chain_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: Some(HandoffConfig {
-                        on_response: Some("agent-b".to_string()),
+                        on_response: Some(HandoffTarget::Single("agent-b".to_string())),
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
@@ -3343,12 +3343,18 @@ agents:
 
         let coder = &config.agents[0];
         let handoff = coder.handoff.as_ref().unwrap();
-        assert_eq!(handoff.on_response.as_deref(), Some("reviewer"));
+        assert!(matches!(
+            handoff.on_response,
+            Some(HandoffTarget::Single(ref s)) if s == "reviewer"
+        ));
         assert_eq!(handoff.max_chain_depth, Some(5));
 
         let reviewer = &config.agents[1];
         let handoff = reviewer.handoff.as_ref().unwrap();
-        assert_eq!(handoff.on_response.as_deref(), Some("operator"));
+        assert!(matches!(
+            handoff.on_response,
+            Some(HandoffTarget::Single(ref s)) if s == "operator"
+        ));
     }
 
     #[tokio::test]
@@ -3525,7 +3531,10 @@ agents:
 
         let coder = &config.agents[0];
         let handoff = coder.handoff.as_ref().unwrap();
-        assert_eq!(handoff.on_response.as_deref(), Some("reviewer"));
+        assert!(matches!(
+            handoff.on_response,
+            Some(HandoffTarget::Single(ref s)) if s == "reviewer"
+        ));
         assert!(
             handoff
                 .handoff_prompt
@@ -3827,5 +3836,412 @@ mod await_chain_wait_tests {
             trigger_intents: vec![],
             await_chain: false,
         };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fan-Out Handoff Tests (ORCH-HANDOFF-2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod fanout_tests {
+    use super::*;
+    use aster_orch::config::types::{HandoffConfig, HandoffTarget};
+    use aster_orch::events::{EventBus, OrchestratorEvent};
+    use aster_orch::worker::WorkerRunner;
+    use tokio::sync::Semaphore;
+
+    fn fanout_config() -> OrchestratorConfig {
+        OrchestratorConfig {
+            target_repo_root: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/aster-orch-test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![
+                AgentConfig {
+                    alias: "agent-a".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: Some(HandoffConfig {
+                        on_response: Some(HandoffTarget::FanOut(vec![
+                            "reviewer".to_string(),
+                            "reviewer-2".to_string(),
+                        ])),
+                        handoff_prompt: None,
+                        max_chain_depth: Some(3),
+                    }),
+                },
+                AgentConfig {
+                    alias: "reviewer".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: None,
+                },
+                AgentConfig {
+                    alias: "reviewer-2".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: None,
+                },
+            ],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fanout_creates_separate_threads() {
+        let store = test_store().await;
+        let config = fanout_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "fanout-test-1";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature X",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for MessageReceived events: reply + 2 fan-out handoffs
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 3 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(
+            message_count >= 3,
+            "expected 3 MessageReceived events (reply + 2 fan-out), got {}",
+            message_count
+        );
+
+        // Find the fan-out threads by batch_id
+        let batch_id = format!("fanout-{}", thread_id);
+        let threads = store.list_threads(Some(&batch_id), None, 10).await.unwrap();
+        assert_eq!(
+            threads.len(),
+            2,
+            "expected 2 fan-out threads, got {}",
+            threads.len()
+        );
+
+        // Each thread should have a handoff message
+        for thread in &threads {
+            let msgs = store.get_thread_messages(&thread.thread_id).await.unwrap();
+            let handoff = msgs.iter().find(|m| m.intent == "handoff");
+            assert!(
+                handoff.is_some(),
+                "expected handoff message in thread {}",
+                thread.thread_id
+            );
+            assert_eq!(thread.batch_id.as_deref(), Some(batch_id.as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fanout_single_element_degrades_to_single() {
+        let store = test_store().await;
+        let mut config = fanout_config();
+        // Single-element FanOut
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::FanOut(vec!["reviewer".to_string()])),
+            handoff_prompt: None,
+            max_chain_depth: Some(3),
+        });
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "fanout-single-test";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for reply + handoff (on same thread, like Single behavior)
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(
+            message_count >= 2,
+            "expected reply + handoff, got {}",
+            message_count
+        );
+
+        // Handoff should be on the SAME thread (not a new one)
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "reviewer");
+        assert!(handoff.is_some(), "expected handoff on same thread");
+    }
+
+    #[tokio::test]
+    async fn test_fanout_inherits_batch_id() {
+        let store = test_store().await;
+
+        let source_thread = "fanout-inherit-test";
+        let batch_id = "existing-batch-123";
+
+        // Create thread with existing batch_id
+        store
+            .ensure_thread(source_thread, Some(batch_id))
+            .await
+            .unwrap();
+
+        // Use store method directly
+        let results = store
+            .insert_fanout_handoffs(
+                source_thread,
+                batch_id,
+                &["reviewer".to_string(), "reviewer-2".to_string()],
+                "agent-a",
+                "handoff body",
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(results.len(), 2);
+
+        for (thread_id, _msg_id) in &results {
+            let thread = store.get_thread(thread_id).await.unwrap().unwrap();
+            assert_eq!(
+                thread.batch_id.as_deref(),
+                Some(batch_id),
+                "fan-out thread should inherit batch_id"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fanout_generates_batch_id() {
+        let store = test_store().await;
+        let config = fanout_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Thread without batch_id
+        let thread_id = "fanout-gen-batch-test";
+        let msg_id = store
+            .insert_message(
+                thread_id, "operator", "agent-a", "dispatch", "do work", None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 3 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+
+        let expected_batch = format!("fanout-{}", thread_id);
+        let threads = store
+            .list_threads(Some(&expected_batch), None, 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            threads.len(),
+            2,
+            "expected 2 fan-out threads with generated batch_id"
+        );
+        for t in &threads {
+            assert_eq!(t.batch_id.as_deref(), Some(expected_batch.as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fanout_handoff_prompt_applied() {
+        let store = test_store().await;
+        let mut config = fanout_config();
+        config.agents[0].handoff.as_mut().unwrap().handoff_prompt =
+            Some("Review for correctness.".to_string());
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "fanout-prompt-test";
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature",
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 3 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+
+        let batch_id = format!("fanout-{}", thread_id);
+        let threads = store.list_threads(Some(&batch_id), None, 10).await.unwrap();
+
+        for thread in &threads {
+            let msgs = store.get_thread_messages(&thread.thread_id).await.unwrap();
+            let handoff = msgs.iter().find(|m| m.intent == "handoff").unwrap();
+            assert!(
+                handoff.body.starts_with("Review for correctness."),
+                "handoff body should start with custom prompt, got: {}",
+                &handoff.body[..handoff.body.len().min(100)]
+            );
+        }
     }
 }
