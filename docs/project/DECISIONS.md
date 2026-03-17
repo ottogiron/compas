@@ -177,9 +177,7 @@ Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., imple
 
 **Decision:** Added a `handoff` config section to agent definitions with `on_response` routing and a `max_chain_depth` safety limit (default: 3).
 
-**Amendment (2026-03):** Simplified from 5 routing fields (`on_response`, `on_review_request`, `on_changes_requested`, `on_escalation`) to 2 fields (`on_response`, `max_chain_depth`) as part of intent simplification (see ADR-015). `HandoffTarget` enum removed — `on_response` is now a plain `String` (agent alias or `"operator"`).
-
-**Amendment (2026-03):** Extended `on_response` to accept a `String` or `Vec<String>` via an untagged `HandoffTarget` enum for backward-compatible YAML deserialization (single target stays a plain string, list syntax enables fan-out). Added `handoff_prompt: Option<String>` field — custom text prepended to the auto-generated handoff context before the originating thread transcript. Added `--await-chain` flag to the `aster_orch wait` CLI subcommand for blocking until all threads in the chain (including fan-out threads) have settled.
+**Amendment (2026-03):** Simplified from 5 routing fields to 3: `on_response` (now `HandoffTarget` — string or list via serde untagged enum), `handoff_prompt` (custom text prepended to handoff context), `max_chain_depth` (safety limit). Removed agent-side intent management (see ADR-015). Added fan-out: when `on_response` is a list, each target gets its own batch-linked thread. Added `--await-chain` CLI wait flag for blocking until a single thread's chain settles (fan-out batch-level wait is Phase 2).
 
 **Key choices:**
 
@@ -200,13 +198,14 @@ Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., imple
 
 Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from agent output) was unreliable and created cognitive overhead. Agents had to follow a REPLY PROTOCOL, and `parse_intent_from_text()` attempted to extract structured intents from free-form text — a fragile heuristic.
 
-**Decision:** Removed `parse_intent_from_text()`. All successful agent replies automatically get `response` intent. Routing is exclusively via the `on_response` handoff config field. `HandoffConfig` simplified from 5 fields to 2 (`on_response` + `max_chain_depth`). `changes-requested` added to the default `trigger_intents` list so operator change-request dispatches trigger execution without extra config.
+**Decision:** Removed `parse_intent_from_text()`. All successful agent replies automatically get `response` intent. Routing is exclusively via the `on_response` handoff config field. `HandoffConfig` simplified from 5 intent-based fields to 3 (`on_response` + `handoff_prompt` + `max_chain_depth`). `changes-requested` added to the default `trigger_intents` list so operator change-request dispatches trigger execution without extra config.
 
 **What was removed:**
 
 - `parse_intent_from_text()` function and all its tests
-- `HandoffTarget` enum — `on_response` is now a plain `String`
 - `on_review_request`, `on_changes_requested`, `on_escalation` handoff fields
 - Agent REPLY PROTOCOL requirement — agents reply naturally
+
+**Note:** `HandoffTarget` enum was re-introduced in ORCH-HANDOFF-2 with a different shape (`Single(String)` / `FanOut(Vec<String>)`) for fan-out support. It is not the same as the original `Gated` variant that was removed.
 
 **Rationale:** Agents are pure workers. Intent management and routing are config/operator concerns, not agent concerns. This eliminates a class of bugs where agents produced malformed intent JSON, and simplifies agent prompts by removing protocol overhead.

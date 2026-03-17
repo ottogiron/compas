@@ -88,19 +88,21 @@ The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only
 ### Pre-push Checklist (Mandatory)
 
 1. `make fmt` — apply formatting
-2. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test`). **Do not push if this fails.**
-3. If working as a submodule, push here first, then update the pointer in aster
+2. Verify `CHANGELOG.md` has an entry under `[Unreleased]` for the change (no CI enforcement — agent discipline only)
+3. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test` + `lint-md`). **Do not push if this fails.**
+4. If working as a submodule, push here first, then update the pointer in aster
 
 ## Impact Update Matrix
 
 If you change a layer, update/review the paired artifacts in the same commit set.
 
-- MCP tools (`src/mcp/*`): `README.md`, integration tests
-- Worker/executor (`src/worker/*`): integration tests, `docs/project/DECISIONS.md` for behavioral changes
-- Dashboard (`src/dashboard/*`): visual verification
-- Backends (`src/backend/*`): backend-specific tests, `README.md`
-- Config (`src/config/*`): validation tests, `README.md`
-- Store/DB (`src/store/*`): migration handling, integration tests
+- MCP tools (`src/mcp/*`): `README.md`, integration tests, `CHANGELOG.md`
+- Worker/executor (`src/worker/*`): integration tests, `docs/project/DECISIONS.md` for behavioral changes, `CHANGELOG.md`
+- Dashboard (`src/dashboard/*`): visual verification, `CHANGELOG.md`
+- Backends (`src/backend/*`): backend-specific tests, `README.md`, `CHANGELOG.md`
+- Config (`src/config/*`): validation tests, `README.md`, `CHANGELOG.md`
+- Store/DB (`src/store/*`): migration handling, integration tests, `CHANGELOG.md`
+- ADRs or known-issues updates (`docs/project/DECISIONS.md`, `docs/project/known-issues.md`): `CHANGELOG.md`
 
 ## Development Workflow
 
