@@ -55,7 +55,7 @@ agents:
     prompt: >
       You are a development agent. Follow the project's AGENTS.md.
     # handoff:                          # Auto-handoff: route agent replies to another agent
-    #   on_response: reviewer           # Route replies to the reviewer agent
+    #   on_response: reviewer           # Single target, or list for fan-out: [reviewer, reviewer-2]
     #   max_chain_depth: 3              # Stop after 3 auto-handoffs, force operator review
 ```
 
@@ -200,7 +200,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 
 ## MCP Tools
 
-For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300`. The MCP transport is unsuitable for long-blocking calls.
+For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300`. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls.
 
 ### Core
 
@@ -267,7 +267,9 @@ agents:
     # max_retries: 0              # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30      # Base delay between retries (doubles each attempt)
     # handoff:                          # Auto-handoff chain routing
-    #   on_response: other-agent        # Route agent replies to another agent (alias or "operator")
+    #   on_response: other-agent        # String (single target) or list (fan-out): [agent-a, agent-b]
+    #   handoff_prompt: |               # Custom prompt prepended to auto-generated handoff context
+    #     Review for correctness, test coverage, and AGENTS.md compliance.
     #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
 ```
 
@@ -323,6 +325,8 @@ agents:
     prompt: "You implement changes. Follow the project's AGENTS.md."
     handoff:
       on_response: reviewer            # Dev's replies go to reviewer
+      handoff_prompt: |                # Custom instructions prepended to handoff context
+        Review for correctness, test coverage, and AGENTS.md compliance.
 
   - alias: reviewer
     backend: claude
@@ -332,7 +336,20 @@ agents:
       on_response: dev                 # Reviewer's replies go back to dev
 ```
 
+**Fan-out:** `on_response` accepts a list to route one agent's output to multiple agents simultaneously:
+
+```yaml
+    handoff:
+      on_response: [reviewer, reviewer-2]   # Fan-out to two reviewers in parallel
+```
+
+Fan-out creates one new batch-linked thread per target agent. All fan-out threads share the same batch ID, so you can track aggregate results with `orch_batch_status`. The operator is the join point — use `orch_batch_status` to see when all reviewers have finished, then decide next steps.
+
+**Custom prompt:** `handoff_prompt` text is prepended to the auto-generated handoff context (which includes the originating thread's transcript). Use it to give the receiving agent specific instructions for that handoff.
+
 **Chain depth limit:** `max_chain_depth` (default: 3) caps the number of consecutive auto-handoffs on a thread. When the limit is reached, the chain stops and a review-request is inserted for the operator. This prevents runaway loops.
+
+**Waiting for chain settlement:** Use `aster_orch wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
 
 **Viewing chains:** In the dashboard, open a thread's conversation (`Enter` on the execution) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
 

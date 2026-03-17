@@ -82,7 +82,7 @@ When `orch_dispatch` is called:
    - All agent replies get `response` intent (agents reply naturally, no intent parsing)
    - Execution status updated (completed/failed/timed_out)
    - Reply message inserted into `messages` table
-   - If agent has `on_response` handoff config, a new `handoff` message is auto-inserted targeting the next agent, triggering a new execution on the next poll cycle. Chain depth is tracked by counting `handoff` messages on the thread; when `max_chain_depth` is reached, a review-request to the operator is inserted instead.
+   - If agent has `on_response` handoff config, a new `handoff` message is auto-inserted targeting the next agent, triggering a new execution on the next poll cycle. When `on_response` is a list (fan-out), a separate batch-linked thread is created per target agent. Chain depth is tracked by counting `handoff` messages on the thread; when `max_chain_depth` is reached, a review-request to the operator is inserted instead.
 
 ## Worker Lifecycle
 
@@ -124,6 +124,7 @@ queued → picked_up → executing → completed
 - **Retry via store re-enqueue** — failed executions with transient errors are retried by inserting a new queued execution with a `retry_after` timestamp. The poll loop claims retries only when the backoff expires. No synchronous sleep.
 - **Execution telemetry via line-level channel** — backend stdout lines flow through a `sync_channel(128)` from the reader thread to a tokio consumer that parses JSONL and batch-inserts events.
 - **Auto-handoff chains** — config-driven agent-to-agent routing via `on_response`. All agent replies get `response` intent automatically (no agent-side intent parsing). Chain depth is tracked by counting `handoff`-intent messages on the thread. Depth check and handoff insert run in a single SQL transaction to prevent TOCTOU races. Forced operator escalation at `max_chain_depth` (default: 3).
+- **Fan-out via batch-linked threads** — when `on_response` is a list, each target agent gets its own thread, all sharing a batch ID. Operator is the join point; `orch_batch_status` aggregates results. Parallel execution, not same-thread concurrency (ADR-014).
 
 ## Module Structure
 
