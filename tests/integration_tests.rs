@@ -3739,17 +3739,16 @@ mod await_chain_wait_tests {
             .unwrap()
             .expect("execution should be created");
 
-        // Background task: complete the execution and insert reviewer's response
+        // Background task: execute and insert reviewer's response, then mark complete.
+        // Note: in production, the worker inserts the reply message BEFORE marking
+        // the execution complete. The test must follow the same order to avoid the
+        // race window where the execution is completed but the reply isn't yet visible.
         let store2 = store.clone();
         let exec_id2 = exec_id.clone();
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(400)).await;
             store2.claim_next_execution(10).await.unwrap();
             store2.mark_execution_executing(&exec_id2).await.unwrap();
-            store2
-                .complete_execution(&exec_id2, Some(0), None, None, 200)
-                .await
-                .unwrap();
             store2
                 .insert_message(
                     "t-chain",
@@ -3759,6 +3758,10 @@ mod await_chain_wait_tests {
                     "review done",
                     None,
                 )
+                .await
+                .unwrap();
+            store2
+                .complete_execution(&exec_id2, Some(0), None, None, 200)
                 .await
                 .unwrap();
         });

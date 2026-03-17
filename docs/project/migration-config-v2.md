@@ -17,9 +17,11 @@ The production config moved from inside the aster project repo to a standard hom
 **Also changed:**
 
 - REPLY PROTOCOL removed from all agent prompts (agents reply naturally, no JSON intent lines)
-- `HandoffConfig` simplified to 2 fields: `on_response` + `max_chain_depth`
+- `HandoffConfig` has 3 fields: `on_response` (string or list), `handoff_prompt` (optional custom instructions), `max_chain_depth`
+- `on_response` supports fan-out: `on_response: [reviewer, reviewer-2]` creates batch-linked threads per target
 - New agent: `orch-reviewer` (code reviewer for aster-orch work)
 - Auto-handoff chains: `orch-dev → orch-reviewer → operator`
+- New CLI flag: `--await-chain` on `aster_orch wait` — blocks until the full handoff chain settles
 
 ## Migration Steps
 
@@ -85,7 +87,7 @@ Agents no longer need this — all routing is handled by config. See ADR-015.
 
 **d) Update handoff config** (if you had one):
 
-The `HandoffConfig` is now 2 fields only. Remove any `on_review_request`, `on_escalation`, `on_changes_requested` fields:
+The `HandoffConfig` now has 3 fields: `on_response`, `handoff_prompt`, and `max_chain_depth`. Remove any `on_review_request`, `on_escalation`, `on_changes_requested` fields:
 
 ```yaml
 # Before
@@ -94,9 +96,18 @@ handoff:
   on_response: operator
   max_chain_depth: 5
 
-# After
+# After — single target
 handoff:
   on_response: orch-reviewer   # or "operator" or another agent alias
+  handoff_prompt: |             # optional: custom instructions for the receiving agent
+    Review for correctness, test coverage, and AGENTS.md compliance.
+  max_chain_depth: 2
+
+# After — fan-out to multiple reviewers
+handoff:
+  on_response: [reviewer, reviewer-2]   # creates batch-linked threads per target
+  handoff_prompt: |
+    Review for correctness and test coverage.
   max_chain_depth: 2
 ```
 
@@ -188,6 +199,13 @@ aster_orch mcp-server --help   # should not complain about missing config
 orch_health()                  # all agents healthy
 orch_list_agents()             # should include orch-reviewer
 orch_metrics()                 # should show historical data (if DB was copied)
+
+# Test auto-handoff chain:
+orch_dispatch(from="operator", to="orch-dev", intent="dispatch", body="Smoke test")
+# orch-dev completes → auto-handoffs to orch-reviewer → reviewer completes → operator decides
+
+# Wait for full chain to settle:
+# aster_orch wait --thread-id <id> --await-chain --since db:<msg_id> --timeout 300
 ```
 
 ## Rollback
