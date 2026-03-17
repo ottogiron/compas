@@ -1,6 +1,6 @@
 # Aster-Orch Handoff Chains (Phase 1)
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-16
 
@@ -68,7 +68,7 @@ Created: 2026-03-16
   - `make verify` passes
   - Integration tests: basic chain, loop prevention at max_depth, escalation to operator
   - Config validation tests: gated rejection, invalid target, depth bounds
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-CHAIN-2 — Diagnostics and Dashboard Integration
 
@@ -92,7 +92,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Manual: run a handoff chain, view in dashboard conversation view, check orch_diagnose output
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 

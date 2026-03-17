@@ -33,7 +33,7 @@ This is a standalone repository (`ottogiron/aster-orch`).
 make build          # cargo build
 make test           # cargo test
 make fmt            # cargo fmt --all
-make verify         # fmt-check + clippy + test (matches CI)
+make verify         # fmt-check + clippy + test + lint-md (matches CI)
 make setup-hooks    # install pre-commit hook
 make worker         # run worker
 make dashboard      # run dashboard

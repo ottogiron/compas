@@ -1,6 +1,6 @@
 # Aster-Orch Config Location Migration
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-16
 
@@ -35,7 +35,7 @@ Created: 2026-03-16
   - `make verify` passes
   - Unit test: `effective_config_path` returns expanded home path
   - Manual: run `aster_orch mcp-server` with no flags, verify it looks for `~/.aster-orch/config.yaml`
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-CONFIG-2 — Update Docs, ADR, and MCP Server Configs
 
@@ -60,7 +60,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Grep for old production config path — no stale references
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 

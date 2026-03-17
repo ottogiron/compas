@@ -1,6 +1,6 @@
 # Aster-Orch Handoff Extensions (Phase 1)
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-16
 
@@ -32,7 +32,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Integration test: dispatch to agent with `handoff_prompt`, verify handoff message body
-- Status: In Progress
+- Status: Done
 
 ## Ticket ORCH-HANDOFF-2 — Multi-Target Fan-Out
 
@@ -73,7 +73,7 @@ Created: 2026-03-16
   - `make verify` passes
   - Integration test: fan-out dispatch, verify thread count, batch linkage, message content
   - Config test: YAML roundtrip for both Single and FanOut variants
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-HANDOFF-3 — `--await-chain` CLI Wait Flag
 
@@ -111,7 +111,7 @@ Created: 2026-03-16
   - `make verify` passes
   - Integration test: dispatch → agent completes → handoff → reviewer completes → await-chain returns reviewer's reply
   - Integration test: chain hits depth limit → await-chain returns escalation message
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-HANDOFF-4 — Update Documentation
 
@@ -144,7 +144,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Grep for stale references
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 

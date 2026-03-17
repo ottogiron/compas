@@ -102,7 +102,7 @@ Created: 2026-03-15
 - Admin actions had low usage — operator uses MCP tools or lets agents handle lifecycle.
 - Action menu (`a`) was broken (overlay overlaps list content).
 - Batch row `a:N c:N f:N` counts were unreadable at narrow widths.
-- Reviewer (chill) caught scroll regression from multi-line ListItems — fixed before merge.
+- Reviewer (chill, now orch-reviewer) caught scroll regression from multi-line ListItems — fixed before merge.
 
 ## Execution Metrics
 
@@ -135,7 +135,7 @@ Created: 2026-03-15
 
 ## Closure Evidence
 
-- All 3 tickets implemented, reviewed by chill, and merged on main
+- All 3 tickets implemented, reviewed by chill (now orch-reviewer), and merged on main
 - Context panel removed — full-width list with inline detail rows for selected items
 - Admin actions fully removed — 528 lines of dead code cleaned up
 - Responsive columns: narrow (<100) hides batch column, compresses widths

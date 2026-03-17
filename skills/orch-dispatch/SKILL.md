@@ -90,9 +90,9 @@ aster_orch wait \
 
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
-> **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach — you get the worker's reply regardless of which intent they chose.
+> **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply. This is the safest approach. Agents don't manage intents (ADR-015) — all replies get `response` automatically.
 >
-> Use `--intent review-request` only when you specifically need to skip intermediate `response` messages and wait for an explicit approval gate.
+> Add `--await-chain` to block until the entire handoff chain settles (including auto-forwarded reviewers).
 
 ### Step 4 — Contract check
 

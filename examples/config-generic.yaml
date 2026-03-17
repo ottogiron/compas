@@ -1,5 +1,5 @@
 target_repo_root: /path/to/your-repo
-state_dir: ~/.aster/orch
+state_dir: ~/.aster-orch/state
 poll_interval_secs: 1
 
 # Desktop notifications (macOS only, requires worker restart to toggle)

@@ -1,6 +1,6 @@
 # Aster-Orch Intent Simplification
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-16
 
@@ -8,7 +8,7 @@ Created: 2026-03-16
 
 - Remove agent intent management — agents reply naturally, no REPLY PROTOCOL
 - Remove `parse_intent_from_text()` — all agent replies default to `response`
-- Simplify `HandoffConfig` to 2 fields: `on_response` + `max_chain_depth`
+- Simplify `HandoffConfig` — remove intent-based routing fields (later extended to 3 fields by ORCH-HANDOFF-1/2)
 - Remove deprecated handoff fields: `on_review_request`, `on_escalation`, `on_changes_requested`
 - Dashboard coloring: source-based (operator/agent/system) instead of intent-based
 - Add `changes-requested` to default trigger intents
@@ -40,7 +40,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Integration test: dispatch to agent, verify reply message has `intent: "response"`
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-INTENT-2 — Simplify HandoffConfig to 2 Fields
 
@@ -75,7 +75,7 @@ Created: 2026-03-16
   - `make verify` passes
   - Integration tests updated for simplified config
   - Config validation tests updated
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-INTENT-3 — Dashboard Source-Based Coloring
 
@@ -137,7 +137,7 @@ Created: 2026-03-16
 - Verification:
   - `make verify` passes
   - Grep for stale references: `on_review_request`, `on_escalation`, `REPLY PROTOCOL`, `parse_intent_from_text`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
