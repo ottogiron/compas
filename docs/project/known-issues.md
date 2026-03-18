@@ -47,7 +47,7 @@ If a persisted backend session ID has expired or been pruned by the provider (ov
 
 Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `execution_timeout_secs`) then exits cleanly. The dashboard waits up to 10s for the worker to exit before returning.
 
-**Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. Crash recovery on next startup (`mark_orphaned_executions_crashed`) handles the execution state, but the stale worker process must be killed manually.
+**Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. The singleton guard (ADR-016) now prevents the worst outcome: a second worker starting and blanket-crashing the first worker's in-flight executions via `mark_orphaned_executions_crashed`. The next `aster_orch worker` or `aster_orch dashboard` startup detects the orphaned worker via lockfile + heartbeat/PID check and fails fast with an actionable error (PID, heartbeat age, kill hint). The stale process must still be killed manually.
 
 ## Stale worker heartbeat prevents new worker spawn
 

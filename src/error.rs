@@ -38,14 +38,34 @@ pub enum OrchestratorError {
     #[error("invalid intent transition: {from} -> {to}")]
     InvalidTransition { from: String, to: String },
 
-    #[error("daemon lock held by another process")]
-    DaemonLockHeld,
+    #[error("{}", daemon_lock_held_message(.worker_id, *.pid, *.heartbeat_age_secs))]
+    DaemonLockHeld {
+        worker_id: String,
+        pid: u32,
+        heartbeat_age_secs: i64,
+    },
 
     #[error("timeout: {0}")]
     Timeout(String),
 
     #[error("{0}")]
     Other(String),
+}
+
+fn daemon_lock_held_message(worker_id: &str, pid: u32, heartbeat_age_secs: i64) -> String {
+    if pid == 0 {
+        format!(
+            "worker lock held by another process (worker_id: {worker_id}). \
+             Another worker holds the lock but hasn't started heartbeating yet. \
+             Check for running aster_orch processes: pgrep -fl aster_orch"
+        )
+    } else {
+        format!(
+            "worker lock held by another process (worker_id: {worker_id}, pid: {pid}, \
+             heartbeat_age_secs: {heartbeat_age_secs}). \
+             Kill the existing worker (kill {pid}) or wait for it to exit."
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, OrchestratorError>;

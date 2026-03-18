@@ -113,20 +113,24 @@ codex mcp add aster-orch -- \
 
 ### 3. Start the worker
 
-The worker is the background process that picks up dispatched tasks and runs your agents. The dashboard is a TUI for monitoring — optional but recommended.
+The worker is the background process that picks up dispatched tasks and runs your agents. The dashboard includes an embedded worker by default.
 
 ```bash
-# Dashboard + worker together (recommended for getting started)
-aster_orch dashboard --with-worker
-
-# Or run them separately
-aster_orch worker &
+# Dashboard + embedded worker (recommended)
 aster_orch dashboard
+
+# Dashboard only (monitoring, no execution) — use when running worker separately
+aster_orch dashboard --standalone
+
+# Or run the worker as a standalone process
+aster_orch worker
 ```
 
 `--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
 
-The worker continues running after the dashboard exits. Without a running worker, dispatched tasks will queue but not execute.
+Only one worker can run at a time. If a worker is already running, the dashboard detects it and skips spawning a second one. Running `aster_orch worker` when another worker is alive fails with an actionable error showing the existing worker's PID.
+
+When the dashboard exits, it sends SIGTERM to the embedded worker, which drains in-flight executions and shuts down. A standalone `aster_orch worker` process is independent and must be stopped separately. Without a running worker, dispatched tasks will queue but not execute.
 
 ### 4. Dispatch your first task
 
@@ -380,7 +384,7 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 # Stop all processes, remove state, restart
 kill $(pgrep aster_orch)
 rm ~/.aster-orch/state/jobs.sqlite*
-aster_orch dashboard --with-worker
+aster_orch dashboard
 ```
 
 **Worker not picking up work:**

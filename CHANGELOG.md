@@ -8,12 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Worker singleton guard — fail-fast lockfile + heartbeat/PID check prevents multiple workers from running simultaneously, avoiding orphan-crash hazard (ADR-016)
+- `--standalone` flag for `dashboard` — opt out of the embedded worker when monitoring only
 - `orch_read_log` MCP tool — paginated access to execution log files with offset/limit/tail support, falls back to output_preview when log file is unavailable
 - Orphan backend CLI detection — persist PIDs in executions table, kill still-alive orphan processes on worker startup before marking crashed
 - Embedded wait guidance in `orch_dispatch` and `orch_poll` tool descriptions; dispatch response now includes `next_step` CLI command with templated thread/message IDs
 
 ### Changed
 
+- `dashboard` now spawns an embedded worker by default; `--with-worker` is a hidden no-op, `--standalone` disables it (ADR-016)
 - `--await-chain` now waits for fan-out child threads to settle before returning (ADR-014 Phase 2)
 - Fan-out child threads linked via `source_thread_id` column instead of batch_id heuristics
 - Reply message and fan-out thread creation are atomic (single transaction) to prevent race conditions

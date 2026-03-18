@@ -11,7 +11,7 @@ use aster_orch::backend::opencode::OpenCodeBackend;
 use aster_orch::backend::registry::BackendRegistry;
 use aster_orch::mcp::server::OrchestratorMcpServer;
 use aster_orch::wait::{self, WaitOutcome, WaitRequest};
-use aster_orch::worker::WorkerRunner;
+use aster_orch::worker::{self, WorkerRunner};
 use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use std::path::{Path, PathBuf};
@@ -51,8 +51,11 @@ enum Commands {
         /// How often (in seconds) to re-query SQLite for fresh metrics
         #[arg(long, default_value = "2")]
         poll_interval: u64,
-        /// Run an embedded worker alongside the dashboard
+        /// Run without an embedded worker (dashboard-only, no execution)
         #[arg(long)]
+        standalone: bool,
+        /// [deprecated: worker is now embedded by default] No-op, kept for backward compat.
+        #[arg(long, hide = true, conflicts_with = "standalone")]
         with_worker: bool,
     },
     /// Wait for a message on a thread (reads SQLite directly, no MCP required).
@@ -110,11 +113,17 @@ async fn main() -> ExitCode {
         Commands::Dashboard {
             config,
             poll_interval,
+            standalone,
             with_worker,
         } => {
             let config = effective_config_path(config);
+            if with_worker {
+                eprintln!("note: --with-worker is now the default and can be omitted");
+            }
+            // Worker is embedded by default; --standalone opts out.
+            let spawn_worker = !standalone;
             // TUI dashboard — no tracing to stdout (would corrupt the TUI)
-            if let Err(e) = run_dashboard(config, poll_interval, with_worker).await {
+            if let Err(e) = run_dashboard(config, poll_interval, spawn_worker).await {
                 eprintln!("error: {}", e);
                 return ExitCode::from(2);
             }
@@ -239,6 +248,10 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
     let store = aster_orch::store::Store::new(pool);
+
+    // Acquire singleton guard — fails fast if another worker is alive.
+    let _worker_lock = worker::guard::acquire_worker_lock(&config.state_dir, &store).await?;
+
     let worktree_manager = aster_orch::worktree::WorktreeManager::new();
 
     // Log legacy worktree directory if it exists.
@@ -317,7 +330,7 @@ async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::
 async fn run_dashboard(
     config_path: PathBuf,
     poll_interval: u64,
-    with_worker: bool,
+    spawn_worker: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let config = aster_orch::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config);
@@ -333,7 +346,7 @@ async fn run_dashboard(
     // restarted or quit without interrupting running triggers.
     let worker_log_path = config_handle.load().state_dir.join("worker.log");
     let mut worker_pid: Option<u32> = None;
-    if with_worker {
+    if spawn_worker {
         let spawned = spawn_worker_process(&store, &config_handle, &config_path).await;
         match spawned {
             Ok(Some(pid)) => {
@@ -411,7 +424,7 @@ async fn run_dashboard(
             );
             eprintln!("to stop it: taskkill /PID {}", pid);
         }
-    } else if with_worker {
+    } else if spawn_worker {
         // Pre-existing worker was detected at startup; remind user it's still running.
         eprintln!("dashboard exited; pre-existing worker is still running");
     }
@@ -421,83 +434,19 @@ async fn run_dashboard(
     Ok(())
 }
 
-// ── Heartbeat guard (extracted for testability) ──────────────────────────
+// ── Heartbeat guard (delegated to worker::guard) ─────────────────────────
 
-/// Check whether a worker is actually running.
-///
-/// Two checks are performed (in this order):
-/// 1. **Heartbeat is fresh**: `last_beat_at` is within `max_age_secs` of now
-///    (tolerates up to 5s of forward clock skew). Checked first to avoid a
-///    syscall when the heartbeat is clearly stale.
-/// 2. **Process exists**: extract the PID from `worker_id` (format: `worker-<pid>`)
-///    and verify the process is alive via `kill(pid, 0)`. ESRCH = dead,
-///    EPERM = alive (different user), 0 = alive (same user).
-///
-/// Both must be true. A stale heartbeat from a dead process (the most common
-/// failure mode during deployments) is correctly detected.
+/// Delegate to `worker::guard::is_worker_alive` — kept here so
+/// `spawn_worker_process` and existing tests continue to compile.
 fn is_worker_alive(
     heartbeat: &Option<(String, i64, i64, Option<String>)>,
     max_age_secs: i64,
 ) -> bool {
-    match heartbeat {
-        Some((worker_id, last_beat_at, _, _)) => {
-            let now_unix = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-
-            // Check 1: heartbeat is recent
-            let heartbeat_fresh = *last_beat_at >= now_unix.saturating_sub(max_age_secs)
-                && *last_beat_at <= now_unix + 5;
-
-            if !heartbeat_fresh {
-                return false;
-            }
-
-            // Check 2: process is actually alive
-            // worker_id format: "worker-<pid>"
-            let pid_alive = worker_id
-                .strip_prefix("worker-")
-                .and_then(|pid_str| pid_str.parse::<u32>().ok())
-                .and_then(|pid| i32::try_from(pid).ok())
-                .map(|pid| {
-                    #[cfg(unix)]
-                    {
-                        // kill(pid, 0) checks if the process exists without sending
-                        // a signal. Returns 0 if permitted, or -1 with errno:
-                        //   ESRCH (3) = no such process → dead
-                        //   EPERM (1) = exists but can't signal → alive
-                        let ret = unsafe { libc::kill(pid, 0) };
-                        if ret == 0 {
-                            true
-                        } else {
-                            let err = std::io::Error::last_os_error();
-                            err.raw_os_error() != Some(libc::ESRCH)
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = pid;
-                        true // Can't check on non-unix, trust the heartbeat
-                    }
-                })
-                .unwrap_or(false); // Can't parse PID → treat as dead
-
-            if !pid_alive {
-                tracing::info!(
-                    worker_id = %worker_id,
-                    "stale heartbeat: process no longer exists, clearing"
-                );
-            }
-
-            pid_alive
-        }
-        None => false,
-    }
+    worker::is_worker_alive(heartbeat, max_age_secs)
 }
 
-/// Heartbeat recency threshold for the duplicate-worker guard (seconds).
-const WORKER_HEARTBEAT_MAX_AGE_SECS: i64 = 30;
+/// Re-export from guard module — single source of truth.
+const WORKER_HEARTBEAT_MAX_AGE_SECS: i64 = worker::WORKER_HEARTBEAT_MAX_AGE_SECS;
 
 // ── Worker process spawning ──────────────────────────────────────────────
 
@@ -787,15 +736,14 @@ mod tests {
     }
 
     #[test]
-    fn test_dashboard_with_worker_default_false() {
+    fn test_dashboard_spawns_worker_by_default() {
         let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]).unwrap();
         if let Commands::Dashboard {
-            with_worker,
-            config,
-            ..
+            standalone, config, ..
         } = parsed.command
         {
-            assert!(!with_worker);
+            // Default: worker is embedded (standalone is false).
+            assert!(!standalone);
             assert!(config.is_none());
         } else {
             panic!("expected Dashboard command");
@@ -803,7 +751,18 @@ mod tests {
     }
 
     #[test]
-    fn test_dashboard_parses_with_with_worker_flag() {
+    fn test_dashboard_standalone_disables_worker() {
+        let parsed = Cli::try_parse_from(["aster-orch", "dashboard", "--standalone"]).unwrap();
+        if let Commands::Dashboard { standalone, .. } = parsed.command {
+            assert!(standalone);
+        } else {
+            panic!("expected Dashboard command");
+        }
+    }
+
+    #[test]
+    fn test_dashboard_with_worker_flag_still_accepted() {
+        // --with-worker is a hidden no-op for backward compat.
         let parsed = Cli::try_parse_from([
             "aster-orch",
             "dashboard",
@@ -818,15 +777,27 @@ mod tests {
             if let Commands::Dashboard {
                 with_worker,
                 poll_interval,
+                standalone,
                 ..
             } = cli.command
             {
-                assert!(with_worker);
+                assert!(with_worker); // flag was passed
+                assert!(!standalone); // standalone not set
                 assert_eq!(poll_interval, 5);
             } else {
                 panic!("expected Dashboard command");
             }
         }
+    }
+
+    #[test]
+    fn test_dashboard_standalone_with_worker_conflict() {
+        let parsed =
+            Cli::try_parse_from(["aster-orch", "dashboard", "--standalone", "--with-worker"]);
+        assert!(
+            parsed.is_err(),
+            "--standalone and --with-worker should conflict"
+        );
     }
 
     #[test]

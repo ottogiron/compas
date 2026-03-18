@@ -1,4 +1,4 @@
-.PHONY: build release test fmt fmt-check clippy check clean verify lint-md install worker dashboard dashboard-dev mcp-server setup-hooks
+.PHONY: build release test fmt fmt-check clippy check clean verify lint-md install worker dashboard dashboard-dev dashboard-standalone mcp-server setup-hooks
 
 # ── Build ────────────────────────────────────────────────────────────
 build:
@@ -52,7 +52,10 @@ dashboard:
 	cargo run --bin aster_orch -- dashboard --config .aster-orch/config.yaml
 
 dashboard-dev:
-	cargo run --bin aster_orch -- dashboard --with-worker --config .aster-orch/config.yaml
+	cargo run --bin aster_orch -- dashboard --config .aster-orch/config.yaml
+
+dashboard-standalone:
+	cargo run --bin aster_orch -- dashboard --standalone --config .aster-orch/config.yaml
 
 mcp-server:
 	cargo run --bin aster_orch -- mcp-server --config .aster-orch/config.yaml

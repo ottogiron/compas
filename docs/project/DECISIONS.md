@@ -12,7 +12,7 @@ SQLite in WAL mode provides concurrent read/write from worker + MCP server proce
 **Date:** 2024-12
 **Status:** Active
 
-MCP server handles operator-facing tools (dispatch, close, status). Worker handles background execution (polling, triggering backends, writing results). Both share SQLite. Dashboard optionally embeds the worker (`--with-worker`).
+MCP server handles operator-facing tools (dispatch, close, status). Worker handles background execution (polling, triggering backends, writing results). Both share SQLite. Dashboard embeds the worker by default (`--standalone` to opt out).
 
 This separation keeps MCP responses fast and worker execution unblocked.
 
@@ -209,3 +209,31 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 **Note:** `HandoffTarget` enum was re-introduced in ORCH-HANDOFF-2 with a different shape (`Single(String)` / `FanOut(Vec<String>)`) for fan-out support. It is not the same as the original `Gated` variant that was removed.
 
 **Rationale:** Agents are pure workers. Intent management and routing are config/operator concerns, not agent concerns. This eliminates a class of bugs where agents produced malformed intent JSON, and simplifies agent prompts by removing protocol overhead.
+
+## ADR-016: Worker singleton guard + dashboard default flip
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** Multiple concurrent worker processes cause an orphan-crash hazard. `mark_orphaned_executions_crashed` blanket-marks all in-flight work as crashed when a worker starts, which means a second worker kills the first worker's active executions. The standalone `aster_orch worker` command had no guard — only `dashboard --with-worker` had a lockfile check during spawn.
+
+**Decision:** Fail-fast singleton guard via exclusive lockfile + heartbeat/PID liveness check, enforced in `run_worker()` itself (not just the dashboard spawn path). The guard:
+
+1. Acquires `flock(LOCK_EX | LOCK_NB)` on `{state_dir}/worker.lock`
+2. Checks heartbeat freshness + PID liveness via `kill(pid, 0)`
+3. Returns a RAII guard struct that holds the file descriptor (lock persists for process lifetime)
+4. On failure, returns an actionable error with worker PID and heartbeat age
+
+**Dashboard default flip:** `aster_orch dashboard` now spawns a worker by default (previously required `--with-worker`). A new `--standalone` flag opts out. `--with-worker` is retained as a hidden no-op for backward compatibility.
+
+**Rationale:**
+
+- The dashboard is the primary entry point for most users. Requiring `--with-worker` was a papercut that led to "dispatched work not executing" confusion.
+- The singleton guard makes the default safe — if a worker is already running, the dashboard's embedded worker spawn detects it and skips.
+- Standalone mode (`--standalone`) is available for monitoring-only dashboards that connect to a separately managed worker.
+
+**Key choices:**
+
+- **Guard in `run_worker()`**, not just `spawn_worker_process()` — covers both `aster_orch worker` and `dashboard --with-worker` paths.
+- **`spawn_worker_process()` keeps its pre-flight check** — avoids spawning a child process that would immediately exit due to the guard.
+- **`DaemonLockHeld` error enriched** with `worker_id`, PID, and heartbeat age for actionable diagnostics.
