@@ -934,6 +934,25 @@ mod dispatch_tests {
         assert_eq!(msg.from_alias, "operator");
         assert_eq!(msg.to_alias, "focused");
         assert_eq!(msg.intent, "dispatch");
+
+        // Verify next_step contains a ready-to-use CLI wait command.
+        let next_step = json["next_step"].as_str().unwrap();
+        assert!(
+            next_step.starts_with("aster_orch wait --thread-id "),
+            "next_step should start with wait command prefix, got: {next_step}"
+        );
+        assert!(
+            next_step.contains("t-dispatch-1"),
+            "next_step should contain the thread_id, got: {next_step}"
+        );
+        assert!(
+            next_step.contains(&format!("--since db:{}", message_id)),
+            "next_step should contain --since db:<message_id>, got: {next_step}"
+        );
+        assert!(
+            next_step.ends_with("--timeout 900"),
+            "next_step should end with --timeout 900, got: {next_step}"
+        );
     }
 
     #[tokio::test]
@@ -954,6 +973,18 @@ mod dispatch_tests {
         let json = extract_json(&result);
         let thread_id = json["thread_id"].as_str().unwrap();
         assert!(!thread_id.is_empty());
+
+        // Verify next_step embeds the auto-generated thread_id.
+        let next_step = json["next_step"].as_str().unwrap();
+        assert!(
+            next_step.contains(thread_id),
+            "next_step should contain the auto-generated thread_id '{thread_id}', got: {next_step}"
+        );
+        let message_id = json["message_id"].as_i64().unwrap();
+        assert!(
+            next_step.contains(&format!("--since db:{}", message_id)),
+            "next_step should contain --since db:<message_id>, got: {next_step}"
+        );
     }
 
     #[tokio::test]

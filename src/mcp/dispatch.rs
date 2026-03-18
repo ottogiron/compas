@@ -15,6 +15,8 @@ use super::server::{err_text, json_text, OrchestratorMcpServer};
 struct DispatchResult {
     thread_id: String,
     message_id: i64,
+    /// Concrete CLI command to wait for the agent's response.
+    next_step: String,
 }
 
 impl OrchestratorMcpServer {
@@ -61,9 +63,14 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("failed to insert message: {}", e))),
         };
 
+        let next_step = format!(
+            "aster_orch wait --thread-id {} --since db:{} --timeout 900",
+            thread_id, message_id
+        );
         Ok(json_text(&DispatchResult {
             thread_id,
             message_id,
+            next_step,
         }))
     }
 }

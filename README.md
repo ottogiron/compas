@@ -200,7 +200,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 
 ## MCP Tools
 
-For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --timeout 300`. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls.
+For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --since db:<msg-id> --timeout 300`. The `--since` cursor ensures you only match replies after your dispatch message. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls. The `orch_dispatch` response includes a `next_step` field with a ready-to-use wait command.
 
 ### Core
 

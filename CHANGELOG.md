@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `orch_read_log` MCP tool — paginated access to execution log files with offset/limit/tail support, falls back to output_preview when log file is unavailable
 - Orphan backend CLI detection — persist PIDs in executions table, kill still-alive orphan processes on worker startup before marking crashed
+- Embedded wait guidance in `orch_dispatch` and `orch_poll` tool descriptions; dispatch response now includes `next_step` CLI command with templated thread/message IDs
 
 ### Changed
 
