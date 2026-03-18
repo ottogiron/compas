@@ -10,14 +10,13 @@ use ratatui::{
     style::{Style, Stylize},
     symbols::border,
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, Wrap},
+    widgets::{Block, Padding, Paragraph},
     Frame,
 };
 use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::conversation::markdown_to_lines;
 use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
 use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
 use crate::store::ExecutionEventRow;
@@ -282,65 +281,26 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
     let visible_rows = area.height.saturating_sub(2) as usize;
     state.visible_rows = visible_rows;
 
-    // Determine whether the input is valid JSON; if so use payload formatting,
-    // otherwise render as styled markdown (headings, bold, code blocks, etc.).
-    let input_is_json = state
+    let input_lines = state
         .input_payload
         .as_deref()
-        .map(|s| serde_json::from_str::<serde_json::Value>(s.trim()).is_ok())
-        .unwrap_or(false);
-
-    let input_as_styled: Option<Vec<Line<'static>>> = if !input_is_json {
-        state
-            .input_payload
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|s| markdown_to_lines(s, TEXT_DIM))
-    } else {
-        None
-    };
-
-    let input_lines_plain: Option<Vec<String>> = if input_is_json {
-        state
-            .input_payload
-            .as_deref()
-            .map(|s| format_payload_lines(s, state.json_view_mode, 24))
-    } else {
-        None
-    };
-
-    let input_fallback: Option<Vec<String>> =
-        if input_as_styled.is_none() && input_lines_plain.is_none() {
-            Some(if state.input_linked {
+        .map(|s| format_payload_lines(s, state.json_view_mode, 24))
+        .unwrap_or_else(|| {
+            if state.input_linked {
                 vec!["(no input)".to_string()]
             } else {
                 vec!["(input unavailable: execution not linked to dispatch message)".to_string()]
-            })
-        } else {
-            None
-        };
+            }
+        });
 
     let output_lines: Vec<String> = if state.lines.is_empty() {
         vec!["(no output)".to_string()]
     } else {
-        // Build output with separators between events. Each original log line
-        // maps to one event; insert a separator between events in humanized mode.
-        let mut lines_out: Vec<String> = Vec::new();
-        let mut first_event = true;
-        for line in &state.lines {
-            let event_lines = format_log_line(line, state.json_view_mode);
-            if !event_lines.is_empty() {
-                if !first_event && state.json_view_mode == JsonViewMode::Humanized {
-                    lines_out.push("────".to_string());
-                }
-                first_event = false;
-                lines_out.extend(event_lines);
-            }
-        }
-        if lines_out.is_empty() {
-            lines_out.push("(no output)".to_string());
-        }
-        lines_out
+        state
+            .lines
+            .iter()
+            .flat_map(|line| format_log_line(line, state.json_view_mode))
+            .collect()
     };
 
     // Build display lines as styled Lines so section headers carry per-span colours.
@@ -351,26 +311,11 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         state.input_expanded,
     ));
     if state.input_expanded {
-        if let Some(ref styled) = input_as_styled {
-            // Markdown-rendered input: indent each pre-styled line.
-            for line in styled {
-                let mut indented = vec![Span::raw("    ")];
-                indented.extend(line.spans.iter().cloned());
-                display_lines.push(Line::from(indented));
-            }
-        } else if let Some(ref plain) = input_lines_plain {
-            display_lines.extend(
-                plain
-                    .iter()
-                    .map(|l| Line::from(format!("    {l}")).fg(TEXT_MUTED)),
-            );
-        } else if let Some(ref fallback) = input_fallback {
-            display_lines.extend(
-                fallback
-                    .iter()
-                    .map(|l| Line::from(format!("    {l}")).fg(TEXT_MUTED)),
-            );
-        }
+        display_lines.extend(
+            input_lines
+                .iter()
+                .map(|l| Line::from(format!("    {l}")).fg(TEXT_MUTED)),
+        );
     }
 
     // Timeline section
@@ -386,24 +331,13 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         } else {
             for ev in &state.timeline_events {
                 let summary = super::truncate(&ev.summary, 60);
-                let (icon, event_color) = match ev.event_type.as_str() {
-                    "message" => ("\u{1f4ac}", TEXT_NORMAL), // 💬
-                    "tool_call" | "tool_result" => ("\u{2699}", TEXT_MUTED), // ⚙
-                    "turn_complete" => ("\u{25c9}", ACCENT), // ◉
-                    "error" => (MARKER_FAILED, FAILURE),     // ✗
-                    _ => (" ", TEXT_DIM),
-                };
-                display_lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("    [{}] ", ev.event_index),
-                        Style::new().fg(TEXT_DIM),
-                    ),
-                    Span::styled(format!("{icon} "), Style::new().fg(event_color)),
-                    Span::styled(
-                        format!("{}: {}", ev.event_type, summary),
-                        Style::new().fg(event_color),
-                    ),
-                ]));
+                display_lines.push(
+                    Line::from(format!(
+                        "    [{}] {}: {}",
+                        ev.event_index, ev.event_type, summary
+                    ))
+                    .fg(TEXT_MUTED),
+                );
             }
             if state.timeline_truncated {
                 display_lines.push(
@@ -423,34 +357,22 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         state.output_expanded,
     ));
     if state.output_expanded {
-        display_lines.extend(output_lines.iter().map(|l| {
-            if l.starts_with("────") {
-                Line::from(format!("    {l}")).fg(TEXT_DIM)
-            } else {
-                Line::from(format!("    {l}")).fg(TEXT_NORMAL)
-            }
-        }));
+        display_lines.extend(
+            output_lines
+                .iter()
+                .map(|l| Line::from(format!("    {l}")).fg(TEXT_NORMAL)),
+        );
     }
 
-    // Build paragraph with wrapping to get visual line count.
-    let inner_width = area.width.saturating_sub(4);
-    let para_for_count = Paragraph::new(display_lines.clone()).wrap(Wrap { trim: false });
-    let visual_line_count = para_for_count.line_count(inner_width);
+    let max_offset = display_lines.len().saturating_sub(visible_rows).max(0);
+    let scroll_offset = state.scroll_offset.min(max_offset);
 
-    let max_offset = visual_line_count.saturating_sub(visible_rows);
-    let scroll_offset = if state.follow {
-        max_offset
-    } else {
-        state.scroll_offset.min(max_offset)
-    };
-    state.scroll_offset = scroll_offset;
-
-    let position_label: String = if visual_line_count == 0 {
+    let position_label: String = if display_lines.is_empty() {
         String::new()
     } else {
         let first = scroll_offset + 1;
-        let last = (scroll_offset + visible_rows).min(visual_line_count);
-        format!("  {first}-{last}/{total}  ", total = visual_line_count)
+        let last = (scroll_offset + visible_rows).min(display_lines.len());
+        format!("  {first}-{last}/{total}  ", total = display_lines.len())
     };
 
     let title_spans: Vec<Span> = vec![
@@ -478,10 +400,8 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         ": back  ".fg(TEXT_MUTED),
         key("↑/↓"),
         ": section  ".fg(TEXT_MUTED),
-        key("Enter/Tab"),
+        key("Enter"),
         ": toggle  ".fg(TEXT_MUTED),
-        key("PgUp/PgDn"),
-        ": scroll  ".fg(TEXT_MUTED),
         key("g/G"),
         ": top/bottom  ".fg(TEXT_MUTED),
         key("f"),
@@ -500,7 +420,6 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL));
 
     let paragraph = Paragraph::new(display_lines)
-        .wrap(Wrap { trim: false })
         // Paragraph::scroll takes (u16, u16); clamp to avoid silent wrapping on large logs.
         .scroll((scroll_offset.min(u16::MAX as usize) as u16, 0))
         .style(Style::new().bg(BG_PANEL).fg(TEXT_NORMAL))
@@ -630,31 +549,11 @@ mod tests {
     }
 
     #[test]
-    fn test_make_state_helper_defaults() {
+    fn test_default_sections_collapsed_and_input_selected() {
         let s = make_state("completed", vec!["a"], false);
-        // make_state uses explicit field values (Input selected, all collapsed)
-        // for deterministic test setup — distinct from ExecutionDetailState::new().
         assert_eq!(s.section_selected, OutlineSection::Input);
         assert!(!s.input_expanded);
         assert!(!s.output_expanded);
-    }
-
-    #[test]
-    fn test_new_defaults_input_selected_all_collapsed() {
-        let s = ExecutionDetailState::new(
-            "exec-001".to_string(),
-            "focused".to_string(),
-            "completed".to_string(),
-            Some(1234),
-            None,
-            Some("{\"in\":1}".to_string()),
-            true,
-            None,
-        );
-        assert_eq!(s.section_selected, OutlineSection::Input);
-        assert!(!s.output_expanded);
-        assert!(!s.input_expanded);
-        assert!(!s.timeline_expanded);
     }
 
     #[test]

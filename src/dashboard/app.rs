@@ -1219,16 +1219,6 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
                 viewer.select_next_section();
             }
         }
-        KeyCode::Tab => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.toggle_selected_section();
-            }
-        }
-        KeyCode::BackTab => {
-            if let Some(ref mut viewer) = app.viewing_log {
-                viewer.toggle_selected_section();
-            }
-        }
         KeyCode::Enter => {
             if let Some(ref mut viewer) = app.viewing_log {
                 viewer.toggle_selected_section();
