@@ -1,3 +1,5 @@
 .claude/
 .codex/
+.opencode/node_modules/
+.agents/node_modules/
 target/
