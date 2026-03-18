@@ -179,16 +179,16 @@ fn format_timestamp(ts_secs: i64) -> String {
 /// Color for message badge — based on source (operator/agent/system), not intent.
 fn message_color(from: &str, intent: &str) -> Color {
     if from == "operator" {
-        Color::Cyan
+        ACCENT
     } else if intent == "handoff" {
-        Color::DarkGray
+        TEXT_DIM
     } else {
-        Color::Green
+        SUCCESS_DIM
     }
 }
 
 /// Parse markdown body text and return styled ratatui lines, each prefixed with `│ `.
-fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
+pub(crate) fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
     let prefix = Span::styled("│ ", Style::default().fg(border_color));
 
     let parser = pulldown_cmark::Parser::new(body);
@@ -283,10 +283,7 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
                 }
             }
             Event::Code(text) => {
-                current_spans.push(Span::styled(
-                    text.to_string(),
-                    Style::default().fg(Color::Cyan),
-                ));
+                current_spans.push(Span::styled(text.to_string(), Style::default().fg(ACCENT)));
             }
             Event::Text(text) => {
                 if in_code_block {
@@ -355,9 +352,9 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
 fn push_message_lines(msg: &MessageRow, lines: &mut Vec<Line<'static>>) {
     let ts = format_timestamp(msg.created_at);
     let header_color = if msg.from_alias == "operator" {
-        Color::Blue
+        ACCENT
     } else {
-        Color::Green
+        SUCCESS_DIM
     };
     let badge_color = message_color(&msg.from_alias, &msg.intent);
 
@@ -491,6 +488,29 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
 
     let key = |s: &'static str| -> Span<'static> { s.fg(ACCENT).bold() };
     let msg_count = state.messages.len();
+
+    // Build paragraph first to compute visual row count (accounts for line wrapping).
+    let paragraph_for_count = Paragraph::new(display_lines.clone()).wrap(Wrap { trim: false });
+    let inner_width_for_count = area.width.saturating_sub(4);
+    let visual_line_count_for_footer = paragraph_for_count.line_count(inner_width_for_count);
+    let position_label: String = if visual_line_count_for_footer == 0 {
+        String::new()
+    } else {
+        let clamped_offset = if state.follow_mode {
+            visual_line_count_for_footer.saturating_sub(visible_rows)
+        } else {
+            state
+                .scroll_offset
+                .min(visual_line_count_for_footer.saturating_sub(visible_rows))
+        };
+        let first = clamped_offset + 1;
+        let last = (clamped_offset + visible_rows).min(visual_line_count_for_footer);
+        format!(
+            "  {first}-{last}/{total}  ",
+            total = visual_line_count_for_footer
+        )
+    };
+
     let footer_spans: Vec<Span> = vec![
         Span::raw(" "),
         key("Esc"),
@@ -502,6 +522,7 @@ pub fn render_conversation(frame: &mut Frame, state: &mut ConversationViewState,
         key("f"),
         ": follow  ".fg(TEXT_MUTED),
         format!("  {} msgs ", msg_count).fg(TEXT_DIM),
+        position_label.fg(TEXT_DIM),
     ];
 
     let block = Block::bordered()
@@ -740,27 +761,27 @@ mod tests {
 
     #[test]
     fn test_message_color_operator_dispatch() {
-        assert_eq!(message_color("operator", "dispatch"), Color::Cyan);
+        assert_eq!(message_color("operator", "dispatch"), ACCENT);
     }
 
     #[test]
     fn test_message_color_operator_changes_requested() {
-        assert_eq!(message_color("operator", "changes-requested"), Color::Cyan);
+        assert_eq!(message_color("operator", "changes-requested"), ACCENT);
     }
 
     #[test]
     fn test_message_color_agent_response() {
-        assert_eq!(message_color("orch-dev", "response"), Color::Green);
+        assert_eq!(message_color("orch-dev", "response"), SUCCESS_DIM);
     }
 
     #[test]
     fn test_message_color_handoff() {
-        assert_eq!(message_color("orch-dev", "handoff"), Color::DarkGray);
+        assert_eq!(message_color("orch-dev", "handoff"), TEXT_DIM);
     }
 
     #[test]
     fn test_message_color_agent_any_intent() {
-        assert_eq!(message_color("chill", "review-request"), Color::Green);
+        assert_eq!(message_color("chill", "review-request"), SUCCESS_DIM);
     }
 
     #[test]
@@ -881,7 +902,7 @@ mod tests {
     fn test_markdown_inline_code() {
         let lines = markdown_to_lines("`code`", TEXT_DIM);
         let code_span = &lines[0].spans[1];
-        assert_eq!(code_span.style.fg, Some(Color::Cyan));
+        assert_eq!(code_span.style.fg, Some(ACCENT));
         assert_eq!(code_span.content.as_ref(), "code");
     }
 

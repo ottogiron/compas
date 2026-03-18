@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Execution detail: Input section renders markdown (headings, bold, code blocks) for non-JSON payloads; JSON payloads keep humanized/raw formatting
+- Execution detail: line wrapping enabled — long lines wrap instead of clipping off the right edge
+- Execution detail: `j/k` and `↑/↓` now scroll content (consistent with conversation view); `Tab/Shift+Tab` navigates sections
+- Execution detail: Output section expanded and selected by default when opening
+- Execution detail: visual separators (`────`) between event groups in humanized output mode
+- Execution detail: timeline events color-coded by type (message, tool_call, turn_complete, error) with icons
+- Execution detail: `PgUp/PgDn` hint added to footer
+- Conversation view: position indicator (`first-last/total`) in footer
+- Conversation view: all colors use theme constants — no raw `Color::*` values
 - Worker singleton guard — fail-fast lockfile + heartbeat/PID check prevents multiple workers from running simultaneously, avoiding orphan-crash hazard (ADR-016)
 - `--standalone` flag for `dashboard` — opt out of the embedded worker when monitoring only
 - `orch_read_log` MCP tool — paginated access to execution log files with offset/limit/tail support, falls back to output_preview when log file is unavailable
