@@ -431,6 +431,97 @@ impl OrchestratorMcpServer {
         }
     }
 
+    // ── orch_read_log ─────────────────────────────────────────────────────
+
+    pub async fn read_log_impl(
+        &self,
+        params: ReadLogParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let limit = (params.limit.unwrap_or(200) as usize).min(1000);
+        let tail = params.tail.unwrap_or(false);
+        let requested_offset = params.offset.unwrap_or(0) as usize;
+
+        let config = self.config.load();
+        let log_path = config
+            .log_dir()
+            .join(format!("{}.log", params.execution_id));
+
+        #[derive(Serialize)]
+        struct ReadLogResponse {
+            execution_id: String,
+            total_lines: usize,
+            returned_lines: usize,
+            offset: usize,
+            has_more: bool,
+            source: String,
+            lines: Vec<String>,
+        }
+
+        let (all_lines, source) = if log_path.exists() {
+            match tokio::fs::read_to_string(&log_path).await {
+                Ok(content) => {
+                    let lines: Vec<String> = content.lines().map(String::from).collect();
+                    (lines, "log_file")
+                }
+                Err(e) => {
+                    return Ok(err_text(format!(
+                        "failed to read log file {}: {}",
+                        log_path.display(),
+                        e
+                    )));
+                }
+            }
+        } else {
+            // Fallback to output_preview from DB
+            match self.store.get_execution(&params.execution_id).await {
+                Ok(Some(exec)) => {
+                    let lines: Vec<String> = exec
+                        .output_preview
+                        .as_deref()
+                        .unwrap_or("")
+                        .lines()
+                        .map(String::from)
+                        .collect();
+                    (lines, "output_preview")
+                }
+                Ok(None) => {
+                    return Ok(err_text(format!(
+                        "execution not found: {}",
+                        params.execution_id
+                    )));
+                }
+                Err(e) => {
+                    return Ok(err_text(format!("execution query failed: {}", e)));
+                }
+            }
+        };
+
+        let total_lines = all_lines.len();
+        let (offset, selected) = if tail {
+            let start = total_lines.saturating_sub(limit);
+            let slice = &all_lines[start..];
+            (start, slice.to_vec())
+        } else {
+            let start = requested_offset.min(total_lines);
+            let end = (start + limit).min(total_lines);
+            let slice = &all_lines[start..end];
+            (start, slice.to_vec())
+        };
+
+        let returned_lines = selected.len();
+        let has_more = (offset + returned_lines) < total_lines;
+
+        Ok(json_text(&ReadLogResponse {
+            execution_id: params.execution_id,
+            total_lines,
+            returned_lines,
+            offset,
+            has_more,
+            source: source.to_string(),
+            lines: selected,
+        }))
+    }
+
     // ── orch_tasks ───────────────────────────────────────────────────────
 
     pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {

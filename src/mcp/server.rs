@@ -244,6 +244,17 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.execution_events_impl(params).await
     }
+
+    #[tool(
+        name = "orch_read_log",
+        description = "Read execution log file with pagination. Returns log lines for a given execution ID with offset/limit support. Falls back to output_preview from DB if log file is unavailable (pruned or not yet written)."
+    )]
+    async fn orch_read_log(
+        &self,
+        Parameters(params): Parameters<ReadLogParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.read_log_impl(params).await
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -142,3 +142,15 @@ pub struct ExecutionEventsParams {
     /// Max events to return (default 100)
     pub limit: Option<i64>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ReadLogParams {
+    /// Execution ID whose log to read
+    pub execution_id: String,
+    /// Line offset (0-based, default 0). Ignored when tail=true.
+    pub offset: Option<u64>,
+    /// Max lines to return (default 200, max 1000)
+    pub limit: Option<u64>,
+    /// When true, return the last `limit` lines instead of starting from offset
+    pub tail: Option<bool>,
+}

@@ -588,6 +588,7 @@ mod tests {
             retry_after: None,
             error_category: None,
             original_dispatch_message_id: None,
+            pid: None,
         }
     }
 

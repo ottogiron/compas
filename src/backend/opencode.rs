@@ -182,6 +182,7 @@ impl Backend for OpenCodeBackend {
             started_at: Utc::now(),
             resume_session_id: None,
             stdout_tx: None,
+            pid_tx: None,
         })
     }
 
@@ -207,6 +208,9 @@ impl Backend for OpenCodeBackend {
             .or(self.workdir.as_deref());
         let child = spawn_cli("opencode", &arg_refs, agent.env.as_ref(), workdir)?;
         let pid = child.id();
+        if let Some(ref tx) = session.pid_tx {
+            let _ = tx.send(pid);
+        }
         self.tracker.track(&session.id, pid);
 
         let output = wait_with_timeout(
@@ -242,6 +246,7 @@ impl Backend for OpenCodeBackend {
                     session_id,
                     raw_output,
                     error_category,
+                    pid: Some(pid),
                 })
             }
             Err(e) => Err(e),

@@ -155,6 +155,8 @@ pub struct ExecutionRow {
     /// Points to the original dispatch message for retry executions.
     /// Not part of the UNIQUE index (unlike `dispatch_message_id`).
     pub original_dispatch_message_id: Option<i64>,
+    /// OS PID of the spawned backend CLI process (for orphan detection).
+    pub pid: Option<i64>,
 }
 
 /// A stored execution event row (real-time telemetry).
@@ -351,6 +353,13 @@ impl Store {
             .any(|c| c.1 == "original_dispatch_message_id");
         if !has_orig_dispatch {
             sqlx::query("ALTER TABLE executions ADD COLUMN original_dispatch_message_id INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        // Orphan detection: PID and worker_id tracking
+        let has_pid = columns.iter().any(|c| c.1 == "pid");
+        if !has_pid {
+            sqlx::query("ALTER TABLE executions ADD COLUMN pid INTEGER")
                 .execute(&self.pool)
                 .await?;
         }
@@ -1189,7 +1198,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1300,6 +1310,33 @@ impl Store {
         Ok(result.rows_affected())
     }
 
+    /// Persist the OS PID for a running execution.
+    pub async fn set_execution_pid(&self, execution_id: &str, pid: u32) -> Result<(), String> {
+        sqlx::query("UPDATE executions SET pid = ? WHERE id = ?")
+            .bind(pid as i64)
+            .bind(execution_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| format!("set_execution_pid failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Get orphaned executions (picked_up/executing) that have a recorded PID.
+    ///
+    /// Used at startup to kill still-alive backend processes before marking
+    /// executions as crashed.
+    pub async fn get_orphaned_executions_with_pid(
+        &self,
+    ) -> Result<Vec<(String, u32)>, sqlx::Error> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT id, pid FROM executions
+             WHERE status IN ('picked_up', 'executing') AND pid IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id, pid)| (id, pid as u32)).collect())
+    }
+
     /// Mark executions stuck in `picked_up` or `executing` beyond the
     /// configured timeout as crashed.
     ///
@@ -1355,7 +1392,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1377,7 +1415,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1408,7 +1447,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.agent_alias = ?
@@ -1428,7 +1468,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              ORDER BY e.queued_at DESC LIMIT ?",
@@ -1584,7 +1625,8 @@ impl Store {
                     picked_up_at, started_at, finished_at, duration_ms,
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
-                    e.original_dispatch_message_id
+                    e.original_dispatch_message_id,
+                    e.pid
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1919,6 +1961,7 @@ struct ExecutionRowDb {
     retry_after: Option<i64>,
     error_category: Option<String>,
     original_dispatch_message_id: Option<i64>,
+    pid: Option<i64>,
 }
 
 fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
@@ -1943,6 +1986,7 @@ fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
         retry_after: r.retry_after,
         error_category: r.error_category,
         original_dispatch_message_id: r.original_dispatch_message_id,
+        pid: r.pid,
     }
 }
 

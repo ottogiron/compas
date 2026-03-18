@@ -171,6 +171,8 @@ pub struct BackendOutput {
     /// Classified error category for failure cases.
     /// `None` on success or when classification hasn't been performed.
     pub error_category: Option<ErrorCategory>,
+    /// OS PID of the spawned backend CLI process (for orphan tracking).
+    pub pid: Option<u32>,
 }
 
 /// A structured event extracted from backend JSONL output during execution.

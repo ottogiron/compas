@@ -226,9 +226,38 @@ pub async fn execute_trigger(
         }
     };
 
-    // Start a session then trigger — all inside spawn_blocking
+    // Start a session then trigger — all inside spawn_blocking.
+    //
+    // PID early-persistence: we create a sync_channel so the backend can report
+    // the PID right after spawn_cli(). A separate tokio task receives it and
+    // writes to the DB while the process is still running. This is critical for
+    // orphan detection — if the worker crashes mid-execution, the PID is already
+    // persisted and the next startup can kill the orphaned process.
     let instruction = instruction.to_string();
     let start = Instant::now();
+
+    let (pid_sender, pid_receiver) = std::sync::mpsc::sync_channel::<u32>(1);
+
+    // Spawn a task to persist PID as soon as the backend reports it.
+    let pid_store = store.clone();
+    let pid_exec_id = exec_id.clone();
+    let pid_task = tokio::spawn(async move {
+        // Block on the sync receiver in a spawn_blocking to avoid starving tokio.
+        let pid = tokio::task::spawn_blocking(move || pid_receiver.recv().ok())
+            .await
+            .ok()
+            .flatten();
+        if let Some(pid) = pid {
+            if let Err(e) = pid_store.set_execution_pid(&pid_exec_id, pid).await {
+                tracing::warn!(
+                    exec_id = %pid_exec_id,
+                    pid = pid,
+                    error = %e,
+                    "failed to persist backend PID early"
+                );
+            }
+        }
+    });
 
     let trigger_result: Result<BackendOutput, String> = tokio::task::spawn_blocking(move || {
         // We need a runtime handle to call async methods from blocking context.
@@ -241,6 +270,7 @@ pub async fn execute_trigger(
                 .map_err(|e| e.to_string())?;
             session.resume_session_id = resume_session_id;
             session.stdout_tx = stdout_tx;
+            session.pid_tx = Some(pid_sender);
             backend
                 .trigger(&agent, &session, Some(&instruction))
                 .await
@@ -249,6 +279,9 @@ pub async fn execute_trigger(
     })
     .await
     .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)));
+
+    // Ensure PID persistence task completes (best-effort).
+    let _ = pid_task.await;
 
     let duration_ms = start.elapsed().as_millis() as i64;
 

@@ -44,6 +44,7 @@ impl Backend for StubBackend {
             started_at: chrono::Utc::now(),
             resume_session_id: None,
             stdout_tx: None,
+            pid_tx: None,
         })
     }
 
@@ -61,6 +62,7 @@ impl Backend for StubBackend {
             session_id: Some(session.id.clone()),
             raw_output: result_text,
             error_category: None,
+            pid: None,
         })
     }
 
@@ -4525,5 +4527,378 @@ mod fanout_tests {
                 &handoff.body[..handoff.body.len().min(100)]
             );
         }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Orphan PID Detection Tests (P0-1)
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod orphan_pid_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_set_execution_pid() {
+        let store = test_store().await;
+        store.ensure_thread("t-pid-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-pid-1", "focused").await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+
+        store.set_execution_pid(&exec_id, 12345).await.unwrap();
+
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.pid, Some(12345));
+    }
+
+    #[tokio::test]
+    async fn test_get_orphaned_executions_with_pid() {
+        let store = test_store().await;
+        store.ensure_thread("t-pid-2", None).await.unwrap();
+        let exec_id = store.insert_execution("t-pid-2", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store.set_execution_pid(&exec_id, 54321).await.unwrap();
+
+        let orphans = store.get_orphaned_executions_with_pid().await.unwrap();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].0, exec_id);
+        assert_eq!(orphans[0].1, 54321);
+    }
+
+    #[tokio::test]
+    async fn test_orphaned_without_pid_excluded() {
+        let store = test_store().await;
+        store.ensure_thread("t-pid-3", None).await.unwrap();
+        let exec_id = store.insert_execution("t-pid-3", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        // No set_execution_pid — PID is NULL
+
+        let orphans = store.get_orphaned_executions_with_pid().await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "execution without PID should not appear in orphan query"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_completed_execution_not_orphaned() {
+        let store = test_store().await;
+        store.ensure_thread("t-pid-4", None).await.unwrap();
+        let exec_id = store.insert_execution("t-pid-4", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store.set_execution_pid(&exec_id, 99999).await.unwrap();
+        store
+            .complete_execution(&exec_id, Some(0), None, None, 100)
+            .await
+            .unwrap();
+
+        let orphans = store.get_orphaned_executions_with_pid().await.unwrap();
+        assert!(
+            orphans.is_empty(),
+            "completed execution should not appear in orphan query"
+        );
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// orch_read_log Tests (P0-2)
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod read_log_tests {
+    use super::*;
+
+    fn config_with_state_dir(state_dir: PathBuf) -> OrchestratorConfig {
+        OrchestratorConfig {
+            target_repo_root: PathBuf::from("/tmp"),
+            state_dir,
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "focused".to_string(),
+                backend: "stub".to_string(),
+                role: AgentRole::Worker,
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+        }
+    }
+
+    async fn server_with_state_dir(state_dir: PathBuf) -> (OrchestratorMcpServer, Store) {
+        let store = test_store().await;
+        let config = config_with_state_dir(state_dir);
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store.clone(), registry);
+        (server, store)
+    }
+
+    #[tokio::test]
+    async fn test_read_log_execution_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (server, _store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: "nonexistent-exec".to_string(),
+                offset: None,
+                limit: None,
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "expected error result");
+    }
+
+    #[tokio::test]
+    async fn test_read_log_fallback_to_output_preview() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-log-1", "focused").await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .complete_execution(&exec_id, Some(0), Some("line1\nline2\nline3"), None, 100)
+            .await
+            .unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: None,
+                limit: None,
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["source"], "output_preview");
+        assert_eq!(v["total_lines"], 3);
+        assert_eq!(v["lines"][0], "line1");
+        assert_eq!(v["lines"][2], "line3");
+    }
+
+    #[tokio::test]
+    async fn test_read_log_from_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-2", None).await.unwrap();
+        let exec_id = store.insert_execution("t-log-2", "focused").await.unwrap();
+
+        let log_content = "hello world\nfoo bar\nbaz qux\nfinal line\n";
+        std::fs::write(log_dir.join(format!("{}.log", exec_id)), log_content).unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: None,
+                limit: None,
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["source"], "log_file");
+        assert_eq!(v["total_lines"], 4);
+        assert_eq!(v["returned_lines"], 4);
+        assert_eq!(v["offset"], 0);
+        assert_eq!(v["has_more"], false);
+        assert_eq!(v["lines"][0], "hello world");
+        assert_eq!(v["lines"][3], "final line");
+    }
+
+    #[tokio::test]
+    async fn test_read_log_offset_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-3", None).await.unwrap();
+        let exec_id = store.insert_execution("t-log-3", "focused").await.unwrap();
+
+        let lines: Vec<String> = (0..10).map(|i| format!("line-{}", i)).collect();
+        std::fs::write(
+            log_dir.join(format!("{}.log", exec_id)),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: Some(3),
+                limit: Some(4),
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["total_lines"], 10);
+        assert_eq!(v["returned_lines"], 4);
+        assert_eq!(v["offset"], 3);
+        assert_eq!(v["has_more"], true);
+        assert_eq!(v["lines"][0], "line-3");
+        assert_eq!(v["lines"][3], "line-6");
+    }
+
+    #[tokio::test]
+    async fn test_read_log_tail_mode() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-4", None).await.unwrap();
+        let exec_id = store.insert_execution("t-log-4", "focused").await.unwrap();
+
+        let lines: Vec<String> = (0..10).map(|i| format!("line-{}", i)).collect();
+        std::fs::write(
+            log_dir.join(format!("{}.log", exec_id)),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: None,
+                limit: Some(3),
+                tail: Some(true),
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["returned_lines"], 3);
+        assert_eq!(v["offset"], 7);
+        assert_eq!(v["has_more"], false);
+        assert_eq!(v["lines"][0], "line-7");
+        assert_eq!(v["lines"][2], "line-9");
+    }
+
+    #[tokio::test]
+    async fn test_read_log_limit_clamping() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-5", None).await.unwrap();
+        let exec_id = store.insert_execution("t-log-5", "focused").await.unwrap();
+
+        let lines: Vec<String> = (0..1500).map(|i| format!("line-{}", i)).collect();
+        std::fs::write(
+            log_dir.join(format!("{}.log", exec_id)),
+            lines.join("\n") + "\n",
+        )
+        .unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: None,
+                limit: Some(5000),
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["returned_lines"], 1000);
+        assert_eq!(v["total_lines"], 1500);
+        assert_eq!(v["has_more"], true);
+    }
+
+    #[tokio::test]
+    async fn test_read_log_empty_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-empty", None).await.unwrap();
+        let exec_id = store
+            .insert_execution("t-log-empty", "focused")
+            .await
+            .unwrap();
+
+        std::fs::write(log_dir.join(format!("{}.log", exec_id)), "").unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: None,
+                limit: None,
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["total_lines"], 0);
+        assert_eq!(v["returned_lines"], 0);
+        assert_eq!(v["has_more"], false);
+        assert_eq!(v["lines"], serde_json::json!([]));
+    }
+
+    #[tokio::test]
+    async fn test_read_log_offset_beyond_eof() {
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("logs");
+        std::fs::create_dir_all(&log_dir).unwrap();
+
+        let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
+
+        store.ensure_thread("t-log-eof", None).await.unwrap();
+        let exec_id = store
+            .insert_execution("t-log-eof", "focused")
+            .await
+            .unwrap();
+
+        std::fs::write(log_dir.join(format!("{}.log", exec_id)), "line-0\nline-1\n").unwrap();
+
+        let result = server
+            .read_log_impl(ReadLogParams {
+                execution_id: exec_id.clone(),
+                offset: Some(999),
+                limit: None,
+                tail: None,
+            })
+            .await
+            .unwrap();
+
+        let v = extract_json(&result);
+        assert_eq!(v["total_lines"], 2);
+        assert_eq!(v["returned_lines"], 0);
+        assert_eq!(v["has_more"], false);
+        assert_eq!(v["lines"], serde_json::json!([]));
     }
 }

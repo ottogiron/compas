@@ -3,7 +3,7 @@
   "mcp": {
     "aster-orch-dev": {
       "type": "local",
-      "command": ["cargo", "run", "--manifest-path", "/Users/ottogiron/workspace/github.com/ottogiron/aster-orch/Cargo.toml", "--bin", "aster_orch", "--", "mcp-server", "--config", "/Users/ottogiron/workspace/github.com/ottogiron/aster-orch/.aster-orch/config.yaml"]
+      "command": ["cargo", "run", "--manifest-path", "/Users/ogiron/workspace/github/ottogiron/aster-orch/Cargo.toml", "--bin", "aster_orch", "--", "mcp-server", "--config", "/Users/ogiron/workspace/github/ottogiron/aster-orch/.aster-orch/config.yaml"]
     }
   }
 }

@@ -1,8 +1,9 @@
 //! WorkerRunner — poll-loop based trigger worker.
 //!
 //! On startup:
-//! 1. Marks orphaned executions (picked_up/executing) as crashed
-//! 2. Writes initial heartbeat
+//! 1. Kills orphaned backend processes (if PID recorded before crash)
+//! 2. Marks orphaned executions (picked_up/executing) as crashed
+//! 3. Writes initial heartbeat
 //!
 //! Main loop:
 //! 1. Scans for untriggered messages and enqueues executions
@@ -87,7 +88,49 @@ impl WorkerRunner {
             "worker starting"
         );
 
-        // Crash recovery: mark orphaned executions
+        // Crash recovery: kill orphan backend processes, then mark executions crashed.
+        // kill_process is blocking (SIGTERM → poll up to 5s → SIGKILL), so each
+        // kill runs inside spawn_blocking to avoid starving the tokio runtime.
+        if let Ok(orphans) = self.store.get_orphaned_executions_with_pid().await {
+            for (exec_id, pid) in &orphans {
+                #[cfg(unix)]
+                {
+                    let alive = unsafe { libc::kill(*pid as i32, 0) == 0 };
+                    if alive {
+                        tracing::warn!(
+                            exec_id = %exec_id,
+                            pid = pid,
+                            "killing orphaned backend process"
+                        );
+                        let kill_pid = *pid;
+                        let kill_exec_id = exec_id.clone();
+                        let kill_result = tokio::task::spawn_blocking(move || {
+                            crate::backend::process::kill_process(kill_pid)
+                        })
+                        .await;
+                        match kill_result {
+                            Ok(Err(e)) => {
+                                tracing::warn!(
+                                    exec_id = %kill_exec_id,
+                                    pid = pid,
+                                    error = %e,
+                                    "failed to kill orphaned process"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    exec_id = %kill_exec_id,
+                                    pid = pid,
+                                    error = %e,
+                                    "spawn_blocking panicked during orphan kill"
+                                );
+                            }
+                            Ok(Ok(())) => {}
+                        }
+                    }
+                }
+            }
+        }
         let crashed = self.store.mark_orphaned_executions_crashed().await?;
         if crashed > 0 {
             tracing::warn!(count = crashed, "marked orphaned executions as crashed");

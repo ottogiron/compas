@@ -19,6 +19,11 @@ pub struct Session {
     /// through to `wait_with_timeout()` for real-time event extraction.
     #[serde(skip)]
     pub stdout_tx: Option<Arc<std::sync::mpsc::SyncSender<String>>>,
+    /// Optional channel for reporting the backend process PID immediately
+    /// after `spawn_cli()`. Used by the executor to persist the PID in the DB
+    /// while the process is still running, enabling orphan detection on crash.
+    #[serde(skip)]
+    pub pid_tx: Option<std::sync::mpsc::SyncSender<u32>>,
 }
 
 /// Status of an agent session.
