@@ -32,11 +32,6 @@ Then run
 cargo install --git https://github.com/ottogiron/aster-orch
 ```
 
-
-This puts `aster_orch` on your PATH. Or build from source:
-cargo install --git https://github.com/ottogiron/compas
-```
-
 This puts `compas` on your PATH. Or build from source:
 
 ```bash
