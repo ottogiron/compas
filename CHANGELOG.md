@@ -6,12 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Changed
-
-- README audit: fix dashboard keybinding tables (log viewer, add conversation view), correct worktree path, add `changes-requested` to trigger\_intents examples, document `compas wait` flags/exit codes, add undocumented config fields (worktree\_dir, database, timeout\_secs, env), note Gemini stateless limitation, note prompt\_file precedence, document live config reload, simplify Quick Start config
-
 ### Added
 
+- Worktree uncommitted change detection — executor appends `## Worktree Status` (porcelain status + diff stat) to agent output when workspace is `worktree` and the worktree has uncommitted changes, giving downstream reviewers visibility into filesystem modifications
 - Worker singleton guard — fail-fast lockfile + heartbeat/PID check prevents multiple workers from running simultaneously, avoiding orphan-crash hazard (ADR-016)
 - `--standalone` flag for `dashboard` — opt out of the embedded worker when monitoring only
 - `orch_read_log` MCP tool — paginated access to execution log files with offset/limit/tail support, falls back to output_preview when log file is unavailable
@@ -21,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- README audit: fix dashboard keybinding tables (log viewer, add conversation view), correct worktree path, add `changes-requested` to trigger\_intents examples, document `compas wait` flags/exit codes, add undocumented config fields (worktree\_dir, database, timeout\_secs, env), note Gemini stateless limitation, note prompt\_file precedence, document live config reload, simplify Quick Start config
 - **Rebranded from aster-orch to compas** — new package name, binary, config paths (`~/.compas/`), and documentation
 - Licensed under MIT OR Apache-2.0
 - `dashboard` now spawns an embedded worker by default; `--with-worker` is a hidden no-op, `--standalone` disables it (ADR-016)

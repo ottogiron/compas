@@ -42,6 +42,78 @@ impl WorktreeManager {
         Self
     }
 
+    /// Check for uncommitted changes in a worktree. Returns a formatted
+    /// status string, or None if the worktree is clean or git fails.
+    pub fn worktree_status(worktree_path: &Path) -> Option<String> {
+        let path_str = worktree_path.to_string_lossy();
+
+        // Check for uncommitted changes via porcelain status
+        let status_output = Command::new("git")
+            .args(["-C", &path_str, "status", "--porcelain"])
+            .output()
+            .ok()?;
+
+        if !status_output.status.success() {
+            return None;
+        }
+
+        let porcelain = String::from_utf8_lossy(&status_output.stdout);
+        let porcelain = porcelain.trim();
+
+        // Clean worktree — nothing to report
+        if porcelain.is_empty() {
+            return None;
+        }
+
+        // Get branch name (best-effort)
+        let branch = Command::new("git")
+            .args(["-C", &path_str, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+
+        // Get diff stat (best-effort)
+        let diff_stat = Command::new("git")
+            .args(["-C", &path_str, "diff", "--stat"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    let s = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                } else {
+                    None
+                }
+            });
+
+        let mut result = String::new();
+        result.push_str("\n\n## Worktree Status\n");
+        result.push_str(&format!("Path: {}\n", worktree_path.display()));
+        result.push_str(&format!("Branch: {}\n", branch));
+        result.push_str("Uncommitted changes:\n");
+        result.push_str(porcelain);
+        result.push('\n');
+
+        if let Some(stat) = diff_stat {
+            result.push('\n');
+            result.push_str(&stat);
+            result.push('\n');
+        }
+
+        Some(result)
+    }
+
     /// Ensure a worktree exists for the given thread. Creates one if needed.
     ///
     /// `override_dir`: optional worktree parent directory override from config.
@@ -497,5 +569,142 @@ mod tests {
         mgr.remove_worktree(dir.path(), "test-override", Some(override_dir.path()))
             .unwrap();
         assert!(!wt_path.exists(), "worktree should be removed");
+    }
+
+    #[test]
+    fn test_worktree_status_nonexistent_path() {
+        let result = WorktreeManager::worktree_status(Path::new("/nonexistent/path"));
+        assert!(result.is_none(), "nonexistent path should return None");
+    }
+
+    #[test]
+    fn test_worktree_status_clean_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize a git repo with one commit — clean state
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+
+        let result = WorktreeManager::worktree_status(dir.path());
+        assert!(result.is_none(), "clean repo should return None");
+    }
+
+    #[test]
+    fn test_worktree_status_dirty_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize a git repo with one commit
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+
+        // Create an untracked file to make the worktree dirty
+        std::fs::write(dir.path().join("new_file.txt"), "hello").unwrap();
+
+        let result = WorktreeManager::worktree_status(dir.path());
+        assert!(result.is_some(), "dirty repo should return Some");
+
+        let status = result.unwrap();
+        assert!(
+            status.contains("## Worktree Status"),
+            "should contain header"
+        );
+        assert!(
+            status.contains("Uncommitted changes:"),
+            "should contain changes label"
+        );
+        assert!(
+            status.contains("new_file.txt"),
+            "should list the dirty file"
+        );
+        assert!(status.contains("Branch:"), "should contain branch info");
+    }
+
+    #[test]
+    fn test_worktree_status_modified_tracked_file() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize a git repo, add a file, then modify it
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        std::fs::write(dir.path().join("tracked.txt"), "original").unwrap();
+
+        let _ = Command::new("git")
+            .args(["-C", &dir.path().to_string_lossy(), "add", "tracked.txt"])
+            .output()
+            .unwrap();
+
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "add tracked file",
+            ])
+            .output()
+            .unwrap();
+
+        // Modify the tracked file
+        std::fs::write(dir.path().join("tracked.txt"), "modified").unwrap();
+
+        let result = WorktreeManager::worktree_status(dir.path());
+        assert!(result.is_some(), "modified tracked file should return Some");
+
+        let status = result.unwrap();
+        assert!(
+            status.contains("tracked.txt"),
+            "should list the modified file"
+        );
+        // diff --stat should be present for tracked file modifications
+        assert!(
+            status.contains("changed"),
+            "should include diff stat summary"
+        );
     }
 }

@@ -158,6 +158,9 @@ pub async fn execute_trigger(
         .workdir
         .clone()
         .unwrap_or_else(|| target_repo_root.to_path_buf());
+    // Track the actual worktree path (not fallback) for post-execution status check.
+    let mut worktree_path_for_status: Option<PathBuf> = None;
+
     let execution_workdir = if agent_config.workspace.as_deref() == Some("worktree") {
         let wt_thread_id = execution.thread_id.clone();
         let wt_agent_workdir = agent_workdir.clone();
@@ -172,6 +175,7 @@ pub async fn execute_trigger(
         };
         match wt_result {
             Ok(Some(path)) => {
+                worktree_path_for_status = Some(path.clone());
                 if let Err(e) = store
                     .set_thread_worktree_path(&execution.thread_id, &path, &agent_workdir)
                     .await
@@ -289,8 +293,24 @@ pub async fn execute_trigger(
         Ok(result) => {
             // Intent is already parsed by the backend — no executor-side parsing needed.
             let parsed_intent = result.parsed_intent.clone();
-            let output_text = result.result_text.clone();
+            let mut output_text = result.result_text.clone();
             let error_category = result.error_category.clone();
+
+            // Append worktree uncommitted change status when applicable.
+            // Uses spawn_blocking because worktree_status runs git subprocesses.
+            if result.success {
+                let status_suffix = if let Some(wt_path) = worktree_path_for_status.clone() {
+                    tokio::task::spawn_blocking(move || WorktreeManager::worktree_status(&wt_path))
+                        .await
+                        .ok()
+                        .flatten()
+                } else {
+                    None
+                };
+                if let Some(s) = status_suffix {
+                    output_text.push_str(&s);
+                }
+            }
 
             if result.success {
                 match store
