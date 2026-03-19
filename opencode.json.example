@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "compas-dev": {
+      "type": "local",
+      "command": ["cargo", "run", "--manifest-path", "/path/to/compas/Cargo.toml", "--bin", "compas", "--", "mcp-server", "--config", "/path/to/compas/.compas/config.yaml"]
+    }
+  }
+}

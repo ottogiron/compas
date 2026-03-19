@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "compas-dev": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--manifest-path", "/path/to/compas/Cargo.toml",
+        "--bin", "compas",
+        "--",
+        "mcp-server",
+        "--config", "/path/to/compas/.compas/config.yaml"
+      ]
+    }
+  }
+}
