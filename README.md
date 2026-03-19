@@ -148,7 +148,7 @@ Your CLI uses `orch_dispatch` behind the scenes. You can let it infer the dispat
 
 > "Use orch to dispatch to the dev agent: refactor the error handling in src/api.rs to use proper error types"
 
-The agent works in your repo while the dashboard shows progress in real time. When the agent finishes, it sends a review request.
+The agent works in your repo while the dashboard shows progress in real time.
 
 ![Waiting for results and closing the thread](docs/images/dispatch-2.png)
 
