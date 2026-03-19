@@ -1429,9 +1429,7 @@ impl App {
                 Block::bordered()
                     .border_set(border::ONE_EIGHTH_WIDE)
                     .border_style(Style::new().fg(theme::BORDER_DIM))
-                    .title_top(
-                        Line::from(" aster-orch ".fg(theme::TEXT_BRIGHT).bold()).left_aligned(),
-                    )
+                    .title_top(Line::from(" compas ".fg(theme::TEXT_BRIGHT).bold()).left_aligned())
                     .style(Style::new().bg(theme::BG_PRIMARY)),
             )
             .select(self.active_tab)

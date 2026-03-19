@@ -4,4 +4,6 @@
 .claude/*
 !.claude/skills
 .DS_Store
-.aster-orch/state/
+.compas/state/
+.mcp.json
+opencode.json

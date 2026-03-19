@@ -1,4 +1,4 @@
-# Architecture Decision Records — Aster Orchestrator
+# Architecture Decision Records — Compas
 
 ## ADR-001: SQLite as sole persistence backend
 
@@ -37,25 +37,25 @@ Moved from single `.session` file to `.sessions/` directory with per-key YAML fi
 **Date:** 2026-03
 **Status:** Active
 
-Extracted ticket-tracker to its own repo (`ottogiron/ticket-tracker`). Installed globally via `cargo install`. Generic tool usable across any project — not coupled to aster or aster-orch.
+Extracted ticket-tracker to its own repo (`ottogiron/ticket-tracker`). Installed globally via `cargo install`. Generic tool usable across any project — not coupled to aster or compas.
 
 ## ADR-006: Standalone repo with independent dev infrastructure
 
 **Date:** 2026-03
 **Status:** Active
 
-Extracted aster-orch from aster as a fully independent repository with its own development infrastructure: ticket system, backlogs, pre-commit hooks, skills, governance docs, and MCP server configs.
+Extracted compas from aster as a fully independent repository with its own development infrastructure: ticket system, backlogs, pre-commit hooks, skills, governance docs, and MCP server configs.
 
-**Why:** Submodule git workflow (two-step commits, detached HEAD) added friction. Parallel development on aster (compiler) and aster-orch (orchestrator) was blocked by the single-session ticket system. Independent repos enable independent development cadences.
+**Why:** Submodule git workflow (two-step commits, detached HEAD) added friction. Parallel development on aster (compiler) and compas (orchestrator) was blocked by the single-session ticket system. Independent repos enable independent development cadences.
 
 **How it works:**
 
-- Production orch (`aster-orch` MCP server) dispatches agents to work on any repo, including aster-orch itself.
-- Dev orch (`aster-orch-dev` MCP server, via `cargo run`) uses a local state directory (`.aster-orch/state/`) for testing MCP changes.
+- Production orch (`compas` MCP server) dispatches agents to work on any repo, including compas itself.
+- Dev orch (`compas-dev` MCP server, via `cargo run`) uses a local state directory (`.compas/state/`) for testing MCP changes.
 - Both MCP servers are configured globally (user scope) in Claude Code, Codex, and OpenCode — available from any project.
 - `make dashboard-dev` runs the dashboard with an embedded worker on the dev DB.
 
-**Trade-off:** Loses the convenience of `cargo test -p aster-orch` from the aster workspace. Gained: independent git history, parallel ticket sessions, no submodule friction, self-contained dev infrastructure.
+**Trade-off:** Loses the convenience of `cargo test -p compas` from the aster workspace. Gained: independent git history, parallel ticket sessions, no submodule friction, self-contained dev infrastructure.
 
 ## ADR-007: Graceful worker shutdown via SIGTERM + semaphore drain
 
@@ -110,13 +110,13 @@ macOS desktop notifications on execution completion/failure via `osascript -e 'd
 
 Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in different repositories without changing the global `target_repo_root`. Combined with `workspace: worktree | shared` for git worktree isolation per-thread.
 
-**Why:** The `target_repo_root` is global — all agents share it. When orchestrating work across multiple repos (e.g., aster compiler + aster-orch), agents need different working directories. The original workaround was prompt-based `cd` instructions, which was fragile.
+**Why:** The `target_repo_root` is global — all agents share it. When orchestrating work across multiple repos (e.g., aster compiler + compas), agents need different working directories. The original workaround was prompt-based `cd` instructions, which was fragile.
 
 **Design:** Per-agent `workdir` is the low-level primitive. It sets the `current_dir` for the backend CLI process. `workspace: worktree` creates git worktrees from the agent's base workdir. Both are optional — omitting them preserves the existing shared-workspace behavior.
 
 **Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) was deferred to ORCH-TEAM-6. Per-agent `workdir` is the interim solution that solves the immediate need. When project-based config is implemented, it would set `workdir` on its agents, making `workdir` the underlying primitive either way.
 
-**Config location:** The production orch config has migrated to `~/.aster-orch/config.yaml` (the new default). See ADR-013. The aster-orch repo retains `.aster-orch/config.yaml` as the **dev** config for testing MCP changes — this is distinct from the production default.
+**Config location:** The production orch config has migrated to `~/.compas/config.yaml` (the new default). See ADR-013. The compas repo retains `.compas/config.yaml` as the **dev** config for testing MCP changes — this is distinct from the production default.
 
 ## ADR-011: Retry with error classification
 
@@ -148,25 +148,25 @@ Backend stdout lines are streamed through a `sync_channel(128)` from the reader 
 
 **EventBus emission:** `ExecutionProgress` events are broadcast on the shared EventBus so the dashboard can update the active execution view in real time without polling.
 
-## ADR-013: Production Config at ~/.aster-orch/
+## ADR-013: Production Config at ~/.compas/
 
 **Date:** 2026-03
 **Status:** Active
 
-The default config location for the production `aster_orch` binary is now `~/.aster-orch/config.yaml`. All subcommands (`worker`, `mcp-server`, `dashboard`, `wait`) fall back to this path when `--config` is not provided.
+The default config location for the production `compas` binary is now `~/.compas/config.yaml`. All subcommands (`worker`, `mcp-server`, `dashboard`, `wait`) fall back to this path when `--config` is not provided.
 
-**Context:** Previously the config was coupled to the aster repo at `~/workspace/github.com/ottogiron/aster/.aster-orch/config.yaml`. This created a discovery problem: every MCP server registration, every `aster_orch` CLI invocation, and every doc example had to hardcode that path. Moving to a machine-installed binary (via `cargo install`) made the old path a portability liability.
+**Context:** Previously the config was coupled to a specific repository checkout path. This created a discovery problem: every MCP server registration, every `compas` CLI invocation, and every doc example had to hardcode that path. Moving to a machine-installed binary (via `cargo install`) made the old path a portability liability.
 
-**Decision:** Default to `~/.aster-orch/config.yaml`. The `--config` flag remains available to override for non-default setups (e.g., the repo-level dev config at `.aster-orch/config.yaml`).
+**Decision:** Default to `~/.compas/config.yaml`. The `--config` flag remains available to override for non-default setups (e.g., the repo-level dev config at `.compas/config.yaml`).
 
 **Rationale:**
 
 - Neutral, user-scoped location — no dependency on a specific repo being checked out.
-- Simplifies MCP server registration: `aster_orch mcp-server` with no flags just works.
+- Simplifies MCP server registration: `compas mcp-server` with no flags just works.
 - Prepares for multi-project config support (ORCH-TEAM-6) where a single user-level config defines agents across multiple repos via per-agent `workdir`.
 - Consistent with Unix conventions for user-scoped tool config (`~/.tool/`).
 
-**Dev config distinction:** The repo-relative `.aster-orch/config.yaml` remains the dev config for testing MCP changes. It is loaded via `make dashboard-dev` or `cargo run` with an explicit `--config` flag, keeping it fully isolated from the production default.
+**Dev config distinction:** The repo-relative `.compas/config.yaml` remains the dev config for testing MCP changes. It is loaded via `make dashboard-dev` or `cargo run` with an explicit `--config` flag, keeping it fully isolated from the production default.
 
 ## ADR-014: Config-driven auto-handoff chains
 
@@ -189,7 +189,7 @@ Operator-mediated dispatch is a bottleneck for multi-step workflows (e.g., imple
 - **Fan-out via batch-linked threads** — when `on_response` is a list, each target gets its own independent thread sharing a batch ID. Parallel execution runs across threads, not within a single thread. The operator is the join point; `orch_batch_status` provides aggregate results. This avoids same-thread parallel execution complexity and keeps the single-active-execution-per-thread invariant.
 - **`handoff_prompt` composition** — custom prompt text is prepended first, then the auto-generated context (originating thread ID, agent alias, transcript). This lets the receiving agent read task-specific instructions before the context dump.
 - **`HandoffTarget` untagged enum** — YAML `on_response: reviewer` (string) and `on_response: [reviewer, reviewer-2]` (list) both deserialize correctly without a type tag. This preserves backward compatibility for existing configs using the string form.
-- **`--await-chain` CLI wait flag** — `aster_orch wait --thread-id <id> --await-chain` polls until the thread's chain AND direct fan-out child threads (linked via `source_thread_id`) have settled. Only direct children are tracked — if a fan-out child itself triggers further fan-out, those grandchildren are not counted (`max_chain_depth` prevents this in practice). Reply message and fan-out thread creation are atomic (single transaction) to prevent the wait loop from seeing the reply without the fan-out.
+- **`--await-chain` CLI wait flag** — `compas wait --thread-id <id> --await-chain` polls until the thread's chain AND direct fan-out child threads (linked via `source_thread_id`) have settled. Only direct children are tracked — if a fan-out child itself triggers further fan-out, those grandchildren are not counted (`max_chain_depth` prevents this in practice). Reply message and fan-out thread creation are atomic (single transaction) to prevent the wait loop from seeing the reply without the fan-out.
 
 ## ADR-015: Intent simplification — agents don't manage intents
 
@@ -215,7 +215,7 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 **Date:** 2026-03
 **Status:** Active
 
-**Problem:** Multiple concurrent worker processes cause an orphan-crash hazard. `mark_orphaned_executions_crashed` blanket-marks all in-flight work as crashed when a worker starts, which means a second worker kills the first worker's active executions. The standalone `aster_orch worker` command had no guard — only `dashboard --with-worker` had a lockfile check during spawn.
+**Problem:** Multiple concurrent worker processes cause an orphan-crash hazard. `mark_orphaned_executions_crashed` blanket-marks all in-flight work as crashed when a worker starts, which means a second worker kills the first worker's active executions. The standalone `compas worker` command had no guard — only `dashboard --with-worker` had a lockfile check during spawn.
 
 **Decision:** Fail-fast singleton guard via exclusive lockfile + heartbeat/PID liveness check, enforced in `run_worker()` itself (not just the dashboard spawn path). The guard:
 
@@ -224,7 +224,7 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 3. Returns a RAII guard struct that holds the file descriptor (lock persists for process lifetime)
 4. On failure, returns an actionable error with worker PID and heartbeat age
 
-**Dashboard default flip:** `aster_orch dashboard` now spawns a worker by default (previously required `--with-worker`). A new `--standalone` flag opts out. `--with-worker` is retained as a hidden no-op for backward compatibility.
+**Dashboard default flip:** `compas dashboard` now spawns a worker by default (previously required `--with-worker`). A new `--standalone` flag opts out. `--with-worker` is retained as a hidden no-op for backward compatibility.
 
 **Rationale:**
 
@@ -234,6 +234,6 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 
 **Key choices:**
 
-- **Guard in `run_worker()`**, not just `spawn_worker_process()` — covers both `aster_orch worker` and `dashboard --with-worker` paths.
+- **Guard in `run_worker()`**, not just `spawn_worker_process()` — covers both `compas worker` and `dashboard --with-worker` paths.
 - **`spawn_worker_process()` keeps its pre-flight check** — avoids spawning a child process that would immediately exit due to the guard.
 - **`DaemonLockHeld` error enriched** with `worker_id`, PID, and heartbeat age for actionable diagnostics.

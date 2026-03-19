@@ -35,7 +35,7 @@ verify: fmt-check clippy test lint-md
 # ── Install ──────────────────────────────────────────────────────────
 install:
 	cargo install --path .
-	@echo "Installed aster_orch to ~/.cargo/bin/"
+	@echo "Installed compas to ~/.cargo/bin/"
 
 # ── Setup ────────────────────────────────────────────────────────────
 setup-hooks:
@@ -46,16 +46,16 @@ setup-hooks:
 
 # ── Runtime convenience ──────────────────────────────────────────────
 worker:
-	cargo run --bin aster_orch -- worker --config .aster-orch/config.yaml
+	cargo run --bin compas -- worker --config .compas/config.yaml
 
 dashboard:
-	cargo run --bin aster_orch -- dashboard --config .aster-orch/config.yaml
+	cargo run --bin compas -- dashboard --config .compas/config.yaml
 
 dashboard-dev:
-	cargo run --bin aster_orch -- dashboard --config .aster-orch/config.yaml
+	cargo run --bin compas -- dashboard --config .compas/config.yaml
 
 dashboard-standalone:
-	cargo run --bin aster_orch -- dashboard --standalone --config .aster-orch/config.yaml
+	cargo run --bin compas -- dashboard --standalone --config .compas/config.yaml
 
 mcp-server:
-	cargo run --bin aster_orch -- mcp-server --config .aster-orch/config.yaml
+	cargo run --bin compas -- mcp-server --config .compas/config.yaml

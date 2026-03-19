@@ -1,4 +1,4 @@
-//! Integration tests for aster-orch: store, MCP tools, backend registry.
+//! Integration tests for compas: store, MCP tools, backend registry.
 //!
 //! These tests use in-memory SQLite and a stub backend to exercise the full
 //! MCP tool surface without requiring external processes or real agents.
@@ -9,16 +9,16 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use sqlx::SqlitePool;
 
-use aster_orch::backend::registry::BackendRegistry;
-use aster_orch::backend::{Backend, BackendOutput, PingResult};
-use aster_orch::config::types::*;
-use aster_orch::config::ConfigHandle;
-use aster_orch::error::Result as OrchResult;
-use aster_orch::mcp::params::*;
-use aster_orch::mcp::server::OrchestratorMcpServer;
-use aster_orch::model::agent::Agent;
-use aster_orch::model::session::{Session, SessionStatus};
-use aster_orch::store::{ExecutionStatus, Store, ThreadStatus};
+use compas::backend::registry::BackendRegistry;
+use compas::backend::{Backend, BackendOutput, PingResult};
+use compas::config::types::*;
+use compas::config::ConfigHandle;
+use compas::error::Result as OrchResult;
+use compas::mcp::params::*;
+use compas::mcp::server::OrchestratorMcpServer;
+use compas::model::agent::Agent;
+use compas::model::session::{Session, SessionStatus};
+use compas::store::{ExecutionStatus, Store, ThreadStatus};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Test Harness
@@ -92,7 +92,7 @@ impl Backend for StubBackend {
 fn test_config() -> OrchestratorConfig {
     OrchestratorConfig {
         target_repo_root: PathBuf::from("/tmp"),
-        state_dir: PathBuf::from("/tmp/aster-orch-test"),
+        state_dir: PathBuf::from("/tmp/compas-test"),
         poll_interval_secs: 1,
         models: None,
         agents: vec![
@@ -512,7 +512,7 @@ mod store_tests {
 
     #[tokio::test]
     async fn test_message_ref_and_parse() {
-        use aster_orch::store::{message_ref, parse_message_ref};
+        use compas::store::{message_ref, parse_message_ref};
 
         assert_eq!(message_ref(42), "db:42");
         assert_eq!(parse_message_ref("db:42").unwrap(), 42);
@@ -938,7 +938,7 @@ mod dispatch_tests {
         // Verify next_step contains a ready-to-use CLI wait command.
         let next_step = json["next_step"].as_str().unwrap();
         assert!(
-            next_step.starts_with("aster_orch wait --thread-id "),
+            next_step.starts_with("compas wait --thread-id "),
             "next_step should start with wait command prefix, got: {next_step}"
         );
         assert!(
@@ -2173,7 +2173,7 @@ mod session_health_tests {
 
         assert!(!is_error(&result));
         let json = extract_json(&result);
-        assert_eq!(json["server"], "aster-orch");
+        assert_eq!(json["server"], "compas");
         assert_eq!(json["agent_count"], 2);
     }
 
@@ -2495,7 +2495,7 @@ mod diagnose_tests {
 
 mod worktree_tests {
     use super::*;
-    use aster_orch::worktree::WorktreeManager;
+    use compas::worktree::WorktreeManager;
     use std::process::Command;
 
     #[tokio::test]
@@ -2570,7 +2570,7 @@ mod worktree_tests {
         assert_eq!(execution.id, exec_id);
 
         // Execute with worktree mode
-        let output = aster_orch::worker::execute_trigger(
+        let output = compas::worker::execute_trigger(
             &execution,
             &store,
             &registry,
@@ -2591,7 +2591,7 @@ mod worktree_tests {
         let wt_path = repo_path
             .parent()
             .unwrap()
-            .join(".aster-worktrees")
+            .join(".compas-worktrees")
             .join("t-wt-1");
         assert!(wt_path.exists(), "worktree directory should exist");
 
@@ -2607,8 +2607,8 @@ mod worktree_tests {
         worktree_manager
             .remove_worktree(repo_path, "t-wt-1", None)
             .unwrap();
-        // Also clean up the .aster-worktrees directory
-        let wt_root = repo_path.parent().unwrap().join(".aster-worktrees");
+        // Also clean up the .compas-worktrees directory
+        let wt_root = repo_path.parent().unwrap().join(".compas-worktrees");
         let _ = std::fs::remove_dir_all(&wt_root);
     }
 
@@ -2661,7 +2661,7 @@ mod worktree_tests {
         let execution = store.claim_next_execution(1).await.unwrap().unwrap();
         assert_eq!(execution.id, exec_id);
 
-        let output = aster_orch::worker::execute_trigger(
+        let output = compas::worker::execute_trigger(
             &execution,
             &store,
             &registry,
@@ -2689,8 +2689,8 @@ mod worktree_tests {
 
 mod evo2_event_bus_tests {
     use super::*;
-    use aster_orch::events::{EventBus, OrchestratorEvent};
-    use aster_orch::worker::WorkerRunner;
+    use compas::events::{EventBus, OrchestratorEvent};
+    use compas::worker::WorkerRunner;
     use tokio::sync::Semaphore;
 
     // NOTE: Basic emit/subscribe tests live in src/events.rs as unit tests.
@@ -2714,7 +2714,7 @@ mod evo2_event_bus_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -2811,8 +2811,8 @@ mod evo2_event_bus_tests {
 
 mod prompt_hash_tests {
     use super::*;
-    use aster_orch::events::EventBus;
-    use aster_orch::worker::WorkerRunner;
+    use compas::events::EventBus;
+    use compas::worker::WorkerRunner;
     use sha2::{Digest, Sha256};
     use tokio::sync::Semaphore;
 
@@ -2835,7 +2835,7 @@ mod prompt_hash_tests {
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
 
         let event_bus = EventBus::new();
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle.clone(),
             store.clone(),
@@ -2939,7 +2939,7 @@ mod prompt_hash_tests {
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
 
         let event_bus = EventBus::new();
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -2987,16 +2987,16 @@ mod prompt_hash_tests {
 
 mod handoff_chain_tests {
     use super::*;
-    use aster_orch::config::types::{HandoffConfig, HandoffTarget};
-    use aster_orch::events::{EventBus, OrchestratorEvent};
-    use aster_orch::worker::WorkerRunner;
+    use compas::config::types::{HandoffConfig, HandoffTarget};
+    use compas::events::{EventBus, OrchestratorEvent};
+    use compas::worker::WorkerRunner;
     use tokio::sync::Semaphore;
 
     /// Config with agent A handing off `response` to agent B.
     fn chain_config() -> OrchestratorConfig {
         OrchestratorConfig {
             target_repo_root: PathBuf::from("/tmp"),
-            state_dir: PathBuf::from("/tmp/aster-orch-test"),
+            state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
             agents: vec![
@@ -3058,7 +3058,7 @@ mod handoff_chain_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -3147,7 +3147,7 @@ mod handoff_chain_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -3261,7 +3261,7 @@ mod handoff_chain_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -3372,7 +3372,7 @@ agents:
     handoff:
       on_response: operator
 "#;
-        let config = aster_orch::config::load_config_from_str(yaml).unwrap();
+        let config = compas::config::load_config_from_str(yaml).unwrap();
 
         let coder = &config.agents[0];
         let handoff = coder.handoff.as_ref().unwrap();
@@ -3406,7 +3406,7 @@ agents:
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -3488,7 +3488,7 @@ agents:
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -3560,7 +3560,7 @@ agents:
   - alias: reviewer
     backend: stub
 "#;
-        let config = aster_orch::config::load_config_from_str(yaml).unwrap();
+        let config = compas::config::load_config_from_str(yaml).unwrap();
 
         let coder = &config.agents[0];
         let handoff = coder.handoff.as_ref().unwrap();
@@ -3693,7 +3693,7 @@ mod pending_chain_work_tests {
 
 mod await_chain_wait_tests {
     use super::*;
-    use aster_orch::wait::{self, WaitOutcome, WaitRequest};
+    use compas::wait::{self, WaitOutcome, WaitRequest};
     use std::time::Duration;
 
     #[tokio::test]
@@ -4160,15 +4160,15 @@ mod await_chain_wait_tests {
 
 mod fanout_tests {
     use super::*;
-    use aster_orch::config::types::{HandoffConfig, HandoffTarget};
-    use aster_orch::events::{EventBus, OrchestratorEvent};
-    use aster_orch::worker::WorkerRunner;
+    use compas::config::types::{HandoffConfig, HandoffTarget};
+    use compas::events::{EventBus, OrchestratorEvent};
+    use compas::worker::WorkerRunner;
     use tokio::sync::Semaphore;
 
     fn fanout_config() -> OrchestratorConfig {
         OrchestratorConfig {
             target_repo_root: PathBuf::from("/tmp"),
-            state_dir: PathBuf::from("/tmp/aster-orch-test"),
+            state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
             agents: vec![
@@ -4247,7 +4247,7 @@ mod fanout_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -4335,7 +4335,7 @@ mod fanout_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -4439,7 +4439,7 @@ mod fanout_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),
@@ -4505,7 +4505,7 @@ mod fanout_tests {
         let event_bus = EventBus::new();
         let mut rx = event_bus.subscribe();
 
-        let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
         let runner = WorkerRunner::new(
             config_handle,
             store.clone(),

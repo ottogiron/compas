@@ -190,7 +190,7 @@ mod tests {
         load_config_from_str(&format!(
             r#"
 target_repo_root: {}
-state_dir: /tmp/aster-test-state
+state_dir: /tmp/compas-test-state
 agents:
   - alias: test-agent
     backend: stub
@@ -263,7 +263,7 @@ agents:
             format!(
                 r#"
 target_repo_root: {}
-state_dir: /tmp/aster-watcher-test
+state_dir: /tmp/compas-watcher-test
 agents:
   - alias: watched
     backend: stub

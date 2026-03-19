@@ -318,12 +318,12 @@ fn truncate_detail(s: &str) -> String {
 /// the same message are dropped. This is acceptable because Claude Code
 /// typically emits one tool_use per assistant message in stream-json mode.
 /// Shorten an absolute file path for display.
-/// Keeps the last 2-3 path components (e.g., "/Users/otto/.../src/backend/claude.rs" → "src/backend/claude.rs").
+/// Keeps the last 2-3 path components (e.g., "/home/user/projects/repo/src/backend/claude.rs" → "src/backend/claude.rs").
 fn shorten_path(path: &str) -> &str {
     // Find a reasonable suffix — keep up to 3 components from the end
     let parts: Vec<&str> = path.rsplitn(4, '/').collect();
     if parts.len() >= 4 {
-        // parts = ["claude.rs", "backend", "src", "/Users/otto/.../"]
+        // parts = ["claude.rs", "backend", "src", "/home/user/.../"]
         // We want "src/backend/claude.rs"
         let start = path.len() - parts[0].len() - parts[1].len() - parts[2].len() - 2;
         &path[start..]
@@ -631,9 +631,7 @@ mod tests {
     #[test]
     fn test_shorten_path_absolute() {
         assert_eq!(
-            shorten_path(
-                "/Users/otto/workspace/github.com/ottogiron/aster-orch/src/backend/claude.rs"
-            ),
+            shorten_path("/home/user/projects/compas/src/backend/claude.rs"),
             "src/backend/claude.rs"
         );
     }

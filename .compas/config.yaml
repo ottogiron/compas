@@ -1,4 +1,4 @@
-# Development config for aster-orch
+# Development config for compas
 # Uses a local state directory to avoid conflicting with production
 target_repo_root: ..
 state_dir: state
@@ -24,5 +24,5 @@ agents:
     backend: claude
     model: claude-sonnet-4-6
     prompt: >
-      You are a development agent for aster-orch.
+      You are a development agent for compas.
       Follow AGENTS.md. Run make verify before submitting.

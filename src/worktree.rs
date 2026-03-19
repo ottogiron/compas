@@ -4,7 +4,7 @@
 //! creates an isolated git worktree for each thread. This prevents file
 //! conflicts when multiple agents work concurrently in the same repository.
 //!
-//! Default worktree location: `{repo_root}/../.aster-worktrees/{thread_id}/`
+//! Default worktree location: `{repo_root}/../.compas-worktrees/{thread_id}/`
 //! An optional `worktree_dir` config overrides the parent directory.
 
 use std::path::{Path, PathBuf};
@@ -26,14 +26,14 @@ pub struct WorktreeInfo {
 /// Compute the worktree root directory.
 ///
 /// If `override_dir` is provided, uses that. Otherwise defaults to
-/// `{repo_root}/../.aster-worktrees/`.
+/// `{repo_root}/../.compas-worktrees/`.
 fn worktree_root(repo_root: &Path, override_dir: Option<&Path>) -> PathBuf {
     match override_dir {
         Some(dir) => dir.to_path_buf(),
         None => repo_root
             .parent()
             .unwrap_or(repo_root)
-            .join(".aster-worktrees"),
+            .join(".compas-worktrees"),
     }
 }
 
@@ -87,7 +87,7 @@ impl WorktreeManager {
         }
 
         // 3. Create worktree with new branch
-        let branch_name = format!("aster-orch/{}", thread_id);
+        let branch_name = format!("compas/{}", thread_id);
         let repo_str = repo_root.to_string_lossy();
         let wt_str = worktree_path.to_string_lossy();
 
@@ -178,7 +178,7 @@ impl WorktreeManager {
         }
 
         // Best-effort branch cleanup
-        let branch_name = format!("aster-orch/{}", thread_id);
+        let branch_name = format!("compas/{}", thread_id);
         let branch_result = Command::new("git")
             .args(["-C", &repo_str, "branch", "-D", &branch_name])
             .output();
@@ -244,7 +244,7 @@ impl WorktreeManager {
         }
 
         // Best-effort branch cleanup
-        let branch_name = format!("aster-orch/{}", thread_id);
+        let branch_name = format!("compas/{}", thread_id);
         let branch_result = Command::new("git")
             .args(["-C", &repo_str, "branch", "-D", &branch_name])
             .output();
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn test_worktree_root_default() {
         let root = worktree_root(Path::new("/home/user/repo"), None);
-        assert_eq!(root, PathBuf::from("/home/user/.aster-worktrees"));
+        assert_eq!(root, PathBuf::from("/home/user/.compas-worktrees"));
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod tests {
     fn test_worktree_root_root_level_repo() {
         // When repo_root is `/`, parent() returns None, so fallback to repo_root itself.
         let root = worktree_root(Path::new("/"), None);
-        assert_eq!(root, PathBuf::from("/.aster-worktrees"));
+        assert_eq!(root, PathBuf::from("/.compas-worktrees"));
     }
 
     #[test]
@@ -431,12 +431,12 @@ mod tests {
         assert!(result.is_some(), "git repo should create worktree");
         let wt_path = result.unwrap();
         assert!(wt_path.exists(), "worktree path should exist");
-        // Default location: repo_root/../.aster-worktrees/thread_id
+        // Default location: repo_root/../.compas-worktrees/thread_id
         let expected = dir
             .path()
             .parent()
             .unwrap()
-            .join(".aster-worktrees")
+            .join(".compas-worktrees")
             .join("test-thread-123");
         assert_eq!(wt_path, expected);
 
@@ -451,8 +451,8 @@ mod tests {
             .unwrap();
         assert!(!wt_path.exists(), "worktree should be removed");
 
-        // Also clean up the .aster-worktrees directory
-        let wt_root = dir.path().parent().unwrap().join(".aster-worktrees");
+        // Also clean up the .compas-worktrees directory
+        let wt_root = dir.path().parent().unwrap().join(".compas-worktrees");
         let _ = std::fs::remove_dir_all(&wt_root);
     }
 

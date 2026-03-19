@@ -84,13 +84,13 @@ Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 Use the CLI wait (not the MCP tool — it was removed due to transport timeout issues):
 
 ```bash
-aster_orch wait \
+compas wait \
   --thread-id <thread-id> \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 > **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply (both `response` and `review-request`). This is the safest approach.
 >
@@ -158,13 +158,13 @@ Save the reviewer `thread_id` and `reference`.
 ### Step 7 — Wait for reviewer findings
 
 ```bash
-aster_orch wait \
+compas wait \
   --thread-id <reviewer-thread-id> \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 > **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 
@@ -309,8 +309,8 @@ Completion Status: completed / rejected / abandoned
 
 ## Failure Handling
 
-- **CLI wait timeout:** `aster_orch wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
-- **CLI wait error:** `aster_orch wait` exits `2`. Verify worker process + config path, then retry.
+- **CLI wait timeout:** `compas wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
+- **CLI wait error:** `compas wait` exits `2`. Verify worker process + config path, then retry.
 - **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.

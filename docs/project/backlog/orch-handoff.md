@@ -175,8 +175,6 @@ Parallelization: HANDOFF-1 and HANDOFF-3 can be dispatched in parallel (differen
 - Duration:
 - Notes:
 
-- Start: 2026-03-16 22:41 UTC
-
 - Ticket: ORCH-HANDOFF-2
 - Owner: TBD
 - Complexity: M
@@ -206,4 +204,12 @@ Parallelization: HANDOFF-1 and HANDOFF-3 can be dispatched in parallel (differen
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 4 tickets shipped and merged on main
+- HANDOFF-1: `handoff_prompt` field added. Custom prompt prepended to handoff message body.
+- HANDOFF-2: Multi-target fan-out via HandoffTarget::FanOut. Creates batch-linked threads. serde(untagged) for backward-compatible YAML.
+- HANDOFF-3: `--await-chain` CLI flag implemented. Polls until pending_work==0 and non-trigger reply exists after last handoff.
+- HANDOFF-4: README, architecture, DECISIONS updated. ADR-014 amended with fan-out design.
+- Verification:
+  - `make verify`: fmt-check + clippy + integration tests pass
+  - Fan-out: `on_response: [reviewer, reviewer-2]` creates 2 threads with shared batch ID
+  - `--await-chain`: returns reviewer's reply (not implementer's) after handoff chain settles

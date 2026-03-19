@@ -1,6 +1,6 @@
 # Aster-Orch Ops Dashboard Redesign
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-15
 

@@ -1,6 +1,6 @@
 //! Prototype: "Precision Instrument" theme — Ops tab
 //!
-//! Run: cargo run --example theme_ops -p aster-orch
+//! Run: cargo run --example theme_ops -p compas
 
 use std::io;
 
@@ -211,7 +211,7 @@ fn render_tab_bar(area: Rect, buf: &mut Buffer, active_tab: usize) {
             Block::bordered()
                 .border_set(border::ONE_EIGHTH_WIDE)
                 .border_style(Style::new().fg(BORDER_DIM))
-                .title_top(Line::from(" aster-orch ".fg(TEXT_BRIGHT).bold()).left_aligned())
+                .title_top(Line::from(" compas ".fg(TEXT_BRIGHT).bold()).left_aligned())
                 .style(Style::new().bg(BG_PRIMARY)),
         );
     tabs.render(area, buf);

@@ -534,4 +534,16 @@ Created: 2026-03-14
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- 8 of 14 tickets shipped and merged on main
+- EVO-1: Execution telemetry — execution_events table, real-time tool-call parsing, orch_execution_events MCP tool
+- EVO-2: Event broadcast channel — OrchestratorEvent enum, tokio::broadcast, dashboard subscribes
+- EVO-3: Dashboard "currently working on" — real-time summary per running execution, log viewer timeline
+- EVO-4: Desktop notifications — macOS osascript notifications on execution complete/fail/batch complete
+- EVO-5: Conversation view — full-screen overlay, message + execution marker interleaving, live polling
+- EVO-7: Git worktrees — workspace: worktree|shared config, git worktree add/remove, per-agent workdir (ADR-010)
+- EVO-12: Retry with error classification — ErrorCategory enum, transient vs terminal failures, exponential backoff
+- EVO-13: Prompt version hashing — SHA-256 hash of resolved prompt stored per execution
+- Still Todo (6): EVO-6 (Quick Dispatch), EVO-8 (HTTP API), EVO-9 (Web Dashboard), EVO-10 (Webhooks), EVO-11 (Periodic Summaries), EVO-14 (Thread Dependencies)
+- Verification:
+  - `make verify`: fmt-check + clippy + 362 unit + 22 bin + 93 integration = 477 tests pass
+  - Visual verification: dashboard shows live updates, conversation view renders correctly, notifications fire

@@ -133,7 +133,7 @@ agents: []
             &path,
             r#"
 target_repo_root: ./repo
-state_dir: ./.aster-orch/state
+state_dir: ./.compas/state
 agents:
   - alias: focused
     backend: stub
@@ -144,16 +144,10 @@ agents:
         let config = load_config(&path).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.target_repo_root, target_repo_root);
-        assert_eq!(
-            config.state_dir,
-            dir.path().join(".aster-orch").join("state")
-        );
+        assert_eq!(config.state_dir, dir.path().join(".compas").join("state"));
         assert_eq!(
             config.db_path(),
-            dir.path()
-                .join(".aster-orch")
-                .join("state")
-                .join("jobs.sqlite")
+            dir.path().join(".compas").join("state").join("jobs.sqlite")
         );
         assert_eq!(
             config.agents[0].prompt_file.as_deref(),

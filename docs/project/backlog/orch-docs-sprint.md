@@ -1,6 +1,6 @@
 # Aster-Orch Docs Sprint — Feature Documentation Parity
 
-Status: Active
+Status: Closed
 Owner: orch-ux
 Created: 2026-03-15
 
@@ -50,10 +50,6 @@ Created: 2026-03-15
 - Complexity: S
 - Risk: Low
 - Start: 2026-03-15 16:18 UTC
-- End:
-- Duration:
-- Notes: docs-only sprint, no code changes
-
 - End: 2026-03-15 16:19 UTC
-
 - Duration: 00:01:10
+- Notes: docs-only sprint, no code changes

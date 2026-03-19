@@ -1,4 +1,4 @@
-name: aster-orch CI
+name: compas CI
 
 on:
   push:
