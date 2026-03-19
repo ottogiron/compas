@@ -4,6 +4,8 @@ Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to
 
 Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — point it at any repository.
 
+![Compas dashboard showing active threads and executions](docs/images/dashboard-ops.png)
+
 ## Prerequisites
 
 - **Rust** toolchain (`cargo`)
@@ -136,6 +138,8 @@ When the dashboard exits, it sends SIGTERM to the embedded worker, which drains 
 
 ### 4. Dispatch your first task
 
+![Dispatching a task from Claude Code](docs/images/dispatch-1.png)
+
 From your coding CLI (Claude Code, Codex, Gemini CLI, or OpenCode), just ask it to dispatch work:
 
 > "Dispatch to dev: Add a health check endpoint that returns the current version"
@@ -144,7 +148,11 @@ Your CLI uses `orch_dispatch` behind the scenes. You can let it infer the dispat
 
 > "Use orch to dispatch to the dev agent: refactor the error handling in src/api.rs to use proper error types"
 
-The agent works in your repo while the dashboard shows progress in real time. When the agent finishes, it sends a review request. Review the work in the dashboard log viewer (`Enter` on the execution) or ask your CLI:
+The agent works in your repo while the dashboard shows progress in real time. When the agent finishes, it sends a review request.
+
+![Waiting for results and closing the thread](docs/images/dispatch-2.png)
+
+Review the work in the dashboard log viewer (`Enter` on the execution) or ask your CLI:
 
 > "Check the status of my dispatch to dev"
 > "Show me the transcript for that thread"
@@ -191,7 +199,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 | `↑/↓` or `j/k` | Navigate rows |
 | `g` / `G` | Jump to first / last row |
 | `Enter` | Open log viewer / drill into batch |
-| `c` | Open conversation view (Ops tab) |
+| `c` | Open conversation view (Ops tab, see below) |
 | `x` / `Esc` | Clear batch drill-down |
 | `r` | Refresh current tab |
 | `?` | Keyboard help |
@@ -210,6 +218,8 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 | `Esc` | Back to dashboard |
 
 **Conversation view** (`c` on a thread in Ops tab):
+
+![Conversation view showing dispatch and agent replies](docs/images/dashboard-conversation.png)
 
 | Key | Action |
 | --- | --- |
