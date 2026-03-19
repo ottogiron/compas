@@ -29,7 +29,7 @@ Then run
 
 ```bash
 # you will be asked for github authentication in this step
-cargo install --git https://github.com/ottogiron/aster-orch
+cargo install --git https://github.com/ottogiron/compas
 ```
 
 This puts `compas` on your PATH. Or build from source:
