@@ -1,8 +1,12 @@
 # compas
 
+![Status: Pre-v1](https://img.shields.io/badge/status-pre--v1-orange)
+
 Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to AI coding agents, monitor execution in a TUI dashboard, and manage the full lifecycle from your terminal.
 
 Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — point it at any repository.
+
+> **Pre-v1 — expect breaking changes.** Configuration format, MCP tool contracts, and CLI flags may change between minor versions. Pin to a specific version if stability matters to you.
 
 ![Compas dashboard showing active threads and executions](docs/images/dashboard-ops.png)
 
