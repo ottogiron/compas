@@ -57,7 +57,7 @@ fn daemon_lock_held_message(worker_id: &str, pid: u32, heartbeat_age_secs: i64) 
         format!(
             "worker lock held by another process (worker_id: {worker_id}). \
              Another worker holds the lock but hasn't started heartbeating yet. \
-             Check for running aster_orch processes: pgrep -fl aster_orch"
+             Check for running compas processes: pgrep -fl compas"
         )
     } else {
         format!(

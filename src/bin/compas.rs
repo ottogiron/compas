@@ -1,18 +1,18 @@
-//! aster-orch binary — two-process orchestrator.
+//! compas binary — two-process orchestrator.
 //!
 //! Usage:
-//!   aster_orch worker
-//!   aster_orch mcp-server
+//!   compas worker
+//!   compas mcp-server
 
-use aster_orch::backend::claude::ClaudeCodeBackend;
-use aster_orch::backend::codex::CodexBackend;
-use aster_orch::backend::gemini::GeminiBackend;
-use aster_orch::backend::opencode::OpenCodeBackend;
-use aster_orch::backend::registry::BackendRegistry;
-use aster_orch::mcp::server::OrchestratorMcpServer;
-use aster_orch::wait::{self, WaitOutcome, WaitRequest};
-use aster_orch::worker::{self, WorkerRunner};
 use clap::{Parser, Subcommand};
+use compas::backend::claude::ClaudeCodeBackend;
+use compas::backend::codex::CodexBackend;
+use compas::backend::gemini::GeminiBackend;
+use compas::backend::opencode::OpenCodeBackend;
+use compas::backend::registry::BackendRegistry;
+use compas::mcp::server::OrchestratorMcpServer;
+use compas::wait::{self, WaitOutcome, WaitRequest};
+use compas::worker::{self, WorkerRunner};
 use rmcp::ServiceExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -20,10 +20,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_CONFIG_PATH: &str = "~/.aster-orch/config.yaml";
+const DEFAULT_CONFIG_PATH: &str = "~/.compas/config.yaml";
 
 #[derive(Parser)]
-#[command(name = "aster-orch", version, about = "Agent orchestrator")]
+#[command(name = "compas", version, about = "Agent orchestrator")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -33,19 +33,19 @@ struct Cli {
 enum Commands {
     /// Run the trigger worker only
     Worker {
-        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
+        /// Path to config YAML (default: ~/.compas/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Run the MCP server only (stdio transport)
     McpServer {
-        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
+        /// Path to config YAML (default: ~/.compas/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
     },
     /// Launch the TUI dashboard (reads SQLite directly, no MCP required)
     Dashboard {
-        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
+        /// Path to config YAML (default: ~/.compas/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
         /// How often (in seconds) to re-query SQLite for fresh metrics
@@ -63,7 +63,7 @@ enum Commands {
     /// Exits 0 when a matching message is found, 1 on timeout, 2 on error.
     /// Output is key=value lines on stdout for easy bash parsing.
     Wait {
-        /// Path to config YAML (default: ~/.aster-orch/config.yaml)
+        /// Path to config YAML (default: ~/.compas/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
         /// Thread ID to wait on
@@ -157,7 +157,7 @@ async fn main() -> ExitCode {
 
 fn effective_config_path(config: Option<PathBuf>) -> PathBuf {
     let raw = config.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_PATH));
-    aster_orch::config::expand_tilde(&raw)
+    compas::config::expand_tilde(&raw)
 }
 
 fn init_tracing() {
@@ -179,7 +179,7 @@ fn init_tracing_stderr() {
 
 async fn connect_db(
     db_path: &std::path::Path,
-    config: &aster_orch::config::types::OrchestratorConfig,
+    config: &compas::config::types::OrchestratorConfig,
 ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
@@ -188,12 +188,12 @@ async fn connect_db(
         .acquire_timeout(Duration::from_millis(config.database.acquire_timeout_ms))
         .connect(&db_url)
         .await?;
-    let store = aster_orch::store::Store::new(pool.clone());
+    let store = compas::store::Store::new(pool.clone());
     store.setup().await?;
     Ok(pool)
 }
 
-fn resolve_db_path(config: &aster_orch::config::types::OrchestratorConfig) -> PathBuf {
+fn resolve_db_path(config: &compas::config::types::OrchestratorConfig) -> PathBuf {
     config.db_path()
 }
 
@@ -201,9 +201,7 @@ fn resolve_config_path(config_path: &PathBuf) -> PathBuf {
     std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.clone())
 }
 
-fn build_backend_registry(
-    config: &aster_orch::config::types::OrchestratorConfig,
-) -> BackendRegistry {
+fn build_backend_registry(config: &compas::config::types::OrchestratorConfig) -> BackendRegistry {
     let mut registry = BackendRegistry::new();
 
     let workdir = Some(config.target_repo_root.clone());
@@ -236,7 +234,7 @@ fn build_backend_registry(
 
 async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config_path = resolve_config_path(&config_path);
-    let config = aster_orch::config::load_config(&config_path)?;
+    let config = compas::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config);
     tracing::info!(
         agents = config.agents.len(),
@@ -247,31 +245,31 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
 
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
-    let store = aster_orch::store::Store::new(pool);
+    let store = compas::store::Store::new(pool);
 
     // Acquire singleton guard — fails fast if another worker is alive.
     let _worker_lock = worker::guard::acquire_worker_lock(&config.state_dir, &store).await?;
 
-    let worktree_manager = aster_orch::worktree::WorktreeManager::new();
+    let worktree_manager = compas::worktree::WorktreeManager::new();
 
     // Log legacy worktree directory if it exists.
     let legacy_worktree_dir = config.state_dir.join("worktrees");
     if legacy_worktree_dir.exists() {
         tracing::warn!(
-            "legacy worktree directory found at {}; worktrees now live at {{repo_root}}/../.aster-worktrees/. Remove manually: rm -rf {}",
+            "legacy worktree directory found at {}; worktrees now live at {{repo_root}}/../.compas-worktrees/. Remove manually: rm -rf {}",
             legacy_worktree_dir.display(),
             legacy_worktree_dir.display()
         );
     }
 
     // Start config file watcher and get a live-reloadable handle.
-    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
-    let event_bus = aster_orch::events::EventBus::new();
+    let config_handle = compas::config::watcher::start_watching(config_path.clone(), config)?;
+    let event_bus = compas::events::EventBus::new();
 
     // Note: notification toggle is evaluated once at startup.
     // Changing notifications.desktop in config requires worker restart.
     if config_handle.load().notifications.desktop {
-        aster_orch::notifications::spawn_notification_consumer(&event_bus);
+        compas::notifications::spawn_notification_consumer(&event_bus);
         tracing::info!("desktop notifications enabled");
     }
 
@@ -298,7 +296,7 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
 
 async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let resolved_config_path = resolve_config_path(&config_path);
-    let config = aster_orch::config::load_config(&config_path)?;
+    let config = compas::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config);
     tracing::info!(
         agents = config.agents.len(),
@@ -309,10 +307,10 @@ async fn run_mcp_server(config_path: PathBuf) -> Result<(), Box<dyn std::error::
 
     let backend_registry = build_backend_registry(&config);
     let pool = connect_db(&db_path, &config).await?;
-    let store = aster_orch::store::Store::new(pool);
+    let store = compas::store::Store::new(pool);
 
     // Start config file watcher and get a live-reloadable handle.
-    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
+    let config_handle = compas::config::watcher::start_watching(config_path.clone(), config)?;
 
     let server = OrchestratorMcpServer::new(config_handle, store, backend_registry);
 
@@ -332,14 +330,14 @@ async fn run_dashboard(
     poll_interval: u64,
     spawn_worker: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let config = aster_orch::config::load_config(&config_path)?;
+    let config = compas::config::load_config(&config_path)?;
     let db_path = resolve_db_path(&config);
     let pool = connect_db(&db_path, &config).await?;
-    let store = aster_orch::store::Store::new(pool);
+    let store = compas::store::Store::new(pool);
 
     // Start config file watcher and get a live-reloadable handle.
     // All consumers share the same handle and see updates atomically.
-    let config_handle = aster_orch::config::watcher::start_watching(config_path.clone(), config)?;
+    let config_handle = compas::config::watcher::start_watching(config_path.clone(), config)?;
 
     // If requested, spawn the worker as a separate OS process so its
     // lifecycle is independent of the dashboard. The dashboard can be
@@ -374,7 +372,7 @@ async fn run_dashboard(
     // The TUI event loop is synchronous (crossterm blocking I/O).
     // Run it in a dedicated blocking thread so the tokio runtime stays healthy.
     let tui_result = tokio::task::spawn_blocking(move || {
-        aster_orch::dashboard::app::run_tui(
+        compas::dashboard::app::run_tui(
             store,
             config_handle,
             resolved_config_path,
@@ -455,7 +453,7 @@ const WORKER_HEARTBEAT_MAX_AGE_SECS: i64 = worker::WORKER_HEARTBEAT_MAX_AGE_SECS
 /// Returns `Ok(Some(pid))` if a new worker was spawned, `Ok(None)` if one is
 /// already running (heartbeat younger than 30 s), or an error on spawn failure.
 ///
-/// The child process runs `aster_orch worker --config <path>` with:
+/// The child process runs `compas worker --config <path>` with:
 /// - stdin  → /dev/null
 /// - stdout/stderr → `{state_dir}/worker.log` (append mode)
 ///
@@ -468,8 +466,8 @@ const WORKER_HEARTBEAT_MAX_AGE_SECS: i64 = worker::WORKER_HEARTBEAT_MAX_AGE_SECS
 ///
 /// The child is fully independent: quitting the dashboard does NOT stop it.
 async fn spawn_worker_process(
-    store: &aster_orch::store::Store,
-    config_handle: &aster_orch::config::ConfigHandle,
+    store: &compas::store::Store,
+    config_handle: &compas::config::ConfigHandle,
     config_path: &Path,
 ) -> Result<Option<u32>, Box<dyn std::error::Error>> {
     let state_dir = config_handle.load().state_dir.clone();
@@ -574,7 +572,7 @@ async fn run_wait(
     timeout: u64,
     await_chain: bool,
 ) -> ExitCode {
-    let config = match aster_orch::config::load_config(&config_path) {
+    let config = match compas::config::load_config(&config_path) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: failed to load config: {}", e);
@@ -589,7 +587,7 @@ async fn run_wait(
             return ExitCode::from(2);
         }
     };
-    let store = aster_orch::store::Store::new(pool);
+    let store = compas::store::Store::new(pool);
 
     let req = WaitRequest {
         thread_id,
@@ -649,7 +647,7 @@ mod tests {
 
     #[test]
     fn test_worker_parses_without_config_flag() {
-        let parsed = Cli::try_parse_from(["aster-orch", "worker"]);
+        let parsed = Cli::try_parse_from(["compas", "worker"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Worker { config } = cli.command {
@@ -662,7 +660,7 @@ mod tests {
 
     #[test]
     fn test_mcp_server_parses_without_config_flag() {
-        let parsed = Cli::try_parse_from(["aster-orch", "mcp-server"]);
+        let parsed = Cli::try_parse_from(["compas", "mcp-server"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::McpServer { config } = cli.command {
@@ -675,7 +673,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_parses_without_config_flag() {
-        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]);
+        let parsed = Cli::try_parse_from(["compas", "dashboard"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Dashboard { config, .. } = cli.command {
@@ -688,7 +686,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_parses_with_config_flag() {
-        let parsed = Cli::try_parse_from(["aster-orch", "dashboard", "--config", "foo.yaml"]);
+        let parsed = Cli::try_parse_from(["compas", "dashboard", "--config", "foo.yaml"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Dashboard { config, .. } = cli.command {
@@ -702,7 +700,7 @@ mod tests {
     #[test]
     fn test_dashboard_parses_with_poll_interval() {
         let parsed = Cli::try_parse_from([
-            "aster-orch",
+            "compas",
             "dashboard",
             "--config",
             "foo.yaml",
@@ -721,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_poll_interval_default() {
-        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]).unwrap();
+        let parsed = Cli::try_parse_from(["compas", "dashboard"]).unwrap();
         if let Commands::Dashboard {
             poll_interval,
             config,
@@ -737,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_spawns_worker_by_default() {
-        let parsed = Cli::try_parse_from(["aster-orch", "dashboard"]).unwrap();
+        let parsed = Cli::try_parse_from(["compas", "dashboard"]).unwrap();
         if let Commands::Dashboard {
             standalone, config, ..
         } = parsed.command
@@ -752,7 +750,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_standalone_disables_worker() {
-        let parsed = Cli::try_parse_from(["aster-orch", "dashboard", "--standalone"]).unwrap();
+        let parsed = Cli::try_parse_from(["compas", "dashboard", "--standalone"]).unwrap();
         if let Commands::Dashboard { standalone, .. } = parsed.command {
             assert!(standalone);
         } else {
@@ -764,7 +762,7 @@ mod tests {
     fn test_dashboard_with_worker_flag_still_accepted() {
         // --with-worker is a hidden no-op for backward compat.
         let parsed = Cli::try_parse_from([
-            "aster-orch",
+            "compas",
             "dashboard",
             "--config",
             "foo.yaml",
@@ -792,8 +790,7 @@ mod tests {
 
     #[test]
     fn test_dashboard_standalone_with_worker_conflict() {
-        let parsed =
-            Cli::try_parse_from(["aster-orch", "dashboard", "--standalone", "--with-worker"]);
+        let parsed = Cli::try_parse_from(["compas", "dashboard", "--standalone", "--with-worker"]);
         assert!(
             parsed.is_err(),
             "--standalone and --with-worker should conflict"
@@ -802,15 +799,15 @@ mod tests {
 
     #[test]
     fn test_wait_requires_thread_id() {
-        let parsed = Cli::try_parse_from(["aster-orch", "wait"]);
+        let parsed = Cli::try_parse_from(["compas", "wait"]);
         assert!(parsed.is_err());
-        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--timeout", "120"]);
+        let parsed = Cli::try_parse_from(["compas", "wait", "--timeout", "120"]);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn test_wait_parses_minimal() {
-        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--thread-id", "t-123"]);
+        let parsed = Cli::try_parse_from(["compas", "wait", "--thread-id", "t-123"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Wait {
@@ -832,7 +829,7 @@ mod tests {
     #[test]
     fn test_wait_parses_all_flags() {
         let parsed = Cli::try_parse_from([
-            "aster-orch",
+            "compas",
             "wait",
             "--config",
             "foo.yaml",
@@ -873,7 +870,7 @@ mod tests {
     #[test]
     fn test_effective_config_path_defaults_to_standard_location() {
         let home = std::env::var("HOME").expect("HOME must be set");
-        let expected = PathBuf::from(format!("{}/.aster-orch/config.yaml", home));
+        let expected = PathBuf::from(format!("{}/.compas/config.yaml", home));
         assert_eq!(effective_config_path(None), expected);
     }
 
@@ -889,9 +886,9 @@ mod tests {
     #[test]
     fn test_effective_config_path_expands_tilde_in_override() {
         let home = std::env::var("HOME").expect("HOME must be set");
-        let expected = PathBuf::from(format!("{}/.aster-orch/config.yaml", home));
+        let expected = PathBuf::from(format!("{}/.compas/config.yaml", home));
         assert_eq!(
-            effective_config_path(Some(PathBuf::from("~/.aster-orch/config.yaml"))),
+            effective_config_path(Some(PathBuf::from("~/.compas/config.yaml"))),
             expected
         );
     }
@@ -984,13 +981,8 @@ mod tests {
 
     #[test]
     fn test_wait_parses_await_chain_flag() {
-        let parsed = Cli::try_parse_from([
-            "aster-orch",
-            "wait",
-            "--thread-id",
-            "t-xyz",
-            "--await-chain",
-        ]);
+        let parsed =
+            Cli::try_parse_from(["compas", "wait", "--thread-id", "t-xyz", "--await-chain"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
             if let Commands::Wait { await_chain, .. } = cli.command {
@@ -1003,7 +995,7 @@ mod tests {
 
     #[test]
     fn test_wait_await_chain_defaults_false() {
-        let parsed = Cli::try_parse_from(["aster-orch", "wait", "--thread-id", "t-abc"]).unwrap();
+        let parsed = Cli::try_parse_from(["compas", "wait", "--thread-id", "t-abc"]).unwrap();
         if let Commands::Wait { await_chain, .. } = parsed.command {
             assert!(!await_chain);
         } else {

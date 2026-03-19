@@ -1,7 +1,7 @@
-//! TUI dashboard for aster-orch.
+//! TUI dashboard for compas.
 //!
 //! Reads SQLite directly (no MCP, no network). Intended to be launched as:
-//!   `aster_orch dashboard`
+//!   `compas dashboard`
 
 pub mod app;
 pub mod theme;

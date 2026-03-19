@@ -19,7 +19,7 @@ Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/de
 ## Inputs
 
 - Active ticket or batch context from `/dev-workflow`
-- Target worker alias (routing: `orch-dev` for aster-orch development work)
+- Target worker alias (routing: `orch-dev` for compas development work)
 - Reviewer alias: `orch-reviewer` (configured in the production orch config). Verify with `orch_list_agents()`.
 - Task description with acceptance criteria
 
@@ -37,7 +37,7 @@ This means the `changes-requested` → rework loop (Step 8 → Step 3) is signif
 
 ## Worktree Isolation
 
-Agents with `workspace: worktree` run in isolated git worktrees. Each thread gets its own copy of the repo on branch `aster-orch/{thread_id}`. This prevents concurrent agents from conflicting on files.
+Agents with `workspace: worktree` run in isolated git worktrees. Each thread gets its own copy of the repo on branch `compas/{thread_id}`. This prevents concurrent agents from conflicting on files.
 
 When reviewing work from a worktree agent, the changes are on the worktree branch — not on main. The operator merges or cherry-picks the work after approval.
 
@@ -61,7 +61,7 @@ Check `orch_tasks` for `attempt_number` to see if an execution was a retry.
 orch_health(alias="<worker>")
 ```
 
-Use the **production** orch (`aster-orch` MCP server) for dispatching work. The dev orch (`aster-orch-dev`) is for testing MCP changes only.
+Use the **production** orch (`compas` MCP server) for dispatching work. The dev orch (`compas-dev`) is for testing MCP changes only.
 
 ### Step 2 — Dispatch to worker
 
@@ -82,13 +82,13 @@ Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 Use the CLI wait (not MCP `orch_wait` — removed due to stdio transport timeout issues).
 
 ```bash
-aster_orch wait \
+compas wait \
   --thread-id <thread-id> \
   --since db:<dispatch-message-id> \
   --timeout 900
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 > **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply. This is the safest approach. Agents don't manage intents (ADR-015) — all replies get `response` automatically.
 >
@@ -140,13 +140,13 @@ Save the reviewer `thread_id` and `reference`.
 ### Step 7 — Wait for reviewer findings
 
 ```bash
-aster_orch wait \
+compas wait \
   --thread-id <reviewer-thread-id> \
   --since db:<reviewer-dispatch-message-id> \
   --timeout 300
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 > **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 
@@ -280,8 +280,8 @@ Completion Status: completed / rejected / abandoned
 
 ## Failure Handling
 
-- **CLI wait timeout:** `aster_orch wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
-- **CLI wait error:** `aster_orch wait` exits `2`. Verify worker process + config path, then retry.
+- **CLI wait timeout:** `compas wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
+- **CLI wait error:** `compas wait` exits `2`. Verify worker process + config path, then retry.
 - **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.

@@ -1,6 +1,6 @@
 //! Prototype: "Precision Instrument" theme — Execution detail view
 //!
-//! Run: cargo run --example theme_detail -p aster-orch
+//! Run: cargo run --example theme_detail -p compas
 
 use std::io;
 
@@ -54,7 +54,7 @@ fn mock_input() -> Vec<String> {
         "## Task: Modernize `app.rs` with ratatui 0.30 patterns".into(),
         "".into(),
         "**Scope:** ONLY modify this file:".into(),
-        "- `crates/aster-orch/src/dashboard/app.rs`".into(),
+        "- `crates/compas/src/dashboard/app.rs`".into(),
         "".into(),
         "**Changes required:**".into(),
         "1. ratatui::init() / ratatui::restore() + DefaultTerminal".into(),
@@ -74,7 +74,7 @@ fn mock_output() -> Vec<String> {
     lines.push("│ Starting task: modernize app.rs                          │".into());
     lines.push("╰──────────────────────────────────────────────────────────╯".into());
     lines.push("".into());
-    lines.push("[14:32:07] Reading crates/aster-orch/src/dashboard/app.rs".into());
+    lines.push("[14:32:07] Reading crates/compas/src/dashboard/app.rs".into());
     lines.push("[14:32:07]   1703 lines, 48.2 KiB".into());
     lines.push("[14:32:08] Analyzing import structure...".into());
     lines.push("[14:32:08]   Found 14 ratatui imports to modernize".into());
@@ -111,8 +111,8 @@ fn mock_output() -> Vec<String> {
     lines.push("[14:32:19]   8 Block::default().borders(ALL) → Block::bordered()".into());
     lines.push("".into());
     lines.push("[14:32:20] Running verification...".into());
-    lines.push("[14:32:20]   cargo check -p aster-orch ✓".into());
-    lines.push("[14:32:25]   cargo test -p aster-orch".into());
+    lines.push("[14:32:20]   cargo check -p compas ✓".into());
+    lines.push("[14:32:25]   cargo test -p compas".into());
     lines.push("[14:32:28]     317 tests passed, 0 failed".into());
     lines.push("".into());
     lines.push("╭─ Result ─────────────────────────────────────────────────╮".into());

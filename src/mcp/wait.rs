@@ -1,7 +1,7 @@
 //! Wait implementation — preserved for potential future MCP re-exposure.
 //!
 //! Currently not registered as an MCP tool (removed due to stdio transport
-//! timeout unreliability). Blocking waits use the CLI: `aster_orch wait`.
+//! timeout unreliability). Blocking waits use the CLI: `compas wait`.
 //! Sends MCP progress notifications at regular intervals when used via MCP.
 
 use std::time::Duration;

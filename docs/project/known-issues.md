@@ -1,4 +1,4 @@
-# Known Issues — Aster Orchestrator
+# Known Issues — Compas
 
 ## MCP transport latency on large transcripts
 
@@ -47,7 +47,7 @@ If a persisted backend session ID has expired or been pruned by the provider (ov
 
 Dashboard now sends SIGTERM on exit. Worker drains in-flight executions (up to `execution_timeout_secs`) then exits cleanly. The dashboard waits up to 10s for the worker to exit before returning.
 
-**Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. The singleton guard (ADR-016) now prevents the worst outcome: a second worker starting and blanket-crashing the first worker's in-flight executions via `mark_orphaned_executions_crashed`. The next `aster_orch worker` or `aster_orch dashboard` startup detects the orphaned worker via lockfile + heartbeat/PID check and fails fast with an actionable error (PID, heartbeat age, kill hint). The stale process must still be killed manually.
+**Remaining edge case:** If the dashboard crashes or is killed with SIGKILL before the cleanup block runs, the worker remains orphaned. The singleton guard (ADR-016) now prevents the worst outcome: a second worker starting and blanket-crashing the first worker's in-flight executions via `mark_orphaned_executions_crashed`. The next `compas worker` or `compas dashboard` startup detects the orphaned worker via lockfile + heartbeat/PID check and fails fast with an actionable error (PID, heartbeat age, kill hint). The stale process must still be killed manually.
 
 ## Stale worker heartbeat prevents new worker spawn
 
@@ -68,7 +68,7 @@ The `is_active_waiting` filter excluded threads where the latest execution was c
 **Severity:** Low
 **Status:** Open
 
-Notifications say "aster-orch: focused completed / Execution completed in 2m 15s" but don't include **what** the agent was working on. The dispatch body (task description) or batch ID would make notifications actionable without switching to the dashboard.
+Notifications say "compas: focused completed / Execution completed in 2m 15s" but don't include **what** the agent was working on. The dispatch body (task description) or batch ID would make notifications actionable without switching to the dashboard.
 
 **Root cause:** `ExecutionCompleted` event only carries `agent_alias`, `success`, `duration_ms` — no task description. Including context requires a store lookup by `thread_id` to fetch the original dispatch message, adding a store dependency to the notification consumer.
 

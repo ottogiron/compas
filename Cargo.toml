@@ -1,13 +1,19 @@
 [workspace]
 
 [package]
-name = "aster-orch"
+name = "compas"
 version = "0.2.0"
 edition = "2021"
+description = "Multi-agent orchestrator for AI coding assistants"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ottogiron/compas"
+keywords = ["ai", "agent", "orchestrator", "mcp", "coding"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "README.md"
 
 [[bin]]
-name = "aster_orch"
-path = "src/bin/aster_orch.rs"
+name = "compas"
+path = "src/bin/compas.rs"
 
 [dependencies]
 # Database

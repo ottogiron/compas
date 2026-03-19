@@ -1,12 +1,12 @@
-# AGENTS.md — Aster Orchestrator
+# AGENTS.md — Compas
 
 Operational guide for agents working in this repository.
 
 ## Project Overview
 
-Aster Orchestrator is a multi-agent orchestration system for AI-assisted software development. It dispatches work to AI coding agents (Claude, Codex, Gemini, OpenCode), manages execution lifecycle, and provides a TUI dashboard for monitoring.
+Compas is a multi-agent orchestration system for AI-assisted software development. It dispatches work to AI coding agents (Claude, Codex, Gemini, OpenCode), manages execution lifecycle, and provides a TUI dashboard for monitoring.
 
-This is a standalone repository (`ottogiron/aster-orch`).
+This is a standalone repository (`ottogiron/compas`).
 
 ## Project Principles
 
@@ -24,7 +24,7 @@ This is a standalone repository (`ottogiron/aster-orch`).
 - `src/dashboard/*` — TUI dashboard (ratatui)
 - `src/worktree.rs` — git worktree creation, cleanup, and path resolution
 - `src/events.rs` — EventBus and execution telemetry pipeline
-- `src/bin/aster_orch.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`)
+- `src/bin/compas.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`)
 - `tests/integration_tests.rs` — orchestrator integration tests
 
 ## Build Commands
@@ -69,8 +69,6 @@ ticket blocked <id> "<reason>"     # mark as blocked
 ticket note <id> "<note>"          # add tracking note
 ```
 
-Backlogs live in `docs/project/backlog/`. See `docs/project/backlog/template.md` for the required format.
-
 **Never bypass the pre-commit hook with `--no-verify`.** Run `make setup-hooks` after cloning to install the hook.
 
 ## Quality Gates (Required Before Every Push)
@@ -90,7 +88,7 @@ The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only
 1. `make fmt` — apply formatting
 2. Verify `CHANGELOG.md` has an entry under `[Unreleased]` for the change (no CI enforcement — agent discipline only)
 3. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test` + `lint-md`). **Do not push if this fails.**
-4. If working as a submodule, push here first, then update the pointer in aster
+4. Push to remote after verification passes
 
 ## Impact Update Matrix
 
@@ -106,23 +104,9 @@ If you change a layer, update/review the paired artifacts in the same commit set
 
 ## Development Workflow
 
-### Two MCP server instances
+### Dev MCP server
 
-| MCP Server | Points to | State dir | Use for |
-|---|---|---|---|
-| `aster-orch` | `aster_orch` (installed via `cargo install`, on PATH) | `~/.aster-orch/state/` | Dispatching agents, daily orchestration |
-| `aster-orch-dev` | `cargo run` (repo-level config, latest build) | `.aster-orch/state/` | Testing MCP changes during development |
-
-`aster-orch` is configured globally (user scope) in Claude Code, Codex, and OpenCode.
-`aster-orch-dev` is configured at repo level (`.mcp.json`, `opencode.json`) — only available when working in this repo.
-
-### Production config
-
-The production orch config defaults to `~/.aster-orch/config.yaml`. It defines agents for one or more repos, using `target_repo_root` for the default repo and per-agent `workdir` overrides for agents that work in different directories. See ADR-010 and ADR-013 in `docs/project/DECISIONS.md` for rationale.
-
-### Dev config
-
-`.aster-orch/config.yaml` (repo-relative) configures the **dev** instance with a local state directory. This is distinct from the production default at `~/.aster-orch/config.yaml`. The dev DB (`.aster-orch/state/jobs.sqlite`) is completely isolated from production.
+A repo-level dev MCP server config is available for testing MCP changes during development. Copy `.mcp.json.example` to `.mcp.json` and update the paths to your local checkout. The dev instance uses `.compas/config.yaml` with an isolated state directory (`.compas/state/`), completely separate from any production install.
 
 ```bash
 make dashboard-dev   # dashboard + embedded worker on dev DB
@@ -132,17 +116,13 @@ make dashboard-dev   # dashboard + embedded worker on dev DB
 
 1. Edit source code (e.g., `src/mcp/*.rs`)
 2. `cargo build`
-3. Call the changed tool via `aster-orch-dev` MCP server — it uses `cargo run` and picks up your build
+3. Call the changed tool via the dev MCP server — it uses `cargo run` and picks up your build
 4. Verify results in the dev dashboard (`make dashboard-dev`)
 5. `make verify` before committing
 
-### Orchestrating orch development
-
-The production orch (`aster-orch`) dispatches agents to work on this repo. Agents are configured in the production config with prompts scoped to this repo's directory. The dev instance is for testing MCP changes, not for dispatching work.
-
 ### Git workflow
 
-Standard git workflow. Commit, push, PR.
+Standard git workflow. Commit, push, PR. See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
 
 ## Failure and Recovery Guidance
 

@@ -1,4 +1,4 @@
-# aster-orch
+# compas
 
 Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to AI coding agents, monitor execution in a TUI dashboard, and manage the full lifecycle from your terminal.
 
@@ -19,27 +19,27 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — po
 ## Install
 
 ```bash
-cargo install --git https://github.com/ottogiron/aster-orch
+cargo install --git https://github.com/ottogiron/compas
 ```
 
-This puts `aster_orch` on your PATH. Or build from source:
+This puts `compas` on your PATH. Or build from source:
 
 ```bash
-git clone git@github.com:ottogiron/aster-orch.git
-cd aster-orch
+git clone git@github.com:ottogiron/compas.git
+cd compas
 cargo build --release
-# Binary at target/release/aster_orch — add to PATH or use the full path below
+# Binary at target/release/compas — add to PATH or use the full path below
 ```
 
 ## Quick Start
 
 ### 1. Create a config
 
-Create `~/.aster-orch/config.yaml` (the default location):
+Create `~/.compas/config.yaml` (the default location):
 
 ```yaml
 target_repo_root: /path/to/your/project
-state_dir: ~/.aster-orch/state
+state_dir: ~/.compas/state
 poll_interval_secs: 1
 
 orchestration:
@@ -63,22 +63,22 @@ Supported backends: `claude`, `codex`, `gemini`, `opencode`.
 
 ### 2. Connect your coding CLI
 
-Add the MCP server to your preferred tool. If you used `cargo install`, you can use `aster_orch` directly. For source builds, use the full path to `target/release/aster_orch`.
+Add the MCP server to your preferred tool. If you used `cargo install`, you can use `compas` directly. For source builds, use the full path to `target/release/compas`.
 
 **Claude Code:**
 
 ```bash
-# --config is optional if using the default location (~/.aster-orch/config.yaml)
-claude mcp add --scope user --transport stdio aster-orch -- \
-  aster_orch mcp-server
+# --config is optional if using the default location (~/.compas/config.yaml)
+claude mcp add --scope user --transport stdio compas -- \
+  compas mcp-server
 ```
 
 **Codex:**
 
 ```bash
-# --config is optional if using the default location (~/.aster-orch/config.yaml)
-codex mcp add aster-orch -- \
-  aster_orch mcp-server
+# --config is optional if using the default location (~/.compas/config.yaml)
+codex mcp add compas -- \
+  compas mcp-server
 ```
 
 **OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
@@ -86,30 +86,30 @@ codex mcp add aster-orch -- \
 ```json
 {
   "mcp": {
-    "aster-orch": {
+    "compas": {
       "type": "local",
-      "command": ["aster_orch", "mcp-server"]
+      "command": ["compas", "mcp-server"]
     }
   }
 }
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 **Gemini CLI** — add to `.gemini/settings.json`:
 
 ```json
 {
   "mcpServers": {
-    "aster-orch": {
-      "command": "aster_orch",
+    "compas": {
+      "command": "compas",
       "args": ["mcp-server"]
     }
   }
 }
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
 ### 3. Start the worker
 
@@ -117,20 +117,20 @@ The worker is the background process that picks up dispatched tasks and runs you
 
 ```bash
 # Dashboard + embedded worker (recommended)
-aster_orch dashboard
+compas dashboard
 
 # Dashboard only (monitoring, no execution) — use when running worker separately
-aster_orch dashboard --standalone
+compas dashboard --standalone
 
 # Or run the worker as a standalone process
-aster_orch worker
+compas worker
 ```
 
-`--config <path>` is optional if using the default location (`~/.aster-orch/config.yaml`).
+`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
 
-Only one worker can run at a time. If a worker is already running, the dashboard detects it and skips spawning a second one. Running `aster_orch worker` when another worker is alive fails with an actionable error showing the existing worker's PID.
+Only one worker can run at a time. If a worker is already running, the dashboard detects it and skips spawning a second one. Running `compas worker` when another worker is alive fails with an actionable error showing the existing worker's PID.
 
-When the dashboard exits, it sends SIGTERM to the embedded worker, which drains in-flight executions and shuts down. A standalone `aster_orch worker` process is independent and must be stopped separately. Without a running worker, dispatched tasks will queue but not execute.
+When the dashboard exits, it sends SIGTERM to the embedded worker, which drains in-flight executions and shuts down. A standalone `compas worker` process is independent and must be stopped separately. Without a running worker, dispatched tasks will queue but not execute.
 
 ### 4. Dispatch your first task
 
@@ -168,7 +168,7 @@ Check batch progress:
 A skill teaches your coding CLI the full dispatch-review-complete workflow. Copy the example skill into your project and install it following your tool's instructions:
 
 ```bash
-cp -r /path/to/aster-orch/examples/skills/orch-dispatch your-project/skills/
+cp -r /path/to/compas/examples/skills/orch-dispatch your-project/skills/
 ```
 
 The skill covers: worker delegation, reviewer routing, session continuity, worktree isolation, retry behavior, and failure handling. See [examples/skills/orch-dispatch/SKILL.md](examples/skills/orch-dispatch/SKILL.md) for the full reference.
@@ -204,7 +204,7 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 
 ## MCP Tools
 
-For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --since db:<msg-id> --timeout 300`. The `--since` cursor ensures you only match replies after your dispatch message. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls. The `orch_dispatch` response includes a `next_step` field with a ready-to-use wait command.
+For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 300`. The `--since` cursor ensures you only match replies after your dispatch message. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls. The `orch_dispatch` response includes a `next_step` field with a ready-to-use wait command.
 
 ### Core
 
@@ -241,11 +241,11 @@ For blocking waits, use the CLI: `aster_orch wait --thread-id <id> --since db:<m
 
 ## Configuration Reference
 
-The default config location is `~/.aster-orch/config.yaml`. Use `--config <path>` to override it for any subcommand (`worker`, `mcp-server`, `dashboard`, `wait`).
+The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override it for any subcommand (`worker`, `mcp-server`, `dashboard`, `wait`).
 
 ```yaml
 target_repo_root: /path/to/repo        # Where agents work (required)
-state_dir: ~/.aster-orch/state               # Runtime state: DB, logs (required)
+state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
 
 orchestration:
@@ -290,7 +290,7 @@ By default, all agents work in `target_repo_root`. To have an agent work in a di
 agents:
   - alias: orch-dev
     backend: claude
-    workdir: /path/to/aster-orch       # Works in a different repo
+    workdir: /path/to/compas       # Works in a different repo
     workspace: worktree                # Optional: isolated worktree per thread
 ```
 
@@ -308,7 +308,7 @@ agents:
     workspace: shared      # Default — reads files directly, no isolation needed
 ```
 
-Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `aster-orch/{thread_id}`. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
+Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
 
 ### Retry on Transient Failure
 
@@ -354,7 +354,7 @@ Fan-out creates one new batch-linked thread per target agent. All fan-out thread
 
 **Chain depth limit:** `max_chain_depth` (default: 3) caps the number of consecutive auto-handoffs on a thread. When the limit is reached, the chain stops and a review-request is inserted for the operator. This prevents runaway loops.
 
-**Waiting for chain settlement:** Use `aster_orch wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
+**Waiting for chain settlement:** Use `compas wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
 
 **Viewing chains:** In the dashboard, open a thread's conversation (`Enter` on the execution) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
 
@@ -382,9 +382,9 @@ The dashboard shows all of this in real time. For the full architecture, see [do
 
 ```bash
 # Stop all processes, remove state, restart
-kill $(pgrep aster_orch)
-rm ~/.aster-orch/state/jobs.sqlite*
-aster_orch dashboard
+kill $(pgrep compas)
+rm ~/.compas/state/jobs.sqlite*
+compas dashboard
 ```
 
 **Worker not picking up work:**
@@ -407,4 +407,8 @@ make verify            # fmt-check + clippy + tests
 make dashboard-dev     # Dashboard + worker on isolated dev DB
 ```
 
-See [AGENTS.md](AGENTS.md) for the full development workflow including dual MCP server setup, testing MCP changes, and ticket tracking.
+See [AGENTS.md](AGENTS.md) for the full development workflow and [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
+
+## License
+
+Licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE) at your option.
