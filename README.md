@@ -50,13 +50,6 @@ Create `~/.compas/config.yaml` (the default location):
 ```yaml
 target_repo_root: /path/to/your/project
 state_dir: ~/.compas/state
-poll_interval_secs: 1
-
-orchestration:
-  trigger_intents: [dispatch, handoff]
-  execution_timeout_secs: 600
-  max_concurrent_triggers: 4       # adjust based on your API budget
-  max_triggers_per_agent: 1
 
 agents:
   - alias: dev
@@ -64,12 +57,11 @@ agents:
     model: claude-sonnet-4-6
     prompt: >
       You are a development agent. Follow the project's AGENTS.md.
-    # handoff:                          # Auto-handoff: route agent replies to another agent
-    #   on_response: reviewer           # Single target, or list for fan-out: [reviewer, reviewer-2]
-    #   max_chain_depth: 3              # Stop after 3 auto-handoffs, force operator review
 ```
 
-Supported backends: `claude`, `codex`, `gemini`, `opencode`.
+Supported backends: `claude`, `codex`, `gemini`, `opencode`. See the [Configuration Reference](#configuration-reference) for all available fields (concurrency, trigger intents, timeouts, handoff chains, etc.).
+
+> **Note:** The Gemini backend is stateless — it does not support session resume on follow-up dispatches to the same thread. Each execution starts a fresh session.
 
 ### 2. Connect your coding CLI
 
@@ -194,27 +186,55 @@ The TUI dashboard shows real-time orchestrator state across four tabs:
 
 | Key | Action |
 | --- | --- |
-| `Tab` / `1-4` | Switch tabs |
-| `↑/↓` or `j/k` | Navigate |
+| `Tab` / `Shift+Tab` | Next / previous tab |
+| `1-4` | Jump to tab |
+| `↑/↓` or `j/k` | Navigate rows |
+| `g` / `G` | Jump to first / last row |
 | `Enter` | Open log viewer / drill into batch |
-| `a` | Action menu (close, abandon, reopen) |
-| `s` | Abandon stale threads |
+| `c` | Open conversation view (Ops tab) |
+| `x` / `Esc` | Clear batch drill-down |
+| `r` | Refresh current tab |
 | `?` | Keyboard help |
-| `q` | Quit |
+| `q` / `Ctrl+C` | Quit |
 
 **Log viewer** (`Enter` on an execution):
 
 | Key | Action |
 | --- | --- |
-| `Tab` | Switch Input/Output sections |
-| `←/→` | Collapse/expand section |
+| `↑/↓` or `j/k` | Navigate sections |
+| `Enter` | Expand / collapse section |
+| `g` / `G` | Jump to top / bottom |
+| `PgUp` / `PgDn` | Page scroll |
 | `f` | Toggle follow mode |
 | `J` | Pretty-print JSON |
+| `Esc` | Back to dashboard |
+
+**Conversation view** (`c` on a thread in Ops tab):
+
+| Key | Action |
+| --- | --- |
+| `↑/↓` or `j/k` | Scroll line by line |
+| `g` / `G` | Jump to top / bottom |
+| `PgUp` / `PgDn` | Page scroll |
+| `f` | Toggle follow mode (auto-scroll to new messages) |
 | `Esc` | Back to dashboard |
 
 ## MCP Tools
 
 For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 300`. The `--since` cursor ensures you only match replies after your dispatch message. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls. The `orch_dispatch` response includes a `next_step` field with a ready-to-use wait command.
+
+**`compas wait` flags:**
+
+| Flag | Description |
+| --- | --- |
+| `--thread-id <id>` | Thread to wait on (required) |
+| `--since <cursor>` | Only match messages newer than this (`db:<msg-id>` or numeric) |
+| `--intent <intent>` | Wait for a specific intent (e.g. `response`, `review-request`) |
+| `--strict-new` | Only match messages strictly newer than the `--since` cursor |
+| `--timeout <secs>` | Timeout in seconds (default: 120) |
+| `--await-chain` | Keep waiting until the entire handoff chain settles |
+
+**Exit codes:** `0` = matching message found, `1` = timeout (no match within deadline), `2` = error.
 
 ### Core
 
@@ -257,15 +277,21 @@ The default config location is `~/.compas/config.yaml`. Use `--config <path>` to
 target_repo_root: /path/to/repo        # Where agents work (required)
 state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
+# worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/../.compas-worktrees/)
 
 orchestration:
-  trigger_intents: [dispatch, handoff]  # Intents that trigger agent execution
+  trigger_intents: [dispatch, handoff, changes-requested]  # Intents that trigger execution
   execution_timeout_secs: 600           # Per-task timeout
-  max_concurrent_triggers: 10           # Global concurrency limit
+  max_concurrent_triggers: 4            # Global concurrency limit (default: number of worker agents)
   max_triggers_per_agent: 2             # Per-agent concurrency limit
   stale_active_secs: 3600              # Staleness threshold for idle threads
   ping_timeout_secs: 15                # Backend health check timeout
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
+
+database:                              # SQLite connection pool (requires restart to change)
+  max_connections: 32
+  min_connections: 4
+  acquire_timeout_ms: 30000
 
 notifications:
   desktop: false                       # macOS desktop notifications (requires worker restart)
@@ -275,7 +301,10 @@ agents:
     backend: claude                    # claude | codex | gemini | opencode
     model: claude-sonnet-4-6           # Model to use
     prompt: "..."                      # System prompt for the agent
-    # prompt_file: prompts/dev.md      # Or load prompt from file
+    # prompt_file: prompts/dev.md      # Or load prompt from file (takes precedence over prompt)
+    # timeout_secs: 900                # Per-agent timeout override (default: execution_timeout_secs)
+    # env:                             # Per-agent environment variables
+    #   SOME_VAR: value
     # backend_args: ["--flag"]         # Extra CLI args for the backend
     # workdir: /path/to/other/repo     # Per-agent repo override (default: target_repo_root)
     # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
@@ -291,6 +320,8 @@ agents:
 **Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
+
+**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `log_retention_count`, `notifications`. Changes to `target_repo_root`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
 
 ### Per-Agent Working Directory
 
@@ -318,7 +349,7 @@ agents:
     workspace: shared      # Default — reads files directly, no isolation needed
 ```
 
-Worktrees are created at `{state_dir}/worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
+Worktrees are created at `{repo_root}/../.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
 
 ### Retry on Transient Failure
 
@@ -366,7 +397,7 @@ Fan-out creates one new batch-linked thread per target agent. All fan-out thread
 
 **Waiting for chain settlement:** Use `compas wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
 
-**Viewing chains:** In the dashboard, open a thread's conversation (`Enter` on the execution) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
+**Viewing chains:** In the dashboard, open a thread's conversation (`c` on a thread in the Ops tab) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
 
 ## How It Works
 

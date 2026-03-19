@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- README audit: fix dashboard keybinding tables (log viewer, add conversation view), correct worktree path, add `changes-requested` to trigger\_intents examples, document `compas wait` flags/exit codes, add undocumented config fields (worktree\_dir, database, timeout\_secs, env), note Gemini stateless limitation, note prompt\_file precedence, document live config reload, simplify Quick Start config
+
 ### Added
 
 - Worker singleton guard — fail-fast lockfile + heartbeat/PID check prevents multiple workers from running simultaneously, avoiding orphan-crash hazard (ADR-016)
