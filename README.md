@@ -18,8 +18,18 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — po
 
 ## Install
 
+Add this to your ~/.cargo/config.toml:
+
+```toml
+[net]
+git-fetch-with-cli = true
+```
+
+Then run
+
 ```bash
-cargo install --git https://github.com/ottogiron/compas
+# you will be asked for github authentication in this step
+cargo install --git https://github.com/ottogiron/aster-orch
 ```
 
 This puts `compas` on your PATH. Or build from source:
