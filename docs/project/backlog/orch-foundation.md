@@ -1,6 +1,6 @@
 # Aster-Orch Foundation — Infrastructure Prerequisites for Evolution
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-14
 
@@ -107,4 +107,9 @@ Created: 2026-03-14
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- FOUND-1: Session continuity implemented for Claude (`-r`), Codex (`exec resume`), OpenCode (`-s`). Session IDs persisted in SQLite. Worker restart does not lose sessions. Concurrent agents get independent sessions.
+- FOUND-2: Unified BackendOutput struct, parse_intent(), ErrorCategory. All 4 backends produce structured output. Graceful fallback for non-conforming output. Foundation for EVO-12 retry.
+- Verification:
+  - `make verify`: fmt-check + clippy + 362 unit + 22 bin + 93 integration = 477 tests pass
+  - Manual: dispatch to Claude, close, re-dispatch — agent has context from prior turns
+- Both tickets shipped and merged on main

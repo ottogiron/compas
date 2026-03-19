@@ -44,7 +44,7 @@ fn should_notify(event: &OrchestratorEvent) -> Option<(String, String)> {
             let status = if *success { "completed" } else { "failed" };
             let duration = format_duration_ms(*duration_ms);
             Some((
-                format!("aster-orch: {} {}", agent_alias, status),
+                format!("compas: {} {}", agent_alias, status),
                 format!("Execution {} in {}", status, duration),
             ))
         }
@@ -153,7 +153,7 @@ mod tests {
         let result = should_notify(&event);
         assert!(result.is_some());
         let (title, body) = result.unwrap();
-        assert_eq!(title, "aster-orch: worker-a completed");
+        assert_eq!(title, "compas: worker-a completed");
         assert_eq!(body, "Execution completed in 2m 5s");
     }
 
@@ -169,7 +169,7 @@ mod tests {
         let result = should_notify(&event);
         assert!(result.is_some());
         let (title, body) = result.unwrap();
-        assert_eq!(title, "aster-orch: worker-b failed");
+        assert_eq!(title, "compas: worker-b failed");
         assert_eq!(body, "Execution failed in 5s");
     }
 

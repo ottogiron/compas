@@ -97,4 +97,10 @@ Created: 2026-03-16
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 2 tickets shipped and merged on main
+- CONFIG-1: Default config path changed to `~/.aster-orch/config.yaml`. Tilde expansion implemented. All subcommands use new default.
+- CONFIG-2: AGENTS.md, README.md, DECISIONS.md updated. Migration guide documented. ADR-010 amended with config location rationale.
+- Verification:
+  - `make verify`: fmt-check + clippy + test pass
+  - Grep for stale production config path references: clean
+- Migration completed by operator: copy config to new location, update MCP configs, restart

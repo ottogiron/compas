@@ -92,35 +92,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aster-orch"
-version = "0.2.0"
-dependencies = [
- "arc-swap",
- "async-trait",
- "chrono",
- "clap",
- "crossterm",
- "libc",
- "notify-debouncer-mini",
- "pulldown-cmark",
- "ratatui",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "sqlx",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "uuid",
-]
-
-[[package]]
 name = "async-trait"
 version = "0.1.89"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,6 +304,35 @@ dependencies = [
  "rustversion",
  "ryu",
  "static_assertions",
+]
+
+[[package]]
+name = "compas"
+version = "0.2.0"
+dependencies = [
+ "arc-swap",
+ "async-trait",
+ "chrono",
+ "clap",
+ "crossterm",
+ "libc",
+ "notify-debouncer-mini",
+ "pulldown-cmark",
+ "ratatui",
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "ulid",
+ "uuid",
 ]
 
 [[package]]

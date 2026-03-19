@@ -73,7 +73,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_dispatch",
-        description = "Send a message to an agent. Creates or continues a thread. After dispatch, wait for the response using CLI: `aster_orch wait --thread-id <id> --since db:<msg-id> --timeout 900` (blocking). The response includes a `next_step` command for direct responses; add `--await-chain` if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
+        description = "Send a message to an agent. Creates or continues a thread. After dispatch, wait for the response using CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 900` (blocking). The response includes a `next_step` command for direct responses; add `--await-chain` if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
     )]
     async fn orch_dispatch(
         &self,
@@ -135,12 +135,12 @@ impl OrchestratorMcpServer {
     }
 
     // orch_wait removed from MCP surface — stdio transport timeouts make it
-    // unreliable. Use `aster_orch wait` CLI subcommand instead.
+    // unreliable. Use `compas wait` CLI subcommand instead.
     // The wait_impl method is preserved for potential future use.
 
     #[tool(
         name = "orch_poll",
-        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting. For blocking waits on agent responses, use CLI `aster_orch wait` instead — poll is for quick status checks or diagnosing timeouts. When neither intent nor since_reference is provided, trigger intents are auto-excluded."
+        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting. For blocking waits on agent responses, use CLI `compas wait` instead — poll is for quick status checks or diagnosing timeouts. When neither intent nor since_reference is provided, trigger intents are auto-excluded."
     )]
     async fn orch_poll(
         &self,
@@ -265,12 +265,12 @@ impl OrchestratorMcpServer {
 impl ServerHandler for OrchestratorMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("aster-orch", env!("CARGO_PKG_VERSION")))
+            .with_server_info(Implementation::new("compas", env!("CARGO_PKG_VERSION")))
             .with_instructions(
-                "Aster orchestrator MCP server. Exposes dispatch, status, \
+                "Compas MCP server. Exposes dispatch, status, \
                  metrics, and diagnostic tools for multi-agent coordination. \
                  After dispatching work via orch_dispatch, wait for the response \
-                 using CLI `aster_orch wait` (blocking). Do NOT use orch_poll \
+                 using CLI `compas wait` (blocking). Do NOT use orch_poll \
                  in a loop to wait — poll is for instant status checks only."
                     .to_string(),
             )

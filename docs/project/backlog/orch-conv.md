@@ -1,6 +1,6 @@
 # Aster-Orch Conversation View Polish
 
-Status: Active
+Status: Closed
 Owner: otto
 Created: 2026-03-15
 
@@ -152,35 +152,6 @@ Created: 2026-03-15
 - End: 2026-03-15 21:50 UTC
 - Duration: ~00:05:00
 - Notes: Visual verification via real agent output screenshot. Markdown rendering, scrolling, and layout all confirmed working.
-
-- Ticket: ORCH-CONV-2
-- Owner: TBD
-- Complexity: S
-- Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
-
-- Start: 2026-03-15 21:38 UTC
-
-- Ticket: ORCH-CONV-3
-- Owner: TBD
-- Complexity: S
-- Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
-
-- Ticket: ORCH-CONV-4
-- Owner: TBD
-- Complexity: S
-- Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
 
 ## Closure Evidence
 

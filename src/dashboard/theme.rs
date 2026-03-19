@@ -1,4 +1,4 @@
-//! Precision Instrument — design system for the aster-orch TUI dashboard.
+//! Precision Instrument — design system for the compas TUI dashboard.
 //!
 //! Single source of truth for colors, borders, and panel constructors.
 //! All dashboard views import from this module instead of defining ad-hoc styles.

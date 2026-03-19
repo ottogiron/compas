@@ -1,4 +1,4 @@
-# Architecture — Aster Orchestrator
+# Architecture — Compas
 
 ## Overview
 
@@ -48,7 +48,7 @@ The MCP server and worker are separate processes sharing the same SQLite databas
 
 ## Project/State Paths
 
-`aster-orch` uses two distinct filesystem roots:
+`compas` uses two distinct filesystem roots:
 
 - `target_repo_root`: the target repository where backend CLIs run commands/tasks.
 - `state_dir`: orchestrator-owned runtime state (DB/logs/heartbeats).
@@ -119,7 +119,7 @@ queued → picked_up → executing → completed
 - **Per-agent concurrency enforcement** — `claim_next_execution()` uses a SQL subquery to check active execution count per agent before claiming work.
 - **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing` rows as `crashed` on startup, preventing lost work from going unnoticed.
 - **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP server + worker) to read/write concurrently without SQLITE_BUSY errors.
-- **200ms DB polling for wait** — `wait_for_message()` polls at 200ms intervals. Exposed via `aster_orch wait` CLI subcommand. Removed from MCP surface (stdio transport timeouts made it unreliable).
+- **200ms DB polling for wait** — `wait_for_message()` polls at 200ms intervals. Exposed via `compas wait` CLI subcommand. Removed from MCP surface (stdio transport timeouts made it unreliable).
 - **Five tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker), `worker_heartbeats` (liveness), `execution_events` (telemetry).
 - **Retry via store re-enqueue** — failed executions with transient errors are retried by inserting a new queued execution with a `retry_after` timestamp. The poll loop claims retries only when the backoff expires. No synchronous sleep.
 - **Execution telemetry via line-level channel** — backend stdout lines flow through a `sync_channel(128)` from the reader thread to a tokio consumer that parses JSONL and batch-inserts events.
@@ -130,7 +130,7 @@ queued → picked_up → executing → completed
 
 ```text
 src/
-├── bin/aster_orch.rs    # CLI binary (worker, mcp-server)
+├── bin/compas.rs    # CLI binary (worker, mcp-server)
 ├── lib.rs               # Module declarations
 ├── error.rs             # Error types
 ├── backend/             # Backend trait + implementations
@@ -170,7 +170,7 @@ src/
 
 ## Differences from `aster-orchestrator` (deprecated)
 
-| Old (`aster-orchestrator`) | New (`aster-orch`) |
+| Old (`aster-orchestrator`) | New (`compas`) |
 |----------------------------|---------------------|
 | Custom daemon poll loop | Custom poll-loop worker with `spawn_blocking` |
 | rusqlite | sqlx (async, WAL mode) |

@@ -10,8 +10,8 @@ AX is to agents what UX is to humans. Agents can't "look around" when something 
 
 Error messages must include what was attempted, what was found vs expected, and a suggested fix.
 
-**Bad:** `Ticket ORCH-ARCH-1 not found in backlog`
-**Good:** `Ticket ORCH-ARCH-1 found in orch-architecture.md but not as a markdown heading. Expected '## Ticket ORCH-ARCH-1' (H2). Check the heading level.`
+**Bad:** `Ticket PROJ-42 not found in backlog`
+**Good:** `Ticket PROJ-42 found in orch-architecture.md but not as a markdown heading. Expected '## Ticket PROJ-42' (H2). Check the heading level.`
 
 The bad message led an agent to assume the ticket was closed and bypass the pre-commit hook with `--no-verify`.
 

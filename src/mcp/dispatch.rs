@@ -64,7 +64,7 @@ impl OrchestratorMcpServer {
         };
 
         let next_step = format!(
-            "aster_orch wait --thread-id {} --since db:{} --timeout 900",
+            "compas wait --thread-id {} --since db:{} --timeout 900",
             thread_id, message_id
         );
         Ok(json_text(&DispatchResult {

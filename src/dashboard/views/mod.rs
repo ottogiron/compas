@@ -1,4 +1,4 @@
-//! Tab view renderers for the aster-orch TUI dashboard.
+//! Tab view renderers for the compas TUI dashboard.
 
 pub mod activity;
 pub mod agents;
