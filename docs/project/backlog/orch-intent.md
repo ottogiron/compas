@@ -183,12 +183,6 @@ Created: 2026-03-16
 - Duration:
 - Notes:
 
-- Start: 2026-03-16 21:16 UTC
-
-- End: 2026-03-16 21:16 UTC
-
-- Duration: 00:00:07
-
 - Ticket: ORCH-INTENT-4
 - Owner: TBD
 - Complexity: S
@@ -200,4 +194,11 @@ Created: 2026-03-16
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 4 tickets shipped and merged on main
+- INTENT-1: parse_intent_from_text() deleted from all 4 backends. All agent replies default to `intent: "response"`.
+- INTENT-2: HandoffConfig simplified to 2 fields (on_response, max_chain_depth). HandoffTarget enum removed. `changes-requested` added to default_trigger_intents.
+- INTENT-3: Dashboard source-based coloring (operator=accent, agent=green, system=dim).
+- INTENT-4: README, architecture, DECISIONS, example config, and skills updated. ADR-015 added.
+- Verification:
+  - `make verify`: fmt-check + clippy + test pass
+  - Grep for stale refs (on_review_request, on_escalation, REPLY PROTOCOL, parse_intent_from_text): clean

@@ -131,4 +131,9 @@ Created: 2026-03-16
 
 ## Closure Evidence
 
-- (To be filled on batch completion)
+- All 2 tickets shipped and merged on main
+- CHAIN-1: HandoffConfig schema implemented. Auto-routing via on_<intent> routes. max_chain_depth limits chains and forces operator escalation. HandoffTarget::Gated rejected at validation. Chain tracking via handoff-intent message count.
+- CHAIN-2: orch_diagnose shows chain depth, agents, and max_depth warning. Dashboard conversation view renders handoff messages distinctly.
+- Verification:
+  - `make verify`: fmt-check + clippy + integration tests pass
+  - Manual: dispatch chain dev->reviewer->dev->reviewer->operator, verify depth limit escalation
