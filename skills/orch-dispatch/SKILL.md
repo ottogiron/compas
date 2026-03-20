@@ -19,7 +19,7 @@ Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/de
 ## Inputs
 
 - Active ticket or batch context from `/dev-workflow`
-- Target worker alias (routing: `orch-dev` for compas development work)
+- Target worker alias (routing: `compas-implementer` for compas development work)
 - Reviewer alias: `compas-reviewer` (configured in the production orch config). Verify with `orch_list_agents()`.
 - Task description with acceptance criteria
 

@@ -1,5 +1,7 @@
 # Config Migration: v1 (repo-relative) → v2 (home directory)
 
+> **Historical document.** This guide predates the aster-orch → compas rebrand. Paths and binary names below use the old naming. The current binary is `compas` and the default config location is `~/.compas/config.yaml`.
+
 **Date:** 2026-03-16
 **Applies to:** aster-orch v0.2+
 

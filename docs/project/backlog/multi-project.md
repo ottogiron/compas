@@ -56,7 +56,7 @@ agents:
     backend: claude
     prompt: ...
 
-  - alias: orch-reviewer       # has its own workdir, no project needed
+  - alias: compas-reviewer     # has its own workdir, no project needed
     backend: claude
     workdir: ~/workspace/github/ottogiron/compas
     prompt: ...
@@ -78,7 +78,7 @@ projects:
     agent_overrides:
       implementer:
         handoff:
-          on_response: orch-reviewer
+          on_response: compas-reviewer
           max_chain_depth: 3
 
   - id: pit
@@ -101,7 +101,7 @@ orch_dispatch(to="implementer", project="acme-platform",
 # Single-repo project: agent + project
 orch_dispatch(to="implementer", project="compas", body="...")
 # → workdir: ~/workspace/github/ottogiron/compas
-# → handoff: orch-reviewer (project override)
+# → handoff: compas-reviewer (project override)
 
 # Cross-cutting: agent only, no project
 orch_dispatch(to="pir-reviewer", body="Review the PIR at ...")
@@ -189,7 +189,7 @@ orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
 - Out of scope: Per-project prompt overrides, workspace override resolution
 - Dependencies: MPR-1, MPR-2 (thread carries project context)
 - Acceptance criteria:
-  - Dispatch with `project="compas"` routes implementer→orch-reviewer (project override)
+  - Dispatch with `project="compas"` routes implementer→compas-reviewer (project override)
   - Dispatch with `project="acme-platform"` routes implementer→[reviewer-opus, reviewer-codex] (agent default)
   - Dispatch without project uses agent's own handoff
   - `make verify` passes

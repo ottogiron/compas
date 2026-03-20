@@ -403,7 +403,7 @@ Created: 2026-03-14
   - Integration test: two sequential `orch_health` calls, second returns cached
   - Manual: `orch_health()` timing before/after
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -415,7 +415,7 @@ Created: 2026-03-14
 6. ~~ORCH-EVO-5 (Conversation View — done)~~
 7. ~~ORCH-EVO-12 (Retry with Error Classification — done)~~
 8. ~~ORCH-EVO-13 (Prompt Version Hashing — done)~~
-9. ORCH-EVO-15 (Health Check Performance — quick win, parallel pings + cache)
+9. ~~ORCH-EVO-15 (Health Check Performance — done)~~
 10. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
 11. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
 12. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
@@ -584,7 +584,7 @@ Created: 2026-03-14
 - EVO-7: Git worktrees — workspace: worktree|shared config, git worktree add/remove, per-agent workdir (ADR-010)
 - EVO-12: Retry with error classification — ErrorCategory enum, transient vs terminal failures, exponential backoff
 - EVO-13: Prompt version hashing — SHA-256 hash of resolved prompt stored per execution
-- Still Todo (7): EVO-6 (Quick Dispatch), ~~EVO-8 (HTTP API — superseded)~~, ~~EVO-9 (Web Dashboard — superseded)~~, EVO-10 (Webhooks), EVO-11 (Periodic Summaries), EVO-14 (Thread Dependencies), EVO-15 (Health Check Performance)
+- Still Todo (5): EVO-6 (Quick Dispatch), ~~EVO-8 (HTTP API — superseded)~~, ~~EVO-9 (Web Dashboard — superseded)~~, EVO-10 (Webhooks), EVO-11 (Periodic Summaries), EVO-14 (Thread Dependencies)
 - Verification:
   - `make verify`: fmt-check + clippy + 362 unit + 22 bin + 93 integration = 477 tests pass
   - Visual verification: dashboard shows live updates, conversation view renders correctly, notifications fire

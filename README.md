@@ -293,6 +293,12 @@ state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
 # worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/../.compas-worktrees/)
 
+# models:                             # Optional model catalog (informational only)
+#   - claude-sonnet-4-6
+#   - id: gpt-5.4
+#     backend: codex
+#     description: "Codex default model"
+
 orchestration:
   trigger_intents: [dispatch, handoff, changes-requested]  # Intents that trigger execution
   execution_timeout_secs: 600           # Per-task timeout
@@ -318,6 +324,7 @@ agents:
     prompt: "..."                      # System prompt for the agent
     # prompt_file: prompts/dev.md      # Or load prompt from file (takes precedence over prompt)
     # timeout_secs: 900                # Per-agent timeout override (default: execution_timeout_secs)
+    # role: worker                     # worker (default, triggered by dispatches) | operator (never triggered)
     # env:                             # Per-agent environment variables
     #   SOME_VAR: value
     # backend_args: ["--flag"]         # Extra CLI args for the backend
@@ -344,9 +351,9 @@ By default, all agents work in `target_repo_root`. To have an agent work in a di
 
 ```yaml
 agents:
-  - alias: orch-dev
+  - alias: dev
     backend: claude
-    workdir: /path/to/compas       # Works in a different repo
+    workdir: /path/to/other/repo       # Works in a different repo
     workspace: worktree                # Optional: isolated worktree per thread
 ```
 
@@ -413,6 +420,54 @@ Fan-out creates one new batch-linked thread per target agent. All fan-out thread
 **Waiting for chain settlement:** Use `compas wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
 
 **Viewing chains:** In the dashboard, open a thread's conversation (`c` on a thread in the Ops tab) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
+
+### Config Patterns
+
+**Multi-repo agent team** — shared agents with a repo-scoped reviewer:
+
+```yaml
+agents:
+  - alias: implementer
+    backend: claude
+    workspace: worktree
+    handoff:
+      on_response: [design-reviewer, correctness-reviewer]
+    prompt: "You implement changes. Follow the repo's AGENTS.md."
+
+  - alias: design-reviewer
+    backend: claude
+    prompt: "Review for architecture, design quality, and risk."
+
+  - alias: correctness-reviewer
+    backend: codex
+    prompt: "Review for bugs, test coverage, and error handling."
+
+  - alias: compas-reviewer
+    backend: claude
+    workdir: /path/to/compas           # Scoped to a specific repo
+    prompt: "You review compas changes. Run make verify."
+```
+
+Agents without `workdir` use `target_repo_root`. Agents with `workdir` always work in that repo. The `implementer` above serves any repo — specify which via the dispatch body. `compas-reviewer` always works in the compas repo.
+
+**Cross-cutting agents** — agents that don't belong to any repo:
+
+```yaml
+agents:
+  - alias: doc-reviewer
+    backend: claude
+    prompt: |
+      You review technical documents against quality standards.
+      Score each section and provide an overall assessment.
+
+  - alias: architect
+    backend: claude
+    prompt: |
+      You analyze codebases and produce technical design evaluations.
+      Reference actual modules and patterns, not abstract advice.
+```
+
+These agents work in `target_repo_root` by default but can be dispatched to review any file or document. No `workdir` or `workspace` needed.
 
 ## How It Works
 
