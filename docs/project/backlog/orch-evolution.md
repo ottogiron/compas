@@ -375,6 +375,36 @@ Created: 2026-03-14
   - `make verify` passes
 - Status: Todo
 
+## Ticket ORCH-EVO-15 — Health Check Performance (Parallel Pings + Cache)
+
+- Goal: Fix `orch_health` performance by parallelizing backend pings and adding a TTL-based cache. Currently pings run sequentially (4-6s per agent, ~60s for all 13 agents).
+- In scope:
+  - Parallelize backend pings in `src/mcp/health.rs:68-98` using `tokio::task::JoinSet` or `futures::future::join_all` — reduce from N×latency to max(latency)
+  - Add `PingCache` with configurable TTL (default 60s) — repeated `orch_health` calls within the TTL return cached results instantly
+  - Cache keyed by agent alias, stores `PingResult` + timestamp
+  - Cache is shared across MCP sessions (lives on the `McpServer` struct or a shared `Arc`)
+  - `orch_health` response includes a `cached: bool` field so the caller knows if the result is fresh or cached
+  - Optional: remove `command_exists()` (`which` subprocess) from the ping hot path in `src/backend/process.rs:91` — check CLI existence once at registry construction, not per-ping
+  - Optional: fix OpenCode synchronous `Command::output()` session cleanup in `src/backend/opencode.rs:272` — should use async or fire-and-forget spawn
+- Out of scope:
+  - Changing the ping probe from a real API call to `--version` (loses API connectivity verification)
+  - Background periodic health polling (pings only happen on `orch_health` calls)
+- Dependencies: None
+- Acceptance criteria:
+  - `orch_health()` (all agents) completes in ~5-6s instead of ~60s
+  - `orch_health(alias="compas-implementer")` completes in ~5-6s (single ping, no cache)
+  - Second `orch_health()` call within 60s returns cached results in <100ms
+  - Cache TTL is configurable via `orchestration.ping_cache_ttl_secs` (default 60)
+  - `orch_health` response includes `cached` indicator per agent
+  - No behavioral regression: same JSON structure, same ping semantics
+  - `make verify` passes
+- Verification:
+  - Unit test: `PingCache` TTL expiry and cache hit/miss
+  - Integration test: two sequential `orch_health` calls, second returns cached
+  - Manual: `orch_health()` timing before/after
+  - `make verify`
+- Status: Todo
+
 ## Execution Order
 
 1. ~~ORCH-EVO-2 (Event Broadcast — done)~~
@@ -385,8 +415,9 @@ Created: 2026-03-14
 6. ~~ORCH-EVO-5 (Conversation View — done)~~
 7. ~~ORCH-EVO-12 (Retry with Error Classification — done)~~
 8. ~~ORCH-EVO-13 (Prompt Version Hashing — done)~~
-9. ORCH-EVO-10 (Webhook Notifications — next: simpler than HTTP API, high value for Slack/Discord alerts)
-10. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
+9. ORCH-EVO-15 (Health Check Performance — quick win, parallel pings + cache)
+10. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
+11. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
 11. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
 12. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
 13. ~~ORCH-EVO-8 (HTTP API — superseded by MFE-2 in multi-frontend.md)~~
@@ -533,6 +564,15 @@ Created: 2026-03-14
 - Duration:
 - Notes:
 
+- Ticket: ORCH-EVO-15
+- Owner: TBD
+- Complexity: S
+- Risk: Low
+- Start:
+- End:
+- Duration:
+- Notes: Parallel pings + TTL cache for orch_health
+
 ## Closure Evidence
 
 - 8 of 14 tickets shipped and merged on main
@@ -544,7 +584,7 @@ Created: 2026-03-14
 - EVO-7: Git worktrees — workspace: worktree|shared config, git worktree add/remove, per-agent workdir (ADR-010)
 - EVO-12: Retry with error classification — ErrorCategory enum, transient vs terminal failures, exponential backoff
 - EVO-13: Prompt version hashing — SHA-256 hash of resolved prompt stored per execution
-- Still Todo (6): EVO-6 (Quick Dispatch), EVO-8 (HTTP API), EVO-9 (Web Dashboard), EVO-10 (Webhooks), EVO-11 (Periodic Summaries), EVO-14 (Thread Dependencies)
+- Still Todo (7): EVO-6 (Quick Dispatch), ~~EVO-8 (HTTP API — superseded)~~, ~~EVO-9 (Web Dashboard — superseded)~~, EVO-10 (Webhooks), EVO-11 (Periodic Summaries), EVO-14 (Thread Dependencies), EVO-15 (Health Check Performance)
 - Verification:
   - `make verify`: fmt-check + clippy + 362 unit + 22 bin + 93 integration = 477 tests pass
   - Visual verification: dashboard shows live updates, conversation view renders correctly, notifications fire
