@@ -141,41 +141,237 @@ Created: 2026-03-14
 
 ## Ticket ORCH-TEAM-6 — Multi-Project Support
 
-- Goal: Allow a single compas instance to manage agents and work across multiple project repositories.
+- Goal: Allow a single compas instance to manage agents and work across multiple project repositories using a projects-as-overlays design. Agents are defined once globally; projects provide repo context and per-agent overrides.
 - In scope:
-  - Config supports multiple project definitions:
-
-    ```yaml
-    projects:
-      - id: aster
-        repo_root: /path/to/aster
-        agents: [focused, reviewer]
-      - id: webapp
-        repo_root: /path/to/webapp
-        agents: [frontend, backend]
-    ```
-
-  - Agents scoped to projects (backend CLI runs in project's repo_root)
-  - Dispatches specify `project` field (defaults to first/only project)
-  - Threads and batches carry project context
-  - Dashboard groups by project in Ops and History tabs
-  - Shared agent pool option: agents available to multiple projects
-  - Single SQLite database with project_id partitioning
-  - Backward compatible: single `target_repo_root` config still works (implicit single project)
+  - ORCH-TEAM-6a: Config schema
+  - ORCH-TEAM-6b: Dispatch + thread resolution
+  - ORCH-TEAM-6c: Handoff override resolution
+  - ORCH-TEAM-6d: Dashboard project grouping
 - Out of scope:
   - Separate databases per project
   - Cross-project agent coordination (agent works on one project at a time)
   - Project creation/deletion from dashboard (config-only)
-- Dependencies: ORCH-TEAM-3 (HTTP API with identity, for remote multi-project access; HTTP API delivered by MFE-2 in multi-frontend.md)
+  - Per-project prompt overrides (only handoff, workspace, and env are overridable)
+- Dependencies: None (HTTP API dependency removed — works with MCP dispatch)
 - Acceptance criteria:
-  - Multiple projects can be defined in config
-  - Dispatches to different projects run agents in the correct repo root
-  - Dashboard clearly shows project context on all threads/batches
-  - Existing single-project configs work without changes
-  - Agents can be shared across projects or scoped to one
+  - Multiple projects can be defined in config with per-project repo roots and repo lists
+  - Dispatches with `project` and `repo` params run agents in the correct repo root
+  - Worktree isolation works correctly for multi-repo projects (worktree created from the specific repo, not a parent dir)
+  - Handoff chains can be overridden per project
+  - Dashboard shows project context on threads
+  - Existing single-project configs work without changes (`projects` is optional)
+  - Agents can be dispatched without project context (cross-cutting, ad-hoc use)
 - Verification:
   - Integration test: dispatch to two different projects, verify agents run in correct directories
+  - Integration test: dispatch with project + repo, verify worktree created from correct git repo
+  - Integration test: verify handoff override applies for project dispatch but agent default applies without project
   - Manual: configure two projects, dispatch to each, verify dashboard grouping
+  - `make verify`
+- Status: Todo
+
+### Design: Projects as Overlays
+
+Architecture evaluation completed by `as-architect` agent (thread `01KM6PWMC2DNQ4TT94CDZ2D2QR`, 2026-03-20).
+
+**Core principle:** Agents are defined once in the flat `agents` list (core identity: backend, model, prompt). Projects are an optional grouping layer providing `repo_root` context and per-agent overrides for handoff and workspace only. Cross-cutting agents (pir-reviewer, architect) have no project affiliation and work globally.
+
+**Config example:**
+
+```yaml
+target_repo_root: ~/workspace/github  # global fallback, still required
+state_dir: ~/.compas/state
+
+agents:
+  - alias: implementer
+    backend: claude
+    model: eu.anthropic.claude-opus-4-6-v1
+    workspace: worktree
+    timeout_secs: 900
+    handoff:
+      on_response: [reviewer-opus, reviewer-codex]  # default chain
+    prompt: |
+      You implement changes in the target repository. ...
+
+  - alias: analyst
+    backend: codex
+    prompt: ...
+
+  - alias: reviewer-opus
+    backend: claude
+    prompt: ...
+
+  - alias: reviewer-codex
+    backend: codex
+    prompt: ...
+
+  - alias: architect
+    backend: claude
+    prompt: ...
+
+  - alias: pir-reviewer        # cross-cutting, no project
+    backend: claude
+    prompt: ...
+
+  - alias: orch-reviewer       # has its own workdir, no project needed
+    backend: claude
+    workdir: ~/workspace/github/ottogiron/compas
+    prompt: ...
+
+projects:
+  - id: acme-platform
+    repo_root: ~/workspace/github/acme-platform
+    repos:                       # explicit list for validation + worktree
+      - api-gateway
+      - user-service
+      - billing-service
+      - notification-service
+      - search-service
+      - data-pipeline
+    # No agent_overrides — default handoff applies
+
+  - id: compas
+    repo_root: ~/workspace/github/ottogiron/compas
+    agent_overrides:
+      implementer:
+        handoff:
+          on_response: orch-reviewer
+          max_chain_depth: 3
+
+  - id: pit
+    repo_root: ~/workspace/github/ottogiron/pit
+    agent_overrides:
+      implementer:
+        handoff:
+          on_response: pit-reviewer
+```
+
+**Dispatch examples:**
+
+```
+# Multi-repo project: agent + project + repo
+orch_dispatch(to="implementer", project="acme-platform",
+              repo="api-gateway", body="...")
+# → workdir: ~/workspace/github/acme-platform/api-gateway
+# → handoff: [reviewer-opus, reviewer-codex] (agent default)
+
+# Single-repo project: agent + project
+orch_dispatch(to="implementer", project="compas", body="...")
+# → workdir: ~/workspace/github/ottogiron/compas
+# → handoff: orch-reviewer (project override)
+
+# Cross-cutting: agent only, no project
+orch_dispatch(to="pir-reviewer", body="Review the PIR at ...")
+# → workdir: ~/workspace/github (global fallback)
+
+# Agent borrowing: any agent in an ad-hoc repo
+orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
+# → workdir: ~/workspace/github (global fallback)
+# → handoff: [reviewer-opus, reviewer-codex] (agent default)
+```
+
+**Workdir resolution order:**
+1. `project.repo_root/repo` (if project + repo provided)
+2. `project.repo_root` (if project provided, no repo)
+3. `agent.workdir` (if set on agent)
+4. `target_repo_root` (global fallback)
+
+**Handoff resolution:** If dispatch has project context, check `project.agent_overrides[alias].handoff`. If present, use it (full replacement, no merge). Otherwise, use agent's own handoff. No project context → agent's own handoff.
+
+**Thread inheritance:** Once a thread has project/repo set from the first dispatch, follow-up dispatches to the same thread inherit project/repo if not explicitly provided.
+
+### Sub-ticket ORCH-TEAM-6a — Config Schema
+
+- Goal: Add `ProjectConfig` and `AgentProjectOverride` types, `projects` field on `OrchestratorConfig`, validation, and path resolution.
+- In scope:
+  - New types in `src/config/types.rs`:
+    - `ProjectConfig { id, repo_root, repos: Option<Vec<String>>, agent_overrides: HashMap<String, AgentProjectOverride> }`
+    - `AgentProjectOverride { handoff: Option<HandoffConfig>, workspace: Option<String>, env: Option<HashMap<String, String>> }`
+  - `OrchestratorConfig.projects: Option<Vec<ProjectConfig>>` with `#[serde(default)]`
+  - Config validation: unique project IDs, repo_root exists, agent_override keys reference valid aliases, handoff targets valid
+  - Path resolution for `project.repo_root` in `config/mod.rs`
+- Out of scope: Runtime behavior changes, dispatch params, DB schema
+- Dependencies: None
+- Acceptance criteria:
+  - Config with `projects` section parses and validates correctly
+  - Config without `projects` section continues to work (backward compatible)
+  - Invalid project config (bad alias ref, duplicate ID) produces clear errors
+  - `make verify` passes
+- Verification:
+  - Unit tests for config parsing with and without projects
+  - Unit tests for validation errors
+  - `make verify`
+- Status: Todo
+
+### Sub-ticket ORCH-TEAM-6b — Dispatch + Thread Resolution
+
+- Goal: Add `project` and `repo` optional params to `DispatchParams`, store project context on threads, resolve effective workdir from project/repo context.
+- In scope:
+  - Add `project: Option<String>` and `repo: Option<String>` to `DispatchParams`
+  - Add `project_id TEXT` and `repo TEXT` columns to `threads` table (nullable, migration)
+  - Validate project/repo at dispatch time (project exists, repo in project's repo list)
+  - Store project/repo on thread creation
+  - Thread inheritance: follow-up dispatches inherit project/repo from existing thread if not specified
+  - `resolve_execution_workdir()` function in executor: project.repo_root/repo > project.repo_root > agent.workdir > target_repo_root
+  - Update `orch_dispatch` MCP tool description to list available projects
+  - Update `orch_status` / `orch_poll` to include project context in output
+  - Index on `threads.project_id` for dashboard queries
+- Out of scope: Handoff override resolution (6c), dashboard grouping UI (6d)
+- Dependencies: ORCH-TEAM-6a
+- Acceptance criteria:
+  - `orch_dispatch(to="implementer", project="acme-platform", repo="api-gateway")` creates thread with project/repo context
+  - Agent runs in `{project.repo_root}/{repo}` directory
+  - Worktree created from the correct git repo root (not a parent directory)
+  - Invalid project/repo rejected with actionable error
+  - Follow-up dispatch to same thread inherits project/repo
+  - Dispatch without project works as before (backward compatible)
+  - `make verify` passes
+- Verification:
+  - Integration test: dispatch with project+repo, verify workdir resolution
+  - Integration test: dispatch without project, verify fallback to target_repo_root
+  - Integration test: follow-up dispatch inherits project context
+  - `make verify`
+- Status: Todo
+
+### Sub-ticket ORCH-TEAM-6c — Handoff Override Resolution
+
+- Goal: Resolve handoff chains from project context, allowing per-project handoff overrides.
+- In scope:
+  - `resolve_handoff()` function: check project.agent_overrides[alias].handoff, fall back to agent.handoff
+  - Update `maybe_auto_handoff` in `loop_runner.rs` to look up project context from thread before resolving handoff
+  - Project override replaces the entire handoff block (no partial merge)
+- Out of scope: Per-project prompt overrides, workspace override resolution
+- Dependencies: ORCH-TEAM-6a, ORCH-TEAM-6b (thread carries project context)
+- Acceptance criteria:
+  - Dispatch with `project="compas"` routes implementer→orch-reviewer (project override)
+  - Dispatch with `project="acme-platform"` routes implementer→[reviewer-opus, reviewer-codex] (agent default)
+  - Dispatch without project uses agent's own handoff
+  - `make verify` passes
+- Verification:
+  - Integration test: dispatch to two projects, verify different handoff chains fire
+  - Integration test: dispatch without project, verify agent default handoff
+  - `make verify`
+- Status: Todo
+
+### Sub-ticket ORCH-TEAM-6d — Dashboard Project Grouping
+
+- Goal: Show project context in the TUI dashboard and support filtering by project.
+- In scope:
+  - Ops tab: show project label on thread rows (when project_id is set)
+  - History tab: show project label on execution rows
+  - Agents tab: show project breakdown per agent
+  - Optional project filter toggle (keyboard shortcut) to show only one project's threads
+  - `orch_status` and `orch_batch_status` include project context in output
+- Out of scope: Web dashboard (deferred), project management UI
+- Dependencies: ORCH-TEAM-6b (threads carry project context)
+- Acceptance criteria:
+  - Threads with project context show project label in Ops and History tabs
+  - Project filter narrows the view to one project's threads
+  - Threads without project context display normally (no label)
+  - `make verify` passes
+- Verification:
+  - Manual: dispatch to two projects, verify dashboard shows project labels
+  - Manual: toggle project filter, verify correct filtering
+  - `make verify`
 - Status: Todo
 
 ## Ticket ORCH-TEAM-7 — Budget Controls
@@ -219,18 +415,23 @@ Created: 2026-03-14
 
 1. ORCH-TEAM-1 (Cost Tracking — independent, immediately valuable)
 2. ORCH-TEAM-2 (Operator Identity — foundation for multi-user)
-3. ORCH-TEAM-4 (Audit Log — builds on identity)
-4. ORCH-TEAM-5 (Scoped Views — builds on identity)
-5. ORCH-TEAM-3 (Multi-Operator HTTP — builds on EVO-8 + identity)
-6. ORCH-TEAM-7 (Budget Controls — builds on cost tracking)
-7. ORCH-TEAM-6 (Multi-Project — largest effort, builds on everything)
+3. ORCH-TEAM-6a (Multi-Project Config Schema — independent, non-breaking config addition)
+4. ORCH-TEAM-6b (Multi-Project Dispatch + Thread Resolution — builds on 6a)
+5. ORCH-TEAM-6c (Multi-Project Handoff Override — builds on 6a + 6b)
+6. ORCH-TEAM-6d (Multi-Project Dashboard Grouping — builds on 6b)
+7. ORCH-TEAM-4 (Audit Log — builds on identity)
+8. ORCH-TEAM-5 (Scoped Views — builds on identity)
+9. ORCH-TEAM-3 (Multi-Operator HTTP — builds on MFE-2 + identity)
+10. ORCH-TEAM-7 (Budget Controls — builds on cost tracking)
 
 ## Tracking Notes
 
 - Backlog-first governance applies.
 - Implementation commits should reference ticket IDs.
-- ORCH-TEAM depends on ORCH-EVO infrastructure (event broadcast, HTTP API).
-- TEAM-1 (cost tracking) and TEAM-2 (operator identity) can start before ORCH-EVO completes.
+- ORCH-TEAM depends on ORCH-EVO infrastructure (event broadcast) and MFE batch (HTTP API for TEAM-3).
+- TEAM-1 (cost tracking) and TEAM-2 (operator identity) can start independently.
+- TEAM-6 (multi-project) no longer depends on HTTP API — works with MCP dispatch. Moved earlier in execution order.
+- TEAM-6 revised (2026-03-20): overlay-based design per as-architect evaluation (thread `01KM6PWMC2DNQ4TT94CDZ2D2QR`). Split into 4 sub-tickets (6a-6d). Original rigid project-scoped-agents design replaced with projects-as-overlays.
 - All work happens in the `ottogiron/compas` standalone repo.
 - This batch targets the "small AI lab with 2-5 orch devs" scale.
 
@@ -281,14 +482,41 @@ Created: 2026-03-14
 - Duration:
 - Notes:
 
-- Ticket: ORCH-TEAM-6
+- Ticket: ORCH-TEAM-6a
 - Owner: TBD
-- Complexity: XL
-- Risk: High
+- Complexity: S
+- Risk: Low
 - Start:
 - End:
 - Duration:
-- Notes:
+- Notes: Config schema only, no runtime changes
+
+- Ticket: ORCH-TEAM-6b
+- Owner: TBD
+- Complexity: M
+- Risk: Medium
+- Start:
+- End:
+- Duration:
+- Notes: Dispatch params + thread project context + workdir resolution
+
+- Ticket: ORCH-TEAM-6c
+- Owner: TBD
+- Complexity: S
+- Risk: Low
+- Start:
+- End:
+- Duration:
+- Notes: Handoff override resolution from project context
+
+- Ticket: ORCH-TEAM-6d
+- Owner: TBD
+- Complexity: M
+- Risk: Low
+- Start:
+- End:
+- Duration:
+- Notes: Dashboard project labels + filter
 
 - Ticket: ORCH-TEAM-7
 - Owner: TBD
