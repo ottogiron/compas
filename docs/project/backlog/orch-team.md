@@ -1,4 +1,4 @@
-# Aster-Orch Team — Multi-Operator, Cost Tracking & Company Scale
+# Compas Team — Multi-Operator, Cost Tracking & Company Scale
 
 Status: Active
 Owner: otto
@@ -35,7 +35,7 @@ Created: 2026-03-14
   - `orch_cost` MCP tool returns cost breakdown by batch, agent, or time range
   - Dashboard History tab shows cost per execution row
   - Dashboard Agents tab shows aggregate cost per agent
-  - Cost estimation is configurable via pricing table in `aster-orch.yaml`
+  - Cost estimation is configurable via pricing table in config.yaml
 - Verification:
   - Integration test: stub backend returns JSON with token fields, verify stored in DB
   - Manual: run Claude execution, verify cost appears in dashboard and MCP tool
@@ -46,7 +46,7 @@ Created: 2026-03-14
 - Goal: Associate every dispatch and lifecycle action with an operator identity so multi-user attribution is possible.
 - In scope:
   - Add `operator_id` column to `messages` table
-  - MCP session binds to operator identity via config (`operator.id` in `aster-orch.yaml`) or environment variable (`ASTER_ORCH_OPERATOR_ID`)
+  - MCP session binds to operator identity via config (`operator.id` in config.yaml) or environment variable (`COMPAS_OPERATOR_ID`)
   - All dispatches, close, abandon, and reopen actions carry operator identity
   - Dashboard shows operator identity on messages in conversation view
   - `orch_session_info` MCP tool returns current operator identity
@@ -74,13 +74,13 @@ Created: 2026-03-14
   - Each API key maps to an operator identity (from ORCH-TEAM-2)
   - HTTP requests authenticated via `Authorization: Bearer <api-key>` header
   - API keys stored in SQLite (hashed) with creation timestamp and last-used tracking
-  - CLI commands: `aster_orch api-key create <operator-id>`, `api-key list`, `api-key revoke`
+  - CLI commands: `compas api-key create <operator-id>`, `api-key list`, `api-key revoke`
   - Rate limiting per API key (configurable)
 - Out of scope:
   - Role-based access control (e.g., read-only vs admin)
   - OAuth/SSO integration
   - Session management (stateless API keys only)
-- Dependencies: ORCH-EVO-8 (HTTP API layer), ORCH-TEAM-2 (operator identity)
+- Dependencies: MFE-2 (HTTP API layer, multi-frontend.md), ORCH-TEAM-2 (operator identity)
 - Acceptance criteria:
   - Multiple operators can concurrently dispatch and monitor via HTTP API
   - Each operator's actions are attributed to their identity
@@ -141,7 +141,7 @@ Created: 2026-03-14
 
 ## Ticket ORCH-TEAM-6 — Multi-Project Support
 
-- Goal: Allow a single aster-orch instance to manage agents and work across multiple project repositories.
+- Goal: Allow a single compas instance to manage agents and work across multiple project repositories.
 - In scope:
   - Config supports multiple project definitions:
 
@@ -166,7 +166,7 @@ Created: 2026-03-14
   - Separate databases per project
   - Cross-project agent coordination (agent works on one project at a time)
   - Project creation/deletion from dashboard (config-only)
-- Dependencies: ORCH-TEAM-3 (HTTP API with identity, for remote multi-project access)
+- Dependencies: ORCH-TEAM-3 (HTTP API with identity, for remote multi-project access; HTTP API delivered by MFE-2 in multi-frontend.md)
 - Acceptance criteria:
   - Multiple projects can be defined in config
   - Dispatches to different projects run agents in the correct repo root
@@ -231,7 +231,7 @@ Created: 2026-03-14
 - Implementation commits should reference ticket IDs.
 - ORCH-TEAM depends on ORCH-EVO infrastructure (event broadcast, HTTP API).
 - TEAM-1 (cost tracking) and TEAM-2 (operator identity) can start before ORCH-EVO completes.
-- All work happens in the `ottogiron/aster-orch` standalone repo.
+- All work happens in the `ottogiron/compas` standalone repo.
 - This batch targets the "small AI lab with 2-5 orch devs" scale.
 
 ## Execution Metrics

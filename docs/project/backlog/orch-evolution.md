@@ -1,4 +1,4 @@
-# Aster-Orch Evolution — Visibility, Ergonomics & Remote Access
+# Compas Evolution — Visibility, Ergonomics & Remote Access
 
 Status: Active
 Owner: otto
@@ -88,7 +88,7 @@ Created: 2026-03-14
 - Goal: Send macOS desktop notifications on execution completion, failure, and batch completion.
 - In scope:
   - macOS notification via `osascript` or `terminal-notifier` (with fallback)
-  - Configurable in `aster-orch.yaml`: `notifications.desktop = true/false`
+  - Configurable in config.yaml: `notifications.desktop = true/false`
   - Notification on: execution completed, execution failed, execution timed out, batch completed
   - Notification content: agent alias, thread/batch context, duration, status
   - Subscribe to event broadcast channel (from ORCH-EVO-2) for triggers
@@ -144,7 +144,7 @@ Created: 2026-03-14
 - Out of scope:
   - Multi-turn conversation from dashboard (just single dispatches)
   - File attachment or complex message formatting
-- Dependencies: None
+- Dependencies: None (soft: should use `DispatchService` from MFE-1 once available)
 - Acceptance criteria:
   - `d` key opens dispatch prompt with agent selection
   - Typing an instruction and confirming creates a dispatch message and thread
@@ -184,9 +184,9 @@ Created: 2026-03-14
 
 ## Ticket ORCH-EVO-8 — HTTP API Layer
 
-- Goal: Expose aster-orch operations as HTTP REST endpoints, enabling web dashboard, remote clients, and webhook integrations.
+- Goal: Expose compas operations as HTTP REST endpoints, enabling web dashboard, remote clients, and webhook integrations.
 - In scope:
-  - New CLI subcommand: `aster_orch serve` (or `--web` flag on dashboard)
+  - New CLI subcommand: `compas serve`
   - Axum HTTP server with REST endpoints mirroring MCP tools
   - Endpoints: dispatch, close, status, transcript, metrics, batch_status, tasks, health, agents, poll
   - SSE endpoint `/api/events` for live event streaming (requires ORCH-EVO-2)
@@ -207,7 +207,7 @@ Created: 2026-03-14
   - Integration test: dispatch via HTTP, poll for result, verify completion
   - Manual: curl endpoints, verify correct responses
   - Manual: connect to SSE endpoint, verify events stream during execution
-- Status: Todo
+- Status: Superseded by MFE-2 (multi-frontend.md)
 
 ## Ticket ORCH-EVO-9 — Web Dashboard (Read-Only)
 
@@ -233,13 +233,13 @@ Created: 2026-03-14
 - Verification:
   - Manual: open web dashboard, dispatch via TUI/MCP, verify web updates in real time
   - Manual: open on mobile device, verify layout is usable
-- Status: Todo
+- Status: Superseded (deferred in multi-frontend.md)
 
 ## Ticket ORCH-EVO-10 — Webhook Notifications
 
 - Goal: Send notifications to external services (Slack, Discord, generic HTTP) on orchestrator events.
 - In scope:
-  - Webhook configuration in `aster-orch.yaml`:
+  - Webhook configuration in config.yaml:
 
     ```yaml
     webhooks:
@@ -389,8 +389,8 @@ Created: 2026-03-14
 10. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
 11. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
 12. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
-13. ORCH-EVO-8 (HTTP API — larger effort, enables remote access)
-14. ORCH-EVO-9 (Web Dashboard — DEFERRED: build HTTP API first, web UI can be community contribution)
+13. ~~ORCH-EVO-8 (HTTP API — superseded by MFE-2 in multi-frontend.md)~~
+14. ~~ORCH-EVO-9 (Web Dashboard — superseded, deferred in multi-frontend.md)~~
 
 ## Tracking Notes
 
@@ -400,7 +400,8 @@ Created: 2026-03-14
 - EVO-7 (worktrees) moved up per orch-architect review — concurrent agents without isolation is a data corruption risk.
 - EVO-10 (webhooks) moved before EVO-8 (HTTP API) — outbound webhooks are 10x simpler and more immediately useful than a full API layer.
 - EVO-9 (web dashboard) deferred per orch-architect review — HTTP API (EVO-8) enables web UIs without committing to maintaining a React app. Build the API, let the UI emerge.
-- All work happens in the aster-orch standalone repo.
+- All work happens in the compas standalone repo.
+- **EVO-8 and EVO-9 superseded (2026-03-20).** The multi-frontend batch (`docs/project/backlog/multi-frontend.md`) replaces EVO-8 with MFE-2 (adds a service layer prerequisite and detailed route design) and defers EVO-9's web UI scope. Cross-backlog dependencies (ORCH-TEAM-3) updated to reference MFE-2.
 - **Sessions concept deferred.** Orch-architect recommended promoting batches to first-class entities (with description, lifecycle, tags) instead of adding a session layer above them. See architect review thread from 2026-03-15. When batches need cross-batch grouping, add tags. Revisit full sessions at TEAM-scale if multi-batch campaigns become a real pattern.
 - **Batch promotion (future ticket):** Create a `batches` table with description, status (active/paused/completed), created_at/completed_at, and tags. Auto-created on first dispatch. `orch_batch_create`/`orch_batch_close` for explicit lifecycle. Not yet scheduled — defer until cost tracking (TEAM-1) or multi-project (TEAM-6) work begins.
 
