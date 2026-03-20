@@ -1,12 +1,67 @@
 //! orch_health and orch_diagnose implementations.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
 use super::params::*;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
+use crate::backend::PingResult;
 use crate::model::agent::Agent;
 use crate::store::ThreadStatus;
+
+// ---------------------------------------------------------------------------
+// PingCache — per-agent TTL cache for ping results
+// ---------------------------------------------------------------------------
+
+/// Cached ping result with timestamp.
+struct CachedPing {
+    result: PingResult,
+    cached_at: Instant,
+}
+
+/// Thread-safe cache for backend ping results.
+///
+/// Each agent alias maps to a `CachedPing`. Entries within the configured TTL
+/// are returned immediately; expired or missing entries trigger a fresh ping.
+pub struct PingCache {
+    entries: Mutex<HashMap<String, CachedPing>>,
+}
+
+impl PingCache {
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Return a cached result if it exists and is within TTL.
+    fn get(&self, alias: &str, ttl: Duration) -> Option<PingResult> {
+        let guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(alias).and_then(|entry| {
+            if entry.cached_at.elapsed() < ttl {
+                Some(entry.result.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Insert or overwrite a cache entry.
+    fn set(&self, alias: String, result: PingResult) {
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.insert(
+            alias,
+            CachedPing {
+                result,
+                cached_at: Instant::now(),
+            },
+        );
+    }
+}
 
 impl OrchestratorMcpServer {
     // ── orch_health ──────────────────────────────────────────────────────
@@ -22,6 +77,7 @@ impl OrchestratorMcpServer {
             ping_alive: bool,
             ping_latency_ms: u64,
             ping_detail: Option<String>,
+            cached: bool,
         }
 
         #[derive(Serialize)]
@@ -63,38 +119,90 @@ impl OrchestratorMcpServer {
         };
 
         let ping_timeout = config.orchestration.ping_timeout_secs;
-        let mut agent_health = Vec::new();
+        let cache_ttl = Duration::from_secs(config.orchestration.ping_cache_ttl_secs);
 
-        for agent_cfg in agents_to_check {
-            let agent = Agent {
-                alias: agent_cfg.alias.clone(),
-                backend: agent_cfg.backend.clone(),
-                model: agent_cfg.model.clone(),
-                prompt: agent_cfg.prompt.clone(),
-                prompt_file: agent_cfg.prompt_file.clone(),
-                timeout_secs: agent_cfg.timeout_secs,
-                backend_args: agent_cfg.backend_args.clone(),
-                env: agent_cfg.env.clone(),
-                log_path: None,
-                execution_workdir: agent_cfg.workdir.clone(),
-            };
+        // Partition agents into cache-hit vs cache-miss.
+        let mut agent_health: Vec<AgentHealth> = Vec::with_capacity(agents_to_check.len());
+        let mut need_ping: Vec<usize> = Vec::new(); // indices into agents_to_check
 
-            let ping = match self.backend_registry.get(agent_cfg) {
-                Ok(backend) => backend.ping(&agent, ping_timeout).await,
-                Err(e) => crate::backend::PingResult {
-                    alive: false,
-                    latency_ms: 0,
-                    detail: Some(format!("backend not found: {}", e)),
-                },
-            };
+        for (i, agent_cfg) in agents_to_check.iter().enumerate() {
+            if let Some(cached) = self.ping_cache.get(&agent_cfg.alias, cache_ttl) {
+                agent_health.push(AgentHealth {
+                    alias: agent_cfg.alias.clone(),
+                    backend: agent_cfg.backend.clone(),
+                    ping_alive: cached.alive,
+                    ping_latency_ms: cached.latency_ms,
+                    ping_detail: cached.detail,
+                    cached: true,
+                });
+            } else {
+                // Placeholder; will be filled after parallel pings.
+                agent_health.push(AgentHealth {
+                    alias: agent_cfg.alias.clone(),
+                    backend: agent_cfg.backend.clone(),
+                    ping_alive: false,
+                    ping_latency_ms: 0,
+                    ping_detail: None,
+                    cached: false,
+                });
+                need_ping.push(i);
+            }
+        }
 
-            agent_health.push(AgentHealth {
-                alias: agent_cfg.alias.clone(),
-                backend: agent_cfg.backend.clone(),
-                ping_alive: ping.alive,
-                ping_latency_ms: ping.latency_ms,
-                ping_detail: ping.detail,
-            });
+        // Ping all cache-miss agents in parallel using JoinSet.
+        if !need_ping.is_empty() {
+            let mut join_set = tokio::task::JoinSet::new();
+
+            for &idx in &need_ping {
+                let agent_cfg = agents_to_check[idx];
+                let agent = Agent {
+                    alias: agent_cfg.alias.clone(),
+                    backend: agent_cfg.backend.clone(),
+                    model: agent_cfg.model.clone(),
+                    prompt: agent_cfg.prompt.clone(),
+                    prompt_file: agent_cfg.prompt_file.clone(),
+                    timeout_secs: agent_cfg.timeout_secs,
+                    backend_args: agent_cfg.backend_args.clone(),
+                    env: agent_cfg.env.clone(),
+                    log_path: None,
+                    execution_workdir: agent_cfg.workdir.clone(),
+                };
+
+                let backend_result = self.backend_registry.get(agent_cfg);
+                let ping_timeout_secs = ping_timeout;
+
+                join_set.spawn(async move {
+                    let ping = match backend_result {
+                        Ok(backend) => backend.ping(&agent, ping_timeout_secs).await,
+                        Err(e) => PingResult {
+                            alive: false,
+                            latency_ms: 0,
+                            detail: Some(format!("backend not found: {}", e)),
+                        },
+                    };
+                    (idx, ping)
+                });
+            }
+
+            // Collect all results.
+            while let Some(result) = join_set.join_next().await {
+                match result {
+                    Ok((idx, ping)) => {
+                        let alias = agents_to_check[idx].alias.clone();
+
+                        // Update the placeholder entry.
+                        agent_health[idx].ping_alive = ping.alive;
+                        agent_health[idx].ping_latency_ms = ping.latency_ms;
+                        agent_health[idx].ping_detail = ping.detail.clone();
+
+                        // Populate cache.
+                        self.ping_cache.set(alias, ping);
+                    }
+                    Err(join_err) => {
+                        tracing::warn!("ping task panicked: {}", join_err);
+                    }
+                }
+            }
         }
 
         Ok(json_text(&HealthReport {
@@ -219,5 +327,102 @@ impl OrchestratorMcpServer {
             blockers,
             suggestions,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ping_cache_miss_returns_none() {
+        let cache = PingCache::new();
+        let ttl = Duration::from_secs(60);
+        assert!(cache.get("agent-a", ttl).is_none());
+    }
+
+    #[test]
+    fn test_ping_cache_hit_within_ttl() {
+        let cache = PingCache::new();
+        let ttl = Duration::from_secs(60);
+        cache.set(
+            "agent-a".to_string(),
+            PingResult {
+                alive: true,
+                latency_ms: 42,
+                detail: None,
+            },
+        );
+        let result = cache.get("agent-a", ttl).expect("should hit cache");
+        assert!(result.alive);
+        assert_eq!(result.latency_ms, 42);
+    }
+
+    #[test]
+    fn test_ping_cache_expired_returns_none() {
+        let cache = PingCache::new();
+        // Use a zero TTL so the entry is immediately expired.
+        let ttl = Duration::from_secs(0);
+        cache.set(
+            "agent-a".to_string(),
+            PingResult {
+                alive: true,
+                latency_ms: 10,
+                detail: None,
+            },
+        );
+        assert!(cache.get("agent-a", ttl).is_none());
+    }
+
+    #[test]
+    fn test_ping_cache_overwrite() {
+        let cache = PingCache::new();
+        let ttl = Duration::from_secs(60);
+        cache.set(
+            "agent-a".to_string(),
+            PingResult {
+                alive: false,
+                latency_ms: 100,
+                detail: Some("down".to_string()),
+            },
+        );
+        cache.set(
+            "agent-a".to_string(),
+            PingResult {
+                alive: true,
+                latency_ms: 5,
+                detail: None,
+            },
+        );
+        let result = cache.get("agent-a", ttl).expect("should hit cache");
+        assert!(result.alive);
+        assert_eq!(result.latency_ms, 5);
+    }
+
+    #[test]
+    fn test_ping_cache_independent_agents() {
+        let cache = PingCache::new();
+        let ttl = Duration::from_secs(60);
+        cache.set(
+            "agent-a".to_string(),
+            PingResult {
+                alive: true,
+                latency_ms: 10,
+                detail: None,
+            },
+        );
+        cache.set(
+            "agent-b".to_string(),
+            PingResult {
+                alive: false,
+                latency_ms: 0,
+                detail: Some("unreachable".to_string()),
+            },
+        );
+        let a = cache.get("agent-a", ttl).unwrap();
+        let b = cache.get("agent-b", ttl).unwrap();
+        assert!(a.alive);
+        assert!(!b.alive);
+        assert!(cache.get("agent-c", ttl).is_none());
     }
 }

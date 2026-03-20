@@ -300,6 +300,7 @@ orchestration:
   max_triggers_per_agent: 2             # Per-agent concurrency limit
   stale_active_secs: 3600              # Staleness threshold for idle threads
   ping_timeout_secs: 15                # Backend health check timeout
+  ping_cache_ttl_secs: 60              # TTL for cached ping results (default: 60)
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
 
 database:                              # SQLite connection pool (requires restart to change)
@@ -335,7 +336,7 @@ agents:
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
 
-**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `log_retention_count`, `notifications`. Changes to `target_repo_root`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
+**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `target_repo_root`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
 
 ### Per-Agent Working Directory
 
