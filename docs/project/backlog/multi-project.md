@@ -91,7 +91,7 @@ projects:
 
 **Dispatch examples:**
 
-```
+```text
 # Multi-repo project: agent + project + repo
 orch_dispatch(to="implementer", project="acme-platform",
               repo="api-gateway", body="...")
@@ -114,6 +114,7 @@ orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
 ```
 
 **Workdir resolution order:**
+
 1. `project.repo_root/repo` (if project + repo provided)
 2. `project.repo_root` (if project provided, no repo)
 3. `agent.workdir` (if set on agent)

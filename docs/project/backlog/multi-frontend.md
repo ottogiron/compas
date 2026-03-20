@@ -149,6 +149,7 @@ Architecture evaluation completed by `architect` agent (thread `01KM6N8S3WSBV2P3
 **Summary:** Tauri app with sidecar model running `compas serve`. React/TypeScript frontend. Types generated from Rust domain types via `specta` or `ts-rs`. SSE for real-time updates.
 
 **Key decisions from architect evaluation:**
+
 - Tauri over Electron: Rust type sharing, small bundle (~10-15 MB vs 200+), native webview, natural fit for solo Rust developer
 - Sidecar model (Tauri manages `compas serve` process lifecycle) preferred over embedding worker as Rust thread
 - `desktop/` directory with Tauri project scaffolding

@@ -186,6 +186,7 @@ Created: 2026-03-14
 All tickets deferred. Multi-project support (formerly ORCH-TEAM-6) extracted to `multi-project.md` (batch MPR).
 
 If this batch is revisited:
+
 1. ORCH-TEAM-1 (Cost Tracking)
 2. ORCH-TEAM-2 (Operator Identity)
 3. ORCH-TEAM-4 (Audit Log — builds on identity)
