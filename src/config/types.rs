@@ -128,6 +128,11 @@ pub struct OrchestrationConfig {
     /// Timeout in seconds for backend ping liveness probes (default 15).
     #[serde(default = "default_ping_timeout_secs")]
     pub ping_timeout_secs: u64,
+    /// TTL in seconds for cached ping results (default 60).
+    /// Subsequent `orch_health` calls within this window return cached results
+    /// instead of re-pinging backends.
+    #[serde(default = "default_ping_cache_ttl_secs")]
+    pub ping_cache_ttl_secs: u64,
     /// Number of execution log files to retain under `{state_dir}/logs/` (default 100).
     /// Oldest files (by ULID-sorted name) are pruned on worker startup.
     #[serde(default = "default_log_retention_count")]
@@ -145,6 +150,7 @@ impl Default for OrchestrationConfig {
             max_concurrent_triggers: None,
             max_triggers_per_agent: default_max_triggers_per_agent(),
             ping_timeout_secs: default_ping_timeout_secs(),
+            ping_cache_ttl_secs: default_ping_cache_ttl_secs(),
             log_retention_count: default_log_retention_count(),
             stale_active_secs: default_stale_active_secs(),
         }
@@ -165,6 +171,10 @@ fn default_max_triggers_per_agent() -> usize {
 
 fn default_ping_timeout_secs() -> u64 {
     15
+}
+
+fn default_ping_cache_ttl_secs() -> u64 {
+    60
 }
 
 fn default_log_retention_count() -> usize {

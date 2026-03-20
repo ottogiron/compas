@@ -16,6 +16,8 @@ use crate::backend::registry::BackendRegistry;
 use crate::config::ConfigHandle;
 use crate::store::Store;
 
+use super::health::PingCache;
+
 pub use super::params::*;
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,8 @@ pub struct OrchestratorMcpServer {
     pub store: Store,
     /// Backend registry — used by orch_health for backend pings.
     pub backend_registry: Arc<BackendRegistry>,
+    /// Cache for backend ping results (shared across orch_health calls).
+    pub ping_cache: Arc<PingCache>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -52,6 +56,7 @@ impl OrchestratorMcpServer {
             config,
             store,
             backend_registry: Arc::new(backend_registry),
+            ping_cache: Arc::new(PingCache::new()),
             tool_router: Self::tool_router(),
         }
     }
@@ -203,7 +208,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_health",
-        description = "Check agent health: backend readiness, CLI availability, environment, runtime state."
+        description = "Check agent health: backend readiness, CLI availability, environment, runtime state. Results are cached per agent for `ping_cache_ttl_secs` (default 60s). Each agent entry includes a `cached` boolean indicating whether the result was served from cache. Use `alias` to check a single agent."
     )]
     async fn orch_health(
         &self,

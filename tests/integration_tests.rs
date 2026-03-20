@@ -2279,6 +2279,35 @@ mod session_health_tests {
         let agents = json["agents"].as_array().unwrap();
         assert!(agents.iter().all(|a| a["ping_alive"] == false));
     }
+
+    #[tokio::test]
+    async fn test_health_cache_hit_on_second_call() {
+        let server = test_server().await;
+
+        // First call: all agents should be fresh (cached == false).
+        let result1 = server
+            .health_impl(HealthParams { alias: None })
+            .await
+            .unwrap();
+        let json1 = extract_json(&result1);
+        let agents1 = json1["agents"].as_array().unwrap();
+        assert!(
+            agents1.iter().all(|a| a["cached"] == false),
+            "first call should have all cached=false"
+        );
+
+        // Second call (within default 60s TTL): all should be cached.
+        let result2 = server
+            .health_impl(HealthParams { alias: None })
+            .await
+            .unwrap();
+        let json2 = extract_json(&result2);
+        let agents2 = json2["agents"].as_array().unwrap();
+        assert!(
+            agents2.iter().all(|a| a["cached"] == true),
+            "second call should have all cached=true"
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

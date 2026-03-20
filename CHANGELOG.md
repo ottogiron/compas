@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `orch_health` parallel pings with TTL cache: backend pings now run concurrently via `JoinSet` (total time drops from N*latency to max(latency)), cached results are returned within the configurable `ping_cache_ttl_secs` window (default 60s), and a `cached` field in per-agent output indicates whether the result is fresh
 - Worktree uncommitted change detection — executor appends `## Worktree Status` (porcelain status + diff stat) to agent output when workspace is `worktree` and the worktree has uncommitted changes, giving downstream reviewers visibility into filesystem modifications
 - Worker singleton guard — fail-fast lockfile + heartbeat/PID check prevents multiple workers from running simultaneously, avoiding orphan-crash hazard (ADR-016)
 - `--standalone` flag for `dashboard` — opt out of the embedded worker when monitoring only
