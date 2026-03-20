@@ -114,7 +114,7 @@ Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in dif
 
 **Design:** Per-agent `workdir` is the low-level primitive. It sets the `current_dir` for the backend CLI process. `workspace: worktree` creates git worktrees from the agent's base workdir. Both are optional — omitting them preserves the existing shared-workspace behavior.
 
-**Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) was deferred to ORCH-TEAM-6. Per-agent `workdir` is the interim solution that solves the immediate need. When project-based config is implemented, it would set `workdir` on its agents, making `workdir` the underlying primitive either way.
+**Deferred alternative:** Project-based config (Option B from the design session — `projects:` section with per-project agents and repo roots) is now tracked in `docs/project/backlog/multi-project.md` (batch MPR). Per-agent `workdir` is the interim solution that solves the immediate need. The multi-project design uses an overlays approach where projects provide repo_root context and per-agent handoff overrides, with `workdir` remaining the underlying primitive.
 
 **Config location:** The production orch config has migrated to `~/.compas/config.yaml` (the new default). See ADR-013. The compas repo retains `.compas/config.yaml` as the **dev** config for testing MCP changes — this is distinct from the production default.
 
@@ -163,7 +163,7 @@ The default config location for the production `compas` binary is now `~/.compas
 
 - Neutral, user-scoped location — no dependency on a specific repo being checked out.
 - Simplifies MCP server registration: `compas mcp-server` with no flags just works.
-- Prepares for multi-project config support (ORCH-TEAM-6) where a single user-level config defines agents across multiple repos via per-agent `workdir`.
+- Prepares for multi-project config support (`docs/project/backlog/multi-project.md`) where a single user-level config defines agents across multiple repos via per-agent `workdir`.
 - Consistent with Unix conventions for user-scoped tool config (`~/.tool/`).
 
 **Dev config distinction:** The repo-relative `.compas/config.yaml` remains the dev config for testing MCP changes. It is loaded via `make dashboard-dev` or `cargo run` with an explicit `--config` flag, keeping it fully isolated from the production default.
