@@ -68,7 +68,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: stub hook script writes event JSON to file, verify contents
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket HOOKS-3 — Documentation and examples
 
@@ -106,6 +106,15 @@ Created: 2026-03-21
 - Phase 2 extensions (deferred): `on_thread_abandoned`, `on_execution_retrying`, blocking hooks, per-hook `workdir` override.
 
 ## Execution Metrics
+
+- Ticket: HOOKS-2
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 15:55 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
 
 - Ticket: HOOKS-1
 - Owner: (pending)

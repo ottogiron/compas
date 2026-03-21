@@ -7,6 +7,10 @@
 //!
 //! All failures are logged as [`tracing::warn`] and never propagate to callers
 //! (fire-and-forget semantics). Hook failures never affect the execution path.
+//!
+//! [`spawn_hook_consumer`] subscribes to the [`crate::events::EventBus`] and
+//! fires the appropriate hook group for each matching event. Hook config is
+//! re-read on every event to support hot-reload without a worker restart.
 
 use crate::config::types::HookEntry;
 use std::io::Write;
@@ -103,6 +107,139 @@ impl HookRunner {
             }
         }
     }
+}
+
+/// Spawn a long-lived task that subscribes to the [`crate::events::EventBus`] and fires
+/// lifecycle hooks on matching events.
+///
+/// Hook commands are re-read from [`crate::config::watcher::ConfigHandle`] on every event
+/// to support hot-reload — operators can add or remove hooks without restarting the worker.
+///
+/// Each hook group runs inside a separate [`tokio::task::spawn_blocking`] call so a slow
+/// or hung hook subprocess cannot stall the subscriber loop.
+///
+/// [`tokio::sync::broadcast::error::RecvError::Lagged`] is handled gracefully: a warning
+/// is logged and the loop continues.
+pub fn spawn_hook_consumer(
+    event_bus: &crate::events::EventBus,
+    config: crate::config::watcher::ConfigHandle,
+    default_workdir: std::path::PathBuf,
+) -> tokio::task::JoinHandle<()> {
+    use crate::events::OrchestratorEvent;
+    use tokio::sync::broadcast;
+
+    let mut rx = event_bus.subscribe();
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(event) => {
+                    // Re-read hooks config on every event for hot-reload support.
+                    let maybe_hooks = {
+                        let cfg = config.load();
+                        cfg.hooks.clone()
+                    };
+                    let workdir = default_workdir.clone();
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+
+                    match event {
+                        OrchestratorEvent::ExecutionStarted {
+                            execution_id,
+                            thread_id,
+                            agent_alias,
+                        } => {
+                            let hooks = maybe_hooks
+                                .map(|h| h.on_execution_started)
+                                .unwrap_or_default();
+                            if !hooks.is_empty() {
+                                let payload = serde_json::json!({
+                                    "event": "execution_started",
+                                    "thread_id": thread_id,
+                                    "execution_id": execution_id,
+                                    "agent_alias": agent_alias,
+                                    "timestamp": timestamp,
+                                });
+                                let event_json = serde_json::to_string(&payload)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                tokio::task::spawn_blocking(move || {
+                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                });
+                            }
+                        }
+                        OrchestratorEvent::ExecutionCompleted {
+                            execution_id,
+                            thread_id,
+                            agent_alias,
+                            success,
+                            duration_ms,
+                        } => {
+                            let hooks = maybe_hooks
+                                .map(|h| h.on_execution_completed)
+                                .unwrap_or_default();
+                            if !hooks.is_empty() {
+                                let payload = serde_json::json!({
+                                    "event": "execution_completed",
+                                    "thread_id": thread_id,
+                                    "execution_id": execution_id,
+                                    "agent_alias": agent_alias,
+                                    "success": success,
+                                    "duration_ms": duration_ms,
+                                    "timestamp": timestamp,
+                                });
+                                let event_json = serde_json::to_string(&payload)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                tokio::task::spawn_blocking(move || {
+                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                });
+                            }
+                        }
+                        OrchestratorEvent::ThreadStatusChanged {
+                            thread_id,
+                            new_status,
+                        } if new_status == "Completed" => {
+                            let hooks = maybe_hooks.map(|h| h.on_thread_closed).unwrap_or_default();
+                            if !hooks.is_empty() {
+                                let payload = serde_json::json!({
+                                    "event": "thread_closed",
+                                    "thread_id": thread_id,
+                                    "new_status": new_status,
+                                    "timestamp": timestamp,
+                                });
+                                let event_json = serde_json::to_string(&payload)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                tokio::task::spawn_blocking(move || {
+                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                });
+                            }
+                        }
+                        OrchestratorEvent::ThreadStatusChanged {
+                            thread_id,
+                            new_status,
+                        } if new_status == "Failed" => {
+                            let hooks = maybe_hooks.map(|h| h.on_thread_failed).unwrap_or_default();
+                            if !hooks.is_empty() {
+                                let payload = serde_json::json!({
+                                    "event": "thread_failed",
+                                    "thread_id": thread_id,
+                                    "new_status": new_status,
+                                    "timestamp": timestamp,
+                                });
+                                let event_json = serde_json::to_string(&payload)
+                                    .unwrap_or_else(|_| "{}".to_string());
+                                tokio::task::spawn_blocking(move || {
+                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!(skipped = n, "hook consumer lagged");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    })
 }
 
 #[cfg(test)]

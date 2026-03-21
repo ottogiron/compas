@@ -367,6 +367,13 @@ async fn run_worker(config_path: PathBuf) -> Result<(), Box<dyn std::error::Erro
         tracing::info!("desktop notifications enabled");
     }
 
+    // Lifecycle hooks — always active; no-op when `hooks:` is absent from config.
+    // Config is re-read per-event so hooks can be added/removed without a restart.
+    {
+        let default_workdir = config_handle.load().default_workdir.clone();
+        compas::hooks::spawn_hook_consumer(&event_bus, config_handle.clone(), default_workdir);
+    }
+
     let runner = WorkerRunner::new(
         config_handle,
         store,
