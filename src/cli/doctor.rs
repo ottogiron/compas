@@ -1104,6 +1104,7 @@ mod tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         };
 
         let result = check_worker(&config).await;
@@ -1303,6 +1304,7 @@ mod tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         };
 
         let backends = unique_backends(&config);
@@ -1325,6 +1327,7 @@ mod tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         };
 
         let results = check_hook_commands(&config);
@@ -1357,6 +1360,7 @@ mod tests {
                 on_thread_closed: vec![],
                 on_thread_failed: vec![],
             }),
+            schedules: None,
         };
 
         let results = check_hook_commands(&config);
@@ -1395,6 +1399,7 @@ mod tests {
                 on_thread_closed: vec![],
                 on_thread_failed: vec![],
             }),
+            schedules: None,
         };
 
         let results = check_hook_commands(&config);

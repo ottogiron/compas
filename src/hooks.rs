@@ -455,6 +455,7 @@ mod tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: Some(hooks),
+            schedules: None,
         };
         // Suppress validation error for empty agents
         config.agents.push(crate::config::types::AgentConfig {

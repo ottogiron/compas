@@ -139,6 +139,7 @@ fn test_config() -> OrchestratorConfig {
         notifications: Default::default(),
         backend_definitions: None,
         hooks: None,
+        schedules: None,
     }
 }
 
@@ -3910,6 +3911,7 @@ mod handoff_chain_tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         }
     }
 
@@ -5144,6 +5146,7 @@ mod fanout_tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         }
     }
 
@@ -5583,6 +5586,7 @@ mod read_log_tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         }
     }
 
@@ -6014,6 +6018,7 @@ mod session_resume_tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         };
 
         let config_handle = ConfigHandle::new(config.clone());
@@ -6419,6 +6424,7 @@ mod merge_worker_tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         }
     }
 

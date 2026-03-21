@@ -251,6 +251,43 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         }
     }
 
+    // ── Schedule validation (CRON-1) ──
+    if let Some(ref schedules) = config.schedules {
+        let mut seen_names = HashSet::new();
+        for sched in schedules {
+            if sched.name.is_empty() {
+                return Err(OrchestratorError::Config(
+                    "schedules: name must not be empty".into(),
+                ));
+            }
+            if !seen_names.insert(&sched.name) {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: duplicate schedule name '{}'",
+                    sched.name
+                )));
+            }
+            if !all_aliases.contains(sched.agent.as_str()) {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: schedule '{}' references unknown agent alias '{}'",
+                    sched.name, sched.agent
+                )));
+            }
+            if sched.max_runs == 0 {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: schedule '{}' max_runs must be > 0",
+                    sched.name
+                )));
+            }
+            // Validate cron expression syntax via croner
+            if let Err(e) = sched.cron.parse::<croner::Cron>() {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: schedule '{}' has invalid cron expression '{}': {}",
+                    sched.name, sched.cron, e
+                )));
+            }
+        }
+    }
+
     // ── Backend definitions validation (GBE-1) ──
     if let Some(ref defs) = config.backend_definitions {
         let mut seen_names = HashSet::new();
@@ -379,6 +416,7 @@ mod tests {
             notifications: Default::default(),
             backend_definitions: None,
             hooks: None,
+            schedules: None,
         }
     }
 
@@ -1513,5 +1551,269 @@ orchestration:
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("default_merge_strategy must be"));
         assert!(err.to_string().contains("bogus"));
+    }
+
+    // ── Schedule config validation tests (CRON-1) ──
+
+    #[test]
+    fn test_schedule_config_valid_minimal() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "Run CI checks"
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let schedules = config.schedules.unwrap();
+        assert_eq!(schedules.len(), 1);
+        assert_eq!(schedules[0].name, "ci-check");
+        assert_eq!(schedules[0].agent, "coder");
+        assert_eq!(schedules[0].cron, "*/5 * * * *");
+        assert_eq!(schedules[0].body, "Run CI checks");
+        assert!(schedules[0].batch.is_none());
+        assert_eq!(schedules[0].max_runs, 100); // default
+        assert!(schedules[0].enabled); // default true
+    }
+
+    #[test]
+    fn test_schedule_config_valid_full() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: nightly-build
+    agent: coder
+    cron: "0 2 * * *"
+    body: "Run nightly build"
+    batch: "NIGHTLY-001"
+    max_runs: 50
+    enabled: false
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let schedules = config.schedules.unwrap();
+        assert_eq!(schedules[0].name, "nightly-build");
+        assert_eq!(schedules[0].batch.as_deref(), Some("NIGHTLY-001"));
+        assert_eq!(schedules[0].max_runs, 50);
+        assert!(!schedules[0].enabled);
+    }
+
+    #[test]
+    fn test_schedule_config_absent_is_backward_compatible() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert!(config.schedules.is_none());
+    }
+
+    #[test]
+    fn test_schedule_config_empty_vec_is_valid() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+schedules: []
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert_eq!(config.schedules.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_schedule_config_empty_name_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ""
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "test"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn test_schedule_config_duplicate_name_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "first"
+  - name: ci-check
+    agent: coder
+    cron: "*/10 * * * *"
+    body: "second"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("duplicate schedule name 'ci-check'"));
+    }
+
+    #[test]
+    fn test_schedule_config_unknown_agent_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: nonexistent
+    cron: "*/5 * * * *"
+    body: "test"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("unknown agent alias 'nonexistent'"));
+    }
+
+    #[test]
+    fn test_schedule_config_invalid_cron_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: bad-cron
+    agent: coder
+    cron: "not-a-cron"
+    body: "test"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("invalid cron expression"));
+    }
+
+    #[test]
+    fn test_schedule_config_max_runs_zero_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "test"
+    max_runs: 0
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("max_runs must be > 0"));
+    }
+
+    #[test]
+    fn test_schedule_config_multiple_valid() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+  - alias: reviewer
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "Run CI"
+  - name: review-sweep
+    agent: reviewer
+    cron: "0 9 * * *"
+    body: "Sweep pending reviews"
+    batch: "REVIEW-BATCH"
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let schedules = config.schedules.unwrap();
+        assert_eq!(schedules.len(), 2);
+        assert_eq!(schedules[0].name, "ci-check");
+        assert_eq!(schedules[1].name, "review-sweep");
+        assert_eq!(schedules[1].batch.as_deref(), Some("REVIEW-BATCH"));
+    }
+
+    #[test]
+    fn test_schedule_config_various_cron_expressions() {
+        // All of these should be valid cron expressions
+        let expressions = [
+            "* * * * *",     // every minute
+            "*/5 * * * *",   // every 5 minutes
+            "0 * * * *",     // every hour
+            "0 0 * * *",     // daily at midnight
+            "0 9 * * 1-5",   // weekdays at 9am
+            "0 0 1 * *",     // first of month
+            "30 4 1,15 * *", // 4:30am on 1st and 15th
+        ];
+        for expr in &expressions {
+            let yaml = format!(
+                r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: test-schedule
+    agent: coder
+    cron: "{expr}"
+    body: "test"
+"#
+            );
+            let result = crate::config::load_config_from_str(&yaml);
+            assert!(
+                result.is_ok(),
+                "expected cron expression '{}' to be valid, got: {}",
+                expr,
+                result.unwrap_err()
+            );
+        }
+    }
+
+    #[test]
+    fn test_schedule_config_unknown_field_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: "test"
+    unknown_field: true
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }

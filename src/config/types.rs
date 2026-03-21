@@ -39,6 +39,9 @@ pub struct OrchestratorConfig {
     /// Lifecycle hook commands fired at named execution events.
     #[serde(default)]
     pub hooks: Option<HooksConfig>,
+    /// Config-declared recurring schedules (cron-based dispatch).
+    #[serde(default)]
+    pub schedules: Option<Vec<ScheduleConfig>>,
 }
 
 impl OrchestratorConfig {
@@ -388,6 +391,43 @@ pub struct HandoffConfig {
     /// Maximum consecutive auto-handoffs before forcing operator review (default: 3).
     #[serde(default)]
     pub max_chain_depth: Option<u32>,
+}
+
+// ── Config-declared recurring schedules (CRON-1) ──
+
+/// A config-declared recurring schedule.
+///
+/// Defines a cron-triggered dispatch that the worker evaluates on each tick.
+/// When the cron expression is due, the worker creates a dispatch message
+/// targeting the configured agent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScheduleConfig {
+    /// Unique schedule name (used for dedup and display).
+    pub name: String,
+    /// Target agent alias — must exist in the `agents` list.
+    pub agent: String,
+    /// Cron expression (e.g., `"*/5 * * * *"`). Parsed by the `croner` crate.
+    pub cron: String,
+    /// Dispatch message body sent to the agent.
+    pub body: String,
+    /// Optional batch/ticket ID attached to each dispatch.
+    #[serde(default)]
+    pub batch: Option<String>,
+    /// Safety cap on total dispatches for this schedule (default 100).
+    #[serde(default = "default_schedule_max_runs")]
+    pub max_runs: u64,
+    /// Whether this schedule is active (default true).
+    #[serde(default = "default_schedule_enabled")]
+    pub enabled: bool,
+}
+
+fn default_schedule_max_runs() -> u64 {
+    100
+}
+
+fn default_schedule_enabled() -> bool {
+    true
 }
 
 // ── Config-driven generic backend definitions (GBE-1) ──
