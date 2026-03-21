@@ -6133,3 +6133,38 @@ mod session_resume_tests {
         );
     }
 }
+
+mod generic_backend_registry_tests {
+    use compas::backend::generic::GenericBackend;
+    use compas::backend::registry::BackendRegistry;
+    use compas::config::types::BackendDefinition;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_generic_backend_registered_by_name() {
+        let mut registry = BackendRegistry::new();
+        let def = BackendDefinition {
+            name: "my-tool".to_string(),
+            command: "echo".to_string(),
+            args: vec!["{{instruction}}".to_string()],
+            resume: None,
+            output: Default::default(),
+            ping: None,
+            env_remove: None,
+        };
+        registry.register("my-tool", Arc::new(GenericBackend::new(def)));
+        assert!(
+            registry.get_by_name("my-tool").is_ok(),
+            "generic backend should be retrievable by name"
+        );
+    }
+
+    #[test]
+    fn test_generic_backend_not_found_without_registration() {
+        let registry = BackendRegistry::new();
+        assert!(
+            registry.get_by_name("unregistered-tool").is_err(),
+            "unregistered backend should return error"
+        );
+    }
+}

@@ -684,10 +684,17 @@ fn run_fix_command(binary: &str, args: &[&str]) -> Result<String, String> {
 
 /// Collect unique backend names from config agents.
 fn unique_backends(config: &OrchestratorConfig) -> Vec<String> {
+    // Collect generic backend names so we can exclude them from the built-in check.
+    // Generic backends are validated separately in step 5b.
+    let generic_names: HashSet<String> = config
+        .backend_definitions
+        .as_ref()
+        .map(|defs| defs.iter().map(|d| d.name.clone()).collect())
+        .unwrap_or_default();
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for agent in &config.agents {
-        if seen.insert(agent.backend.clone()) {
+        if !generic_names.contains(&agent.backend) && seen.insert(agent.backend.clone()) {
             result.push(agent.backend.clone());
         }
     }
