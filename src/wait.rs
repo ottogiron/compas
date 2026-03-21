@@ -57,6 +57,10 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
     };
 
     let deadline = tokio::time::Instant::now() + req.timeout;
+    // Tracks whether we observed pending chain work in a prior poll iteration.
+    // When pending drops to 0, we re-fetch messages once to capture any that
+    // arrived between the messages query and the pending-work check (TOCTOU fix).
+    let mut chain_was_pending = false;
 
     loop {
         let messages = store
@@ -83,6 +87,7 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
                     .await
                     .map_err(|e| format!("chain settlement check failed: {}", e))?;
                 if pending > 0 {
+                    chain_was_pending = true;
                     // Chain still has work in progress or pending handoffs — keep polling.
                     if tokio::time::Instant::now() >= deadline {
                         return Ok(WaitOutcome::Timeout {
@@ -92,6 +97,12 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
                         });
                     }
                     tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
+                    continue;
+                }
+                if chain_was_pending {
+                    // Chain just settled — re-fetch to capture messages that
+                    // arrived between the messages query and the pending check.
+                    chain_was_pending = false;
                     continue;
                 }
             }

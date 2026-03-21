@@ -24,7 +24,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Worktree cleanup safety guard (ADR-017) — worker loop checks `worktree_status` (tri-state: clean / dirty / git-error) before removing a worktree; dirty worktrees and git-failure cases are both skipped with a warning (thread ID, path, branch) and retried next cycle, preventing data loss when an operator closes a thread before merging the branch
+- Worktree cleanup safety guard (ADR-018) — worker loop checks `worktree_status` (tri-state: clean / dirty / git-error) before removing a worktree; dirty worktrees and git-failure cases are both skipped with a warning (thread ID, path, branch) and retried next cycle, preventing data loss when an operator closes a thread before merging the branch
+- `--await-chain` TOCTOU fix: re-fetch messages once when chain settles to capture responses inserted between the messages query and the pending-work check
 
 ### Changed
 
