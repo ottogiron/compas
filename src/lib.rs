@@ -7,6 +7,7 @@ pub mod events;
 pub mod hooks;
 pub mod lifecycle;
 pub mod mcp;
+pub mod merge;
 pub mod model;
 pub mod notifications;
 pub mod store;
