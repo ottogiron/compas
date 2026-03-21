@@ -36,7 +36,7 @@ Agents with `workspace: worktree` run in isolated git worktrees. Each thread get
 
 When reviewing work from a worktree agent, the changes are on the worktree branch — not on main. The operator merges or cherry-picks the work after approval.
 
-Worktrees are automatically cleaned up when threads are completed or abandoned. Failed threads retain their worktrees for inspection.
+**WARNING:** Worktrees are automatically cleaned up (deleted) by the worker when threads reach terminal state (`Completed` or `Abandoned`). `Failed` threads retain their worktrees for inspection. **You must merge or cherry-pick worktree changes before closing the thread, or the work will be permanently lost.** See Step 8 for the merge-then-close procedure.
 
 ## Automatic Retry
 
@@ -172,14 +172,29 @@ compas wait \
 
 Based on reviewer response:
 
-- **No blocking findings → close both threads:**
+- **No blocking findings → merge work, then close threads:**
+
+  **Worktree agents:** The worktree is cleaned up when the thread reaches terminal state. You **must** merge or cherry-pick the worktree changes into the target branch **before** closing the thread, or the work will be lost.
+
+  ```bash
+  # From the main repo — merge the worktree branch
+  git merge compas/<thread-id>
+  # Or cherry-pick specific commits
+  git cherry-pick <commit-hash>
+  ```
+
+  If the agent left uncommitted changes in the worktree, commit them first:
+
+  ```bash
+  git -C <worktree-path> add -A && git -C <worktree-path> commit -m "<description>"
+  ```
+
+  Then close both threads:
 
   ```text
   orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Review passed")
-  orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review")
+  orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review — changes merged")
   ```
-
-  Then commit the worker's changes.
 
 - **Blocking findings → request changes from worker:**
 
