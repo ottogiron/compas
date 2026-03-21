@@ -19,6 +19,8 @@ pub struct DispatchParams {
     pub intent: String,
     /// Optional thread ID (auto-generated if omitted)
     pub thread_id: Option<String>,
+    /// Short one-line summary (~80 chars) describing the thread's purpose
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

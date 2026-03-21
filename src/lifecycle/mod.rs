@@ -91,7 +91,7 @@ impl LifecycleService {
 
         if let Err(e) = self
             .store
-            .insert_message(thread_id, from, "operator", intent, body, None)
+            .insert_message(thread_id, from, "operator", intent, body, None, None)
             .await
         {
             tracing::error!(error = %e, "failed to insert close message");
@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn test_service_close_completed_sets_terminal() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let svc = LifecycleService::new(store.clone());
 
         let out = svc
@@ -206,7 +206,7 @@ mod tests {
     #[tokio::test]
     async fn test_service_abandon_sets_terminal_and_cancels() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
         let svc = LifecycleService::new(store.clone());
 
@@ -221,7 +221,7 @@ mod tests {
     #[tokio::test]
     async fn test_service_reopen_non_terminal_errors() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let svc = LifecycleService::new(store);
 
         let err = svc.reopen("t-1").await.unwrap_err();

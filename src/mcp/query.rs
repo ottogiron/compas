@@ -14,6 +14,7 @@ use crate::store::{self, MessageRow, ThreadStatusView};
 struct StatusEntry {
     thread_id: String,
     batch_id: Option<String>,
+    summary: Option<String>,
     thread_status: String,
     agent: Option<String>,
     execution_status: Option<String>,
@@ -28,6 +29,7 @@ impl From<ThreadStatusView> for StatusEntry {
         Self {
             thread_id: v.thread_id,
             batch_id: v.batch_id,
+            summary: v.summary,
             thread_status: v.thread_status,
             agent: v.agent_alias,
             execution_status: v.execution_status,
@@ -115,6 +117,7 @@ impl OrchestratorMcpServer {
         struct Transcript {
             thread_id: String,
             thread_status: Option<String>,
+            summary: Option<String>,
             batch_id: Option<String>,
             messages: Vec<TranscriptMessage>,
             executions: Vec<TranscriptExecution>,
@@ -123,6 +126,7 @@ impl OrchestratorMcpServer {
         let transcript = Transcript {
             thread_id: params.thread_id.clone(),
             thread_status: thread.as_ref().map(|t| t.status.clone()),
+            summary: thread.as_ref().and_then(|t| t.summary.clone()),
             batch_id: thread.and_then(|t| t.batch_id),
             messages: messages
                 .into_iter()
@@ -288,6 +292,7 @@ impl OrchestratorMcpServer {
         struct PollResult {
             thread_id: String,
             thread_status: String,
+            summary: Option<String>,
             matched_messages: usize,
             latest_message_id: Option<i64>,
             latest_message_ref: Option<String>,
@@ -300,6 +305,7 @@ impl OrchestratorMcpServer {
         Ok(json_text(&PollResult {
             thread_id: params.thread_id,
             thread_status: thread.status,
+            summary: thread.summary,
             matched_messages: filtered.len(),
             latest_message_id: latest.map(|m| m.id),
             latest_message_ref: latest.map(|m| store::message_ref(m.id)),
@@ -333,6 +339,7 @@ impl OrchestratorMcpServer {
         #[derive(Serialize)]
         struct BatchThread {
             thread_id: String,
+            summary: Option<String>,
             status: String,
         }
 
@@ -350,6 +357,7 @@ impl OrchestratorMcpServer {
                 .into_iter()
                 .map(|t| BatchThread {
                     thread_id: t.thread_id,
+                    summary: t.summary,
                     status: t.status,
                 })
                 .collect(),
@@ -548,6 +556,7 @@ impl OrchestratorMcpServer {
         struct TaskEntry {
             thread_id: String,
             batch_id: Option<String>,
+            summary: Option<String>,
             agent: Option<String>,
             execution_status: Option<String>,
             started_at: Option<i64>,
@@ -563,6 +572,7 @@ impl OrchestratorMcpServer {
             .map(|v| TaskEntry {
                 thread_id: v.thread_id,
                 batch_id: v.batch_id,
+                summary: v.summary,
                 agent: v.agent_alias,
                 execution_status: v.execution_status,
                 started_at: v.started_at,

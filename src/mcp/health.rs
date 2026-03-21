@@ -303,6 +303,7 @@ impl OrchestratorMcpServer {
         struct Diagnosis {
             thread_id: String,
             thread_status: String,
+            summary: Option<String>,
             message_count: usize,
             execution_count: usize,
             latest_execution_id: Option<String>,
@@ -317,6 +318,7 @@ impl OrchestratorMcpServer {
         Ok(json_text(&Diagnosis {
             thread_id: params.thread_id,
             thread_status: thread.status,
+            summary: thread.summary,
             message_count: messages.len(),
             execution_count: executions.len(),
             latest_execution_id: latest_exec.map(|e| e.id.clone()),

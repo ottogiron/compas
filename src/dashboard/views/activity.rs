@@ -652,10 +652,13 @@ fn render_ops_list(
 }
 
 fn make_thread_detail_line(row: &ThreadStatusView) -> Line<'static> {
-    let intent = row.parsed_intent.as_deref().unwrap_or("-");
+    let detail = row
+        .summary
+        .as_deref()
+        .unwrap_or_else(|| row.parsed_intent.as_deref().unwrap_or("-"));
     Line::from(vec![
         Span::raw("     \u{2514}\u{2500} "),
-        Span::styled(intent.to_string(), Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(detail.to_string(), Style::default().fg(theme::TEXT_DIM)),
         Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
         Span::styled("[c]", Style::default().fg(theme::ACCENT)),
         Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),
@@ -735,6 +738,21 @@ fn make_thread_line(
                 .add_modifier(base_mod),
         ),
     ];
+
+    // Summary column (between agent and batch_id)
+    let summary_text = t.summary.as_deref().unwrap_or("-");
+    let (summary_trunc, summary_width) = if is_wide { (24, 26) } else { (16, 18) };
+    spans.push(Span::styled(
+        format!(
+            "{:<w$}",
+            super::truncate(summary_text, summary_trunc),
+            w = summary_width
+        ),
+        Style::new()
+            .fg(theme::TEXT_NORMAL)
+            .bg(bg)
+            .add_modifier(base_mod),
+    ));
 
     if is_wide {
         spans.push(Span::styled(
@@ -983,6 +1001,7 @@ mod tests {
         ThreadStatusView {
             thread_id: thread_id.to_string(),
             batch_id: batch_id.map(|b| b.to_string()),
+            summary: None,
             thread_status: thread_status.to_string(),
             thread_created_at: 0,
             thread_updated_at: updated_at,

@@ -818,6 +818,7 @@ async fn handle_trigger_output(
                                 "review-request",
                                 &fail_body,
                                 None,
+                                None,
                             )
                             .await
                         {
@@ -848,6 +849,7 @@ async fn handle_trigger_output(
                         "operator",
                         "review-request",
                         &interrupt_body,
+                        None,
                         None,
                     )
                     .await
@@ -1045,6 +1047,7 @@ async fn insert_reply_message(
             "operator",
             intent,
             body,
+            None,
             None,
         )
         .await
@@ -1341,6 +1344,7 @@ async fn handle_single_handoff(
                     "operator",
                     "review-request",
                     &interrupt_body,
+                    None,
                     None,
                 )
                 .await
@@ -1685,9 +1689,11 @@ mod tests {
         let configs = vec![test_agent_config("worker-a", 3)];
 
         // Setup: create thread, dispatch message, and failed execution
-        store.ensure_thread("t-retry", None).await.unwrap();
+        store.ensure_thread("t-retry", None, None).await.unwrap();
         let msg_id = store
-            .insert_message("t-retry", "operator", "worker-a", "dispatch", "task", None)
+            .insert_message(
+                "t-retry", "operator", "worker-a", "dispatch", "task", None, None,
+            )
             .await
             .unwrap();
         let exec_id = store
@@ -1748,9 +1754,11 @@ mod tests {
 
         let configs = vec![test_agent_config("worker-a", 3)];
 
-        store.ensure_thread("t-term", None).await.unwrap();
+        store.ensure_thread("t-term", None, None).await.unwrap();
         let msg_id = store
-            .insert_message("t-term", "operator", "worker-a", "dispatch", "task", None)
+            .insert_message(
+                "t-term", "operator", "worker-a", "dispatch", "task", None, None,
+            )
             .await
             .unwrap();
         let exec_id = store
@@ -1792,9 +1800,11 @@ mod tests {
 
         let configs = vec![test_agent_config("worker-a", 1)]; // max_retries = 1
 
-        store.ensure_thread("t-max", None).await.unwrap();
+        store.ensure_thread("t-max", None, None).await.unwrap();
         let msg_id = store
-            .insert_message("t-max", "operator", "worker-a", "dispatch", "task", None)
+            .insert_message(
+                "t-max", "operator", "worker-a", "dispatch", "task", None, None,
+            )
             .await
             .unwrap();
         let exec_id = store
@@ -1833,7 +1843,10 @@ mod tests {
         let event_bus = EventBus::new();
         let configs = vec![test_agent_config("worker-a", 0)];
 
-        store.ensure_thread("t-default-intent", None).await.unwrap();
+        store
+            .ensure_thread("t-default-intent", None, None)
+            .await
+            .unwrap();
         let msg_id = store
             .insert_message(
                 "t-default-intent",
@@ -1841,6 +1854,7 @@ mod tests {
                 "worker-a",
                 "dispatch",
                 "task",
+                None,
                 None,
             )
             .await

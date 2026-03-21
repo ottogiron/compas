@@ -178,6 +178,7 @@ pub struct ThreadRow {
     pub thread_id: String,
     pub batch_id: Option<String>,
     pub source_thread_id: Option<String>,
+    pub summary: Option<String>,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -543,6 +544,13 @@ impl Store {
                 .execute(&self.pool)
                 .await?;
         }
+        let has_summary = thread_columns.iter().any(|c| c.1 == "summary");
+        if !has_summary {
+            sqlx::query("ALTER TABLE threads ADD COLUMN summary TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+
         // Index must be created AFTER the column migration for existing DBs.
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_threads_source ON threads(source_thread_id)")
             .execute(&self.pool)
@@ -558,16 +566,19 @@ impl Store {
         &self,
         thread_id: &str,
         batch_id: Option<&str>,
+        summary: Option<&str>,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "INSERT INTO threads (thread_id, batch_id)
-             VALUES (?, ?)
+            "INSERT INTO threads (thread_id, batch_id, summary)
+             VALUES (?, ?, ?)
              ON CONFLICT(thread_id) DO UPDATE SET
                batch_id = COALESCE(excluded.batch_id, threads.batch_id),
+               summary = COALESCE(excluded.summary, threads.summary),
                updated_at = strftime('%s','now')",
         )
         .bind(thread_id)
         .bind(batch_id)
+        .bind(summary)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -612,21 +623,29 @@ impl Store {
     }
 
     pub async fn get_thread(&self, thread_id: &str) -> Result<Option<ThreadRow>, sqlx::Error> {
-        let row: Option<(String, Option<String>, Option<String>, String, i64, i64)> =
-            sqlx::query_as(
-                "SELECT thread_id, batch_id, source_thread_id, status, created_at, updated_at
+        let row: Option<(
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            i64,
+            i64,
+        )> = sqlx::query_as(
+            "SELECT thread_id, batch_id, source_thread_id, summary, status, created_at, updated_at
                  FROM threads WHERE thread_id = ?",
-            )
-            .bind(thread_id)
-            .fetch_optional(&self.pool)
-            .await?;
+        )
+        .bind(thread_id)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|r| ThreadRow {
             thread_id: r.0,
             batch_id: r.1,
             source_thread_id: r.2,
-            status: r.3,
-            created_at: r.4,
-            updated_at: r.5,
+            summary: r.3,
+            status: r.4,
+            created_at: r.5,
+            updated_at: r.6,
         }))
     }
 
@@ -638,7 +657,7 @@ impl Store {
         limit: i64,
     ) -> Result<Vec<ThreadRow>, sqlx::Error> {
         let mut sql = String::from(
-            "SELECT thread_id, batch_id, source_thread_id, status, created_at, updated_at \
+            "SELECT thread_id, batch_id, source_thread_id, summary, status, created_at, updated_at \
              FROM threads WHERE 1=1",
         );
         if batch_id.is_some() {
@@ -649,8 +668,18 @@ impl Store {
         }
         sql.push_str(" ORDER BY updated_at DESC LIMIT ?");
 
-        let mut query =
-            sqlx::query_as::<_, (String, Option<String>, Option<String>, String, i64, i64)>(&sql);
+        let mut query = sqlx::query_as::<
+            _,
+            (
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+                i64,
+                i64,
+            ),
+        >(&sql);
         if let Some(b) = batch_id {
             query = query.bind(b);
         }
@@ -666,9 +695,10 @@ impl Store {
                 thread_id: r.0,
                 batch_id: r.1,
                 source_thread_id: r.2,
-                status: r.3,
-                created_at: r.4,
-                updated_at: r.5,
+                summary: r.3,
+                status: r.4,
+                created_at: r.5,
+                updated_at: r.6,
             })
             .collect())
     }
@@ -758,6 +788,7 @@ impl Store {
     // ── Message operations ───────────────────────────────────────────────
 
     /// Insert a message. Also ensures the thread record exists.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_message(
         &self,
         thread_id: &str,
@@ -766,8 +797,9 @@ impl Store {
         intent: &str,
         body: &str,
         batch_id: Option<&str>,
+        summary: Option<&str>,
     ) -> Result<i64, sqlx::Error> {
-        self.ensure_thread(thread_id, batch_id).await?;
+        self.ensure_thread(thread_id, batch_id, summary).await?;
         let row: (i64,) = sqlx::query_as(
             "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body, batch_id)
              VALUES (?, ?, ?, ?, ?, ?)
@@ -1595,7 +1627,7 @@ impl Store {
         limit: i64,
     ) -> Result<Vec<ThreadStatusView>, sqlx::Error> {
         let mut sql = String::from(
-            "SELECT t.thread_id, t.batch_id, t.status, t.created_at, t.updated_at,
+            "SELECT t.thread_id, t.batch_id, t.summary, t.status, t.created_at, t.updated_at,
                     e.id, COALESCE(e.agent_alias, m.to_alias), e.status, e.queued_at,
                     e.started_at, e.finished_at, e.duration_ms,
                     e.error_detail, e.parsed_intent, e.prompt_hash
@@ -1618,21 +1650,22 @@ impl Store {
         sql.push_str(" ORDER BY t.updated_at DESC LIMIT ?");
 
         type Row = (
-            String,
-            Option<String>,
-            String,
-            i64,
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<i64>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
+            String,         // t.thread_id
+            Option<String>, // t.batch_id
+            Option<String>, // t.summary
+            String,         // t.status
+            i64,            // t.created_at
+            i64,            // t.updated_at
+            Option<String>, // e.id
+            Option<String>, // agent_alias
+            Option<String>, // e.status
+            Option<i64>,    // e.queued_at
+            Option<i64>,    // e.started_at
+            Option<i64>,    // e.finished_at
+            Option<i64>,    // e.duration_ms
+            Option<String>, // e.error_detail
+            Option<String>, // e.parsed_intent
+            Option<String>, // e.prompt_hash
         );
         let mut query = sqlx::query_as::<_, Row>(&sql);
         if let Some(t) = thread_id {
@@ -1652,19 +1685,20 @@ impl Store {
             .map(|r| ThreadStatusView {
                 thread_id: r.0,
                 batch_id: r.1,
-                thread_status: r.2,
-                thread_created_at: r.3,
-                thread_updated_at: r.4,
-                execution_id: r.5,
-                agent_alias: r.6,
-                execution_status: r.7,
-                queued_at: r.8,
-                started_at: r.9,
-                finished_at: r.10,
-                duration_ms: r.11,
-                error_detail: r.12,
-                parsed_intent: r.13,
-                prompt_hash: r.14,
+                summary: r.2,
+                thread_status: r.3,
+                thread_created_at: r.4,
+                thread_updated_at: r.5,
+                execution_id: r.6,
+                agent_alias: r.7,
+                execution_status: r.8,
+                queued_at: r.9,
+                started_at: r.10,
+                finished_at: r.11,
+                duration_ms: r.12,
+                error_detail: r.13,
+                parsed_intent: r.14,
+                prompt_hash: r.15,
             })
             .collect())
     }
@@ -2198,6 +2232,7 @@ impl Store {
 pub struct ThreadStatusView {
     pub thread_id: String,
     pub batch_id: Option<String>,
+    pub summary: Option<String>,
     pub thread_status: String,
     pub thread_created_at: i64,
     pub thread_updated_at: i64,
@@ -2369,7 +2404,10 @@ mod tests {
     #[tokio::test]
     async fn test_thread_lifecycle() {
         let store = test_store().await;
-        store.ensure_thread("t-1", Some("batch-1")).await.unwrap();
+        store
+            .ensure_thread("t-1", Some("batch-1"), None)
+            .await
+            .unwrap();
         let status = store.get_thread_status("t-1").await.unwrap();
         assert_eq!(status.as_deref(), Some("Active"));
 
@@ -2384,11 +2422,14 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_thread_updates_batch() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let thread = store.get_thread("t-1").await.unwrap().unwrap();
         assert_eq!(thread.batch_id, None);
 
-        store.ensure_thread("t-1", Some("batch-1")).await.unwrap();
+        store
+            .ensure_thread("t-1", Some("batch-1"), None)
+            .await
+            .unwrap();
         let thread = store.get_thread("t-1").await.unwrap().unwrap();
         assert_eq!(thread.batch_id.as_deref(), Some("batch-1"));
     }
@@ -2397,7 +2438,9 @@ mod tests {
     async fn test_message_insert_and_query() {
         let store = test_store().await;
         let id = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "do work", None)
+            .insert_message(
+                "t-1", "operator", "focused", "dispatch", "do work", None, None,
+            )
             .await
             .unwrap();
         assert!(id > 0);
@@ -2411,7 +2454,7 @@ mod tests {
     #[tokio::test]
     async fn test_execution_lifecycle() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         assert!(!exec_id.is_empty());
@@ -2448,7 +2491,7 @@ mod tests {
     #[tokio::test]
     async fn test_execution_dispatch_linkage_roundtrip() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let dispatch_id = store
             .insert_message(
                 "t-1",
@@ -2456,6 +2499,7 @@ mod tests {
                 "focused",
                 "dispatch",
                 "linked input",
+                None,
                 None,
             )
             .await
@@ -2473,7 +2517,7 @@ mod tests {
     #[tokio::test]
     async fn test_prompt_hash_stored_and_retrieved() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let exec_id = store
             .insert_execution_with_dispatch("t-1", "focused", None, Some("abc123hash"))
@@ -2488,7 +2532,7 @@ mod tests {
     #[tokio::test]
     async fn test_prompt_hash_null_when_not_provided() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
 
@@ -2499,8 +2543,8 @@ mod tests {
     #[tokio::test]
     async fn test_per_agent_concurrency() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
 
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "focused").await.unwrap();
@@ -2514,7 +2558,7 @@ mod tests {
     #[tokio::test]
     async fn test_crash_recovery() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -2529,7 +2573,7 @@ mod tests {
     #[tokio::test]
     async fn test_stale_execution_marked_crashed() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -2552,7 +2596,7 @@ mod tests {
     #[tokio::test]
     async fn test_fresh_execution_not_marked_crashed() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -2568,7 +2612,7 @@ mod tests {
     #[tokio::test]
     async fn test_terminal_execution_not_marked_stale() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -2614,8 +2658,8 @@ mod tests {
     #[tokio::test]
     async fn test_queue_depth() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "chill").await.unwrap();
         assert_eq!(store.queue_depth().await.unwrap(), 2);
@@ -2632,6 +2676,7 @@ mod tests {
                 "dispatch",
                 "body",
                 Some("b-1"),
+                None,
             )
             .await
             .unwrap();
@@ -2655,7 +2700,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_and_get_backend_session_id() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(2).await.unwrap();
@@ -2699,7 +2744,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_last_backend_session_id_returns_latest() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // First execution for thread t-1, agent focused.
         let exec_id_1 = store.insert_execution("t-1", "focused").await.unwrap();
@@ -2758,7 +2803,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_retry_execution_and_attempt_number() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let retry_after = chrono::Utc::now().timestamp() - 10; // in the past
         let exec_id = store
@@ -2773,7 +2818,7 @@ mod tests {
     #[tokio::test]
     async fn test_claim_respects_retry_after_future() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // Insert a retry execution with retry_after far in the future
         let future_ts = chrono::Utc::now().timestamp() + 9999;
@@ -2793,7 +2838,7 @@ mod tests {
     #[tokio::test]
     async fn test_claim_picks_up_retry_after_past() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // Insert a retry execution with retry_after in the past
         let past_ts = chrono::Utc::now().timestamp() - 10;
@@ -2814,7 +2859,7 @@ mod tests {
     #[tokio::test]
     async fn test_set_and_get_error_category() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
         store
@@ -2829,7 +2874,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_last_backend_session_id_returns_from_failed_executions() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // An execution that failed with a backend_session_id set.
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
@@ -2865,7 +2910,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_last_backend_session_id_crashed_most_recent_wins() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // First crashed execution
         let exec_id_1 = store.insert_execution("t-1", "focused").await.unwrap();
@@ -2924,7 +2969,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_last_backend_session_id_from_executing_row() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // A still-executing row with an early-persisted session ID
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
@@ -2946,7 +2991,7 @@ mod tests {
     #[tokio::test]
     async fn test_execution_events_tool_name_roundtrip() {
         let store = test_store().await;
-        store.ensure_thread("t-ev", None).await.unwrap();
+        store.ensure_thread("t-ev", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-ev", "agent-ev").await.unwrap();
 
         let events = vec![
@@ -3021,7 +3066,7 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_counts_basic() {
         let store = test_store().await;
-        store.ensure_thread("t-tc-1", None).await.unwrap();
+        store.ensure_thread("t-tc-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-tc-1", "focused").await.unwrap();
 
         let events = vec![
@@ -3071,8 +3116,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_call_counts_agent_filter() {
         let store = test_store().await;
-        store.ensure_thread("t-tc-2", None).await.unwrap();
-        store.ensure_thread("t-tc-3", None).await.unwrap();
+        store.ensure_thread("t-tc-2", None, None).await.unwrap();
+        store.ensure_thread("t-tc-3", None, None).await.unwrap();
 
         let exec_focused = store.insert_execution("t-tc-2", "focused").await.unwrap();
         let exec_spark = store.insert_execution("t-tc-3", "spark").await.unwrap();
@@ -3126,7 +3171,7 @@ mod tests {
         // When tool_result events have NULL tool_name (Claude behavior),
         // error_count should degrade gracefully to 0.
         let store = test_store().await;
-        store.ensure_thread("t-er-1", None).await.unwrap();
+        store.ensure_thread("t-er-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-er-1", "focused").await.unwrap();
 
         let events = vec![
@@ -3166,7 +3211,7 @@ mod tests {
         // When tool_result events DO have tool_name and contain error keywords,
         // error_count is populated and error_rate is computed.
         let store = test_store().await;
-        store.ensure_thread("t-er-2", None).await.unwrap();
+        store.ensure_thread("t-er-2", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-er-2", "focused").await.unwrap();
 
         let events = vec![
@@ -3219,8 +3264,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_usage_by_agent_basic() {
         let store = test_store().await;
-        store.ensure_thread("t-ua-1", None).await.unwrap();
-        store.ensure_thread("t-ua-2", None).await.unwrap();
+        store.ensure_thread("t-ua-1", None, None).await.unwrap();
+        store.ensure_thread("t-ua-2", None, None).await.unwrap();
 
         let exec_focused = store.insert_execution("t-ua-1", "focused").await.unwrap();
         let exec_spark = store.insert_execution("t-ua-2", "spark").await.unwrap();
@@ -3293,8 +3338,8 @@ mod tests {
     #[tokio::test]
     async fn test_cost_summary_basic() {
         let store = test_store().await;
-        store.ensure_thread("t-cs-1", None).await.unwrap();
-        store.ensure_thread("t-cs-2", None).await.unwrap();
+        store.ensure_thread("t-cs-1", None, None).await.unwrap();
+        store.ensure_thread("t-cs-2", None, None).await.unwrap();
 
         // Execution 1: focused, cost=0.10, tokens_in=1000, tokens_out=500
         let exec1 = store.insert_execution("t-cs-1", "focused").await.unwrap();
@@ -3347,8 +3392,14 @@ mod tests {
         // Codex/Gemini executions have NULL cost_usd; SUM ignores NULL,
         // AVG also ignores NULL rows — only non-NULL costs are averaged.
         let store = test_store().await;
-        store.ensure_thread("t-cs-null-1", None).await.unwrap();
-        store.ensure_thread("t-cs-null-2", None).await.unwrap();
+        store
+            .ensure_thread("t-cs-null-1", None, None)
+            .await
+            .unwrap();
+        store
+            .ensure_thread("t-cs-null-2", None, None)
+            .await
+            .unwrap();
 
         // Execution 1: has cost
         let exec1 = store
@@ -3408,8 +3459,8 @@ mod tests {
     #[tokio::test]
     async fn test_cost_summary_agent_filter() {
         let store = test_store().await;
-        store.ensure_thread("t-cs-f-1", None).await.unwrap();
-        store.ensure_thread("t-cs-f-2", None).await.unwrap();
+        store.ensure_thread("t-cs-f-1", None, None).await.unwrap();
+        store.ensure_thread("t-cs-f-2", None, None).await.unwrap();
 
         let exec1 = store.insert_execution("t-cs-f-1", "focused").await.unwrap();
         let _ = store.claim_next_execution(10).await.unwrap();
@@ -3469,9 +3520,9 @@ mod tests {
     #[tokio::test]
     async fn test_cost_by_agent_basic() {
         let store = test_store().await;
-        store.ensure_thread("t-cba-1", None).await.unwrap();
-        store.ensure_thread("t-cba-2", None).await.unwrap();
-        store.ensure_thread("t-cba-3", None).await.unwrap();
+        store.ensure_thread("t-cba-1", None, None).await.unwrap();
+        store.ensure_thread("t-cba-2", None, None).await.unwrap();
+        store.ensure_thread("t-cba-3", None, None).await.unwrap();
 
         // focused: 2 executions
         let exec1 = store.insert_execution("t-cba-1", "focused").await.unwrap();
@@ -3548,8 +3599,8 @@ mod tests {
     #[tokio::test]
     async fn test_tool_error_rates_agent_filter() {
         let store = test_store().await;
-        store.ensure_thread("t-er-af-1", None).await.unwrap();
-        store.ensure_thread("t-er-af-2", None).await.unwrap();
+        store.ensure_thread("t-er-af-1", None, None).await.unwrap();
+        store.ensure_thread("t-er-af-2", None, None).await.unwrap();
 
         let exec_a = store
             .insert_execution("t-er-af-1", "agent_a")
@@ -3622,5 +3673,35 @@ mod tests {
         assert_eq!(stats[0].call_count, 1);
         assert_eq!(stats[0].error_count, 0);
         assert_eq!(stats[0].error_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_ensure_thread_with_summary() {
+        let store = test_store().await;
+
+        // Create with summary
+        store
+            .ensure_thread("t-sum", None, Some("Fix login bug"))
+            .await
+            .unwrap();
+        let thread = store.get_thread("t-sum").await.unwrap().unwrap();
+        assert_eq!(thread.summary.as_deref(), Some("Fix login bug"));
+
+        // Update without summary should preserve existing
+        store
+            .ensure_thread("t-sum", Some("batch-1"), None)
+            .await
+            .unwrap();
+        let thread = store.get_thread("t-sum").await.unwrap().unwrap();
+        assert_eq!(thread.summary.as_deref(), Some("Fix login bug"));
+        assert_eq!(thread.batch_id.as_deref(), Some("batch-1"));
+
+        // Update with new summary should overwrite
+        store
+            .ensure_thread("t-sum", None, Some("Fix signup bug"))
+            .await
+            .unwrap();
+        let thread = store.get_thread("t-sum").await.unwrap().unwrap();
+        assert_eq!(thread.summary.as_deref(), Some("Fix signup bug"));
     }
 }

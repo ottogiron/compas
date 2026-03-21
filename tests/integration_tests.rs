@@ -187,9 +187,18 @@ mod store_tests {
     #[tokio::test]
     async fn test_list_threads_no_filter() {
         let store = test_store().await;
-        store.ensure_thread("t-1", Some("batch-A")).await.unwrap();
-        store.ensure_thread("t-2", Some("batch-A")).await.unwrap();
-        store.ensure_thread("t-3", Some("batch-B")).await.unwrap();
+        store
+            .ensure_thread("t-1", Some("batch-A"), None)
+            .await
+            .unwrap();
+        store
+            .ensure_thread("t-2", Some("batch-A"), None)
+            .await
+            .unwrap();
+        store
+            .ensure_thread("t-3", Some("batch-B"), None)
+            .await
+            .unwrap();
 
         let all = store.list_threads(None, None, 100).await.unwrap();
         assert_eq!(all.len(), 3);
@@ -198,9 +207,18 @@ mod store_tests {
     #[tokio::test]
     async fn test_list_threads_filter_by_batch() {
         let store = test_store().await;
-        store.ensure_thread("t-1", Some("batch-A")).await.unwrap();
-        store.ensure_thread("t-2", Some("batch-A")).await.unwrap();
-        store.ensure_thread("t-3", Some("batch-B")).await.unwrap();
+        store
+            .ensure_thread("t-1", Some("batch-A"), None)
+            .await
+            .unwrap();
+        store
+            .ensure_thread("t-2", Some("batch-A"), None)
+            .await
+            .unwrap();
+        store
+            .ensure_thread("t-3", Some("batch-B"), None)
+            .await
+            .unwrap();
 
         let batch_a = store
             .list_threads(Some("batch-A"), None, 100)
@@ -215,8 +233,8 @@ mod store_tests {
     #[tokio::test]
     async fn test_list_threads_filter_by_status() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
         store
             .update_thread_status("t-2", ThreadStatus::Completed)
             .await
@@ -239,7 +257,7 @@ mod store_tests {
         let store = test_store().await;
         for i in 0..10 {
             store
-                .ensure_thread(&format!("t-{}", i), None)
+                .ensure_thread(&format!("t-{}", i), None, None)
                 .await
                 .unwrap();
         }
@@ -251,15 +269,33 @@ mod store_tests {
     async fn test_get_messages_since() {
         let store = test_store().await;
         let id1 = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "msg 1", None)
+            .insert_message(
+                "t-1", "operator", "focused", "dispatch", "msg 1", None, None,
+            )
             .await
             .unwrap();
         let id2 = store
-            .insert_message("t-1", "focused", "operator", "status-update", "msg 2", None)
+            .insert_message(
+                "t-1",
+                "focused",
+                "operator",
+                "status-update",
+                "msg 2",
+                None,
+                None,
+            )
             .await
             .unwrap();
         let _id3 = store
-            .insert_message("t-1", "focused", "operator", "status-update", "msg 3", None)
+            .insert_message(
+                "t-1",
+                "focused",
+                "operator",
+                "status-update",
+                "msg 3",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -278,7 +314,9 @@ mod store_tests {
     async fn test_get_message_by_id() {
         let store = test_store().await;
         let id = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "hello", None)
+            .insert_message(
+                "t-1", "operator", "focused", "dispatch", "hello", None, None,
+            )
             .await
             .unwrap();
 
@@ -300,11 +338,11 @@ mod store_tests {
         assert!(none.is_none());
 
         store
-            .insert_message("t-1", "op", "a", "dispatch", "m1", None)
+            .insert_message("t-1", "op", "a", "dispatch", "m1", None, None)
             .await
             .unwrap();
         let id2 = store
-            .insert_message("t-1", "a", "op", "status-update", "m2", None)
+            .insert_message("t-1", "a", "op", "status-update", "m2", None, None)
             .await
             .unwrap();
 
@@ -315,7 +353,7 @@ mod store_tests {
     #[tokio::test]
     async fn test_fail_execution() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
 
         let _ = store.claim_next_execution(2).await.unwrap();
@@ -346,7 +384,7 @@ mod store_tests {
     #[tokio::test]
     async fn test_fail_execution_with_failed_status() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
 
         let _ = store.claim_next_execution(2).await.unwrap();
@@ -374,7 +412,7 @@ mod store_tests {
     #[tokio::test]
     async fn test_cancel_thread_executions() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // Create two queued executions
         let exec1 = store.insert_execution("t-1", "focused").await.unwrap();
@@ -395,7 +433,7 @@ mod store_tests {
     #[tokio::test]
     async fn test_get_thread_executions() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-1", "spark").await.unwrap();
 
@@ -408,8 +446,8 @@ mod store_tests {
     #[tokio::test]
     async fn test_active_executions_by_agent() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
 
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "focused").await.unwrap();
@@ -427,7 +465,10 @@ mod store_tests {
     #[tokio::test]
     async fn test_status_view_basic() {
         let store = test_store().await;
-        store.ensure_thread("t-1", Some("batch-1")).await.unwrap();
+        store
+            .ensure_thread("t-1", Some("batch-1"), None)
+            .await
+            .unwrap();
         store
             .insert_message(
                 "t-1",
@@ -436,6 +477,7 @@ mod store_tests {
                 "dispatch",
                 "work",
                 Some("batch-1"),
+                None,
             )
             .await
             .unwrap();
@@ -451,8 +493,8 @@ mod store_tests {
     #[tokio::test]
     async fn test_status_view_filter_by_thread() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "spark").await.unwrap();
 
@@ -467,8 +509,8 @@ mod store_tests {
     #[tokio::test]
     async fn test_status_view_filter_by_agent() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
         store.insert_execution("t-1", "focused").await.unwrap();
         store.insert_execution("t-2", "spark").await.unwrap();
 
@@ -483,9 +525,9 @@ mod store_tests {
     #[tokio::test]
     async fn test_thread_counts() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
-        store.ensure_thread("t-3", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
+        store.ensure_thread("t-3", None, None).await.unwrap();
         store
             .update_thread_status("t-3", ThreadStatus::Completed)
             .await
@@ -513,11 +555,11 @@ mod store_tests {
         assert_eq!(store.message_count().await.unwrap(), 0);
 
         store
-            .insert_message("t-1", "op", "a", "dispatch", "m1", None)
+            .insert_message("t-1", "op", "a", "dispatch", "m1", None, None)
             .await
             .unwrap();
         store
-            .insert_message("t-1", "a", "op", "status-update", "m2", None)
+            .insert_message("t-1", "a", "op", "status-update", "m2", None, None)
             .await
             .unwrap();
 
@@ -576,8 +618,8 @@ mod store_tests {
     #[tokio::test]
     async fn test_per_agent_concurrency_multiple_agents() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
-        store.ensure_thread("t-2", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store.ensure_thread("t-2", None, None).await.unwrap();
 
         // One execution per agent
         store.insert_execution("t-1", "focused").await.unwrap();
@@ -618,7 +660,7 @@ mod store_tests {
     async fn test_find_untriggered_messages_basic() {
         let store = test_store().await;
         let msg_id = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
 
@@ -640,7 +682,7 @@ mod store_tests {
     async fn test_find_untriggered_messages_skips_already_triggered() {
         let store = test_store().await;
         let msg_id = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
 
@@ -666,7 +708,15 @@ mod store_tests {
         let store = test_store().await;
         // status-update is not a trigger intent
         store
-            .insert_message("t-1", "focused", "operator", "status-update", "done", None)
+            .insert_message(
+                "t-1",
+                "focused",
+                "operator",
+                "status-update",
+                "done",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -686,7 +736,9 @@ mod store_tests {
         let store = test_store().await;
         // Message addressed to "reviewer" who is not in worker_aliases
         store
-            .insert_message("t-1", "operator", "reviewer", "dispatch", "review", None)
+            .insert_message(
+                "t-1", "operator", "reviewer", "dispatch", "review", None, None,
+            )
             .await
             .unwrap();
 
@@ -705,7 +757,7 @@ mod store_tests {
     async fn test_find_untriggered_messages_empty_inputs() {
         let store = test_store().await;
         store
-            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
 
@@ -731,7 +783,7 @@ mod store_tests {
     async fn test_insert_execution_dedup_on_dispatch_message_id() {
         let store = test_store().await;
         let msg_id = store
-            .insert_message("t-1", "operator", "focused", "dispatch", "work", None)
+            .insert_message("t-1", "operator", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
 
@@ -757,7 +809,7 @@ mod store_tests {
     #[tokio::test]
     async fn test_insert_execution_without_dispatch_id_no_dedup() {
         let store = test_store().await;
-        store.ensure_thread("t-1", None).await.unwrap();
+        store.ensure_thread("t-1", None, None).await.unwrap();
 
         // Multiple inserts without dispatch_message_id all succeed (no dedup).
         let first = store.insert_execution("t-1", "focused").await.unwrap();
@@ -774,7 +826,9 @@ mod store_tests {
 
         // Insert dispatch messages on threads with different statuses.
         store
-            .insert_message("t-active", "operator", "focused", "dispatch", "work", None)
+            .insert_message(
+                "t-active", "operator", "focused", "dispatch", "work", None, None,
+            )
             .await
             .unwrap();
         store
@@ -785,11 +839,14 @@ mod store_tests {
                 "dispatch",
                 "work",
                 None,
+                None,
             )
             .await
             .unwrap();
         store
-            .insert_message("t-failed", "operator", "focused", "dispatch", "work", None)
+            .insert_message(
+                "t-failed", "operator", "focused", "dispatch", "work", None, None,
+            )
             .await
             .unwrap();
         store
@@ -799,6 +856,7 @@ mod store_tests {
                 "focused",
                 "dispatch",
                 "work",
+                None,
                 None,
             )
             .await
@@ -929,6 +987,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-dispatch-1".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -970,6 +1029,38 @@ mod dispatch_tests {
     }
 
     #[tokio::test]
+    async fn test_dispatch_with_summary() {
+        let server = test_server().await;
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Implement auth module".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-summary".to_string()),
+                summary: Some("Add JWT authentication".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+
+        // Verify summary round-trips through get_thread
+        let thread = server.store.get_thread("t-summary").await.unwrap().unwrap();
+        assert_eq!(thread.summary.as_deref(), Some("Add JWT authentication"));
+
+        // Verify summary appears in status_view
+        let views = server
+            .store
+            .status_view(Some("t-summary"), None, None, 10)
+            .await
+            .unwrap();
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].summary.as_deref(), Some("Add JWT authentication"));
+    }
+
+    #[tokio::test]
     async fn test_dispatch_auto_generates_thread_id() {
         let server = test_server().await;
         let result = server
@@ -980,6 +1071,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: None,
+                summary: None,
             })
             .await
             .unwrap();
@@ -1012,6 +1104,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: None,
+                summary: None,
             })
             .await
             .unwrap();
@@ -1030,6 +1123,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "status-update".to_string(), // not a trigger intent
                 thread_id: Some("t-info".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1052,6 +1146,7 @@ mod dispatch_tests {
                 batch: Some("TICKET-123".to_string()),
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-batch".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1075,6 +1170,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "handoff".to_string(),
                 thread_id: Some("t-handoff".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1098,6 +1194,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-continue".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1111,6 +1208,7 @@ mod dispatch_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-continue".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1145,6 +1243,7 @@ mod lifecycle_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some(thread_id.to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1333,6 +1432,7 @@ mod lifecycle_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-full-lifecycle".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1360,6 +1460,7 @@ mod lifecycle_tests {
                 "operator",
                 "status-update",
                 "Done",
+                None,
                 None,
             )
             .await
@@ -1409,6 +1510,7 @@ mod lifecycle_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-close-failed-cycle".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1422,6 +1524,7 @@ mod lifecycle_tests {
                 "operator",
                 "status-update",
                 "cannot finish task",
+                None,
                 None,
             )
             .await
@@ -1466,6 +1569,7 @@ mod query_tests {
                 batch: Some("BATCH-1".to_string()),
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-q-1".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1478,6 +1582,7 @@ mod query_tests {
                 batch: Some("BATCH-1".to_string()),
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-q-2".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1578,6 +1683,7 @@ mod query_tests {
                 "status-update",
                 "Done",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1608,6 +1714,7 @@ mod query_tests {
                 "dispatch",
                 "Read this",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1630,7 +1737,7 @@ mod query_tests {
         let server = test_server().await;
         let id = server
             .store
-            .insert_message("t-read2", "op", "a", "dispatch", "msg", None)
+            .insert_message("t-read2", "op", "a", "dispatch", "msg", None, None)
             .await
             .unwrap();
 
@@ -1778,6 +1885,7 @@ mod poll_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-poll-auto".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1809,6 +1917,7 @@ mod poll_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-poll-resp".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -1822,6 +1931,7 @@ mod poll_tests {
                 "operator",
                 "status-update",
                 "Done!",
+                None,
                 None,
             )
             .await
@@ -1848,17 +1958,27 @@ mod poll_tests {
 
         server
             .store
-            .insert_message("t-poll-f", "op", "focused", "dispatch", "work", None)
+            .insert_message("t-poll-f", "op", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-poll-f", "focused", "op", "progress", "progress", None)
+            .insert_message(
+                "t-poll-f", "focused", "op", "progress", "progress", None, None,
+            )
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-poll-f", "focused", "op", "status-update", "done", None)
+            .insert_message(
+                "t-poll-f",
+                "focused",
+                "op",
+                "status-update",
+                "done",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1882,12 +2002,20 @@ mod poll_tests {
 
         let id1 = server
             .store
-            .insert_message("t-poll-s", "op", "focused", "dispatch", "m1", None)
+            .insert_message("t-poll-s", "op", "focused", "dispatch", "m1", None, None)
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-poll-s", "focused", "op", "status-update", "m2", None)
+            .insert_message(
+                "t-poll-s",
+                "focused",
+                "op",
+                "status-update",
+                "m2",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -1945,6 +2073,7 @@ mod wait_tests {
                 "status-update",
                 "Done",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1977,7 +2106,15 @@ mod wait_tests {
         // Only a dispatch message — trigger intent
         server
             .store
-            .insert_message("t-wait-exc", "op", "focused", "dispatch", "work", None)
+            .insert_message(
+                "t-wait-exc",
+                "op",
+                "focused",
+                "dispatch",
+                "work",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2008,7 +2145,7 @@ mod wait_tests {
         // Insert multiple messages
         server
             .store
-            .insert_message("t-wait-i", "op", "focused", "dispatch", "work", None)
+            .insert_message("t-wait-i", "op", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
         server
@@ -2020,12 +2157,21 @@ mod wait_tests {
                 "status-update",
                 "progress",
                 None,
+                None,
             )
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-wait-i", "focused", "op", "status-update", "ready", None)
+            .insert_message(
+                "t-wait-i",
+                "focused",
+                "op",
+                "status-update",
+                "ready",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2056,7 +2202,7 @@ mod wait_tests {
         // Create thread with no messages matching
         server
             .store
-            .insert_message("t-wait-to", "op", "focused", "dispatch", "work", None)
+            .insert_message("t-wait-to", "op", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
 
@@ -2090,12 +2236,20 @@ mod wait_tests {
 
         let id1 = server
             .store
-            .insert_message("t-wait-sr", "op", "focused", "dispatch", "work", None)
+            .insert_message("t-wait-sr", "op", "focused", "dispatch", "work", None, None)
             .await
             .unwrap();
         server
             .store
-            .insert_message("t-wait-sr", "focused", "op", "status-update", "done", None)
+            .insert_message(
+                "t-wait-sr",
+                "focused",
+                "op",
+                "status-update",
+                "done",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2128,7 +2282,15 @@ mod wait_tests {
         // Create thread
         server
             .store
-            .insert_message("t-wait-conc", "op", "focused", "dispatch", "work", None)
+            .insert_message(
+                "t-wait-conc",
+                "op",
+                "focused",
+                "dispatch",
+                "work",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2142,6 +2304,7 @@ mod wait_tests {
                     "operator",
                     "status-update",
                     "Completed",
+                    None,
                     None,
                 )
                 .await
@@ -2343,6 +2506,7 @@ mod diagnose_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-diag-q".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -2391,6 +2555,7 @@ mod diagnose_tests {
                 batch: None,
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-diag-hb".to_string()),
+                summary: None,
             })
             .await
             .unwrap();
@@ -2429,7 +2594,11 @@ mod diagnose_tests {
     #[tokio::test]
     async fn test_diagnose_completed_thread() {
         let server = test_server().await;
-        server.store.ensure_thread("t-diag-c", None).await.unwrap();
+        server
+            .store
+            .ensure_thread("t-diag-c", None, None)
+            .await
+            .unwrap();
         server
             .store
             .update_thread_status("t-diag-c", ThreadStatus::Completed)
@@ -2454,7 +2623,11 @@ mod diagnose_tests {
     #[tokio::test]
     async fn test_diagnose_abandoned_thread() {
         let server = test_server().await;
-        server.store.ensure_thread("t-diag-a", None).await.unwrap();
+        server
+            .store
+            .ensure_thread("t-diag-a", None, None)
+            .await
+            .unwrap();
         server
             .store
             .update_thread_status("t-diag-a", ThreadStatus::Abandoned)
@@ -2478,7 +2651,11 @@ mod diagnose_tests {
     #[tokio::test]
     async fn test_diagnose_failed_execution() {
         let server = test_server().await;
-        server.store.ensure_thread("t-diag-f", None).await.unwrap();
+        server
+            .store
+            .ensure_thread("t-diag-f", None, None)
+            .await
+            .unwrap();
 
         let exec_id = server
             .store
@@ -2601,9 +2778,11 @@ mod worktree_tests {
         let registry = Arc::new(registry);
 
         // Create a thread and execution
-        store.ensure_thread("t-wt-1", None).await.unwrap();
+        store.ensure_thread("t-wt-1", None, None).await.unwrap();
         let msg_id = store
-            .insert_message("t-wt-1", "operator", "focused", "dispatch", "do work", None)
+            .insert_message(
+                "t-wt-1", "operator", "focused", "dispatch", "do work", None, None,
+            )
             .await
             .unwrap();
         let exec_id = store
@@ -2687,7 +2866,7 @@ mod worktree_tests {
         let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
 
         // Create a thread and execution
-        store.ensure_thread("t-shared-1", None).await.unwrap();
+        store.ensure_thread("t-shared-1", None, None).await.unwrap();
         let msg_id = store
             .insert_message(
                 "t-shared-1",
@@ -2695,6 +2874,7 @@ mod worktree_tests {
                 "focused",
                 "dispatch",
                 "do work",
+                None,
                 None,
             )
             .await
@@ -2781,6 +2961,7 @@ mod evo2_event_bus_tests {
                 &agent_alias,
                 "dispatch",
                 "do something",
+                None,
                 None,
             )
             .await
@@ -2894,7 +3075,7 @@ mod prompt_hash_tests {
         // Insert a trigger message addressed to the "focused" agent (which has
         // prompt = "You are a test agent." in test_config()).
         let thread_id = "t-hash-rt";
-        store.ensure_thread(thread_id, None).await.unwrap();
+        store.ensure_thread(thread_id, None, None).await.unwrap();
         store
             .insert_message(
                 thread_id,
@@ -2902,6 +3083,7 @@ mod prompt_hash_tests {
                 "focused",
                 "dispatch",
                 "do something",
+                None,
                 None,
             )
             .await
@@ -2996,7 +3178,7 @@ mod prompt_hash_tests {
         );
 
         let thread_id = "t-hash-null";
-        store.ensure_thread(thread_id, None).await.unwrap();
+        store.ensure_thread(thread_id, None, None).await.unwrap();
         store
             .insert_message(
                 thread_id,
@@ -3004,6 +3186,7 @@ mod prompt_hash_tests {
                 "spark", // prompt: None in test_config
                 "dispatch",
                 "do something",
+                None,
                 None,
             )
             .await
@@ -3126,6 +3309,7 @@ mod handoff_chain_tests {
                 "dispatch",
                 "implement feature X",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -3216,6 +3400,7 @@ mod handoff_chain_tests {
                 "dispatch",
                 "original task",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -3226,6 +3411,7 @@ mod handoff_chain_tests {
                 "agent-a",
                 "handoff",
                 "previous handoff",
+                None,
                 None,
             )
             .await
@@ -3239,6 +3425,7 @@ mod handoff_chain_tests {
                 "agent-a",
                 "dispatch",
                 "follow-up work",
+                None,
                 None,
             )
             .await
@@ -3322,7 +3509,7 @@ mod handoff_chain_tests {
         let thread_id = "no-handoff-test";
         let msg_id = store
             .insert_message(
-                thread_id, "operator", "focused", "dispatch", "do work", None,
+                thread_id, "operator", "focused", "dispatch", "do work", None, None,
             )
             .await
             .unwrap();
@@ -3361,7 +3548,7 @@ mod handoff_chain_tests {
         let store = test_store().await;
         let thread_id = "count-handoff-test";
 
-        store.ensure_thread(thread_id, None).await.unwrap();
+        store.ensure_thread(thread_id, None, None).await.unwrap();
 
         // Initially zero.
         let count = store.count_handoff_messages(thread_id).await.unwrap();
@@ -3369,7 +3556,9 @@ mod handoff_chain_tests {
 
         // Insert a non-handoff message.
         store
-            .insert_message(thread_id, "operator", "agent-a", "dispatch", "task", None)
+            .insert_message(
+                thread_id, "operator", "agent-a", "dispatch", "task", None, None,
+            )
             .await
             .unwrap();
         let count = store.count_handoff_messages(thread_id).await.unwrap();
@@ -3384,6 +3573,7 @@ mod handoff_chain_tests {
                 "handoff",
                 "pass along",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -3397,6 +3587,7 @@ mod handoff_chain_tests {
                 "agent-a",
                 "handoff",
                 "back to you",
+                None,
                 None,
             )
             .await
@@ -3472,6 +3663,7 @@ agents:
                 "agent-a",
                 "dispatch",
                 "implement feature Y",
+                None,
                 None,
             )
             .await
@@ -3554,6 +3746,7 @@ agents:
                 "agent-a",
                 "dispatch",
                 "implement feature Z",
+                None,
                 None,
             )
             .await
@@ -3639,7 +3832,7 @@ mod pending_chain_work_tests {
     #[tokio::test]
     async fn test_count_pending_chain_work_no_work() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         let count = store.count_pending_chain_work("t-chain").await.unwrap();
         assert_eq!(count, 0);
@@ -3648,7 +3841,7 @@ mod pending_chain_work_tests {
     #[tokio::test]
     async fn test_count_pending_chain_work_active_execution() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert a queued execution — counts as pending
         store.insert_execution("t-chain", "focused").await.unwrap();
@@ -3660,7 +3853,7 @@ mod pending_chain_work_tests {
     #[tokio::test]
     async fn test_count_pending_chain_work_untriggered_handoff() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert a handoff message with no linked execution — counts as pending
         store
@@ -3670,6 +3863,7 @@ mod pending_chain_work_tests {
                 "agent-b",
                 "handoff",
                 "take over",
+                None,
                 None,
             )
             .await
@@ -3682,7 +3876,7 @@ mod pending_chain_work_tests {
     #[tokio::test]
     async fn test_count_pending_chain_work_triggered_handoff() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert a handoff message
         let msg_id = store
@@ -3692,6 +3886,7 @@ mod pending_chain_work_tests {
                 "agent-b",
                 "handoff",
                 "take over",
+                None,
                 None,
             )
             .await
@@ -3712,7 +3907,7 @@ mod pending_chain_work_tests {
     #[tokio::test]
     async fn test_count_pending_chain_work_completed_execution_not_counted() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert and complete an execution
         let exec_id = store.insert_execution("t-chain", "focused").await.unwrap();
@@ -3748,7 +3943,7 @@ mod await_chain_wait_tests {
     #[tokio::test]
     async fn test_await_chain_returns_immediately_when_no_pending_work() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert a response message — no pending chain work
         store
@@ -3758,6 +3953,7 @@ mod await_chain_wait_tests {
                 "operator",
                 "response",
                 "review done",
+                None,
                 None,
             )
             .await
@@ -3786,7 +3982,7 @@ mod await_chain_wait_tests {
     #[tokio::test]
     async fn test_await_chain_waits_through_handoff() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Insert implementer's response message (found first during polling)
         store
@@ -3796,6 +3992,7 @@ mod await_chain_wait_tests {
                 "operator",
                 "response",
                 "impl done",
+                None,
                 None,
             )
             .await
@@ -3809,6 +4006,7 @@ mod await_chain_wait_tests {
                 "reviewer",
                 "handoff",
                 "handoff context",
+                None,
                 None,
             )
             .await
@@ -3838,6 +4036,7 @@ mod await_chain_wait_tests {
                     "operator",
                     "response",
                     "review done",
+                    None,
                     None,
                 )
                 .await
@@ -3872,7 +4071,7 @@ mod await_chain_wait_tests {
     #[tokio::test]
     async fn test_await_chain_returns_on_depth_limit() {
         let store = test_store().await;
-        store.ensure_thread("t-chain", None).await.unwrap();
+        store.ensure_thread("t-chain", None, None).await.unwrap();
 
         // Simulate a depth-limit escalation: an escalation message is posted
         // with no pending chain work (no active executions, no untriggered handoffs)
@@ -3883,6 +4082,7 @@ mod await_chain_wait_tests {
                 "operator",
                 "response",
                 "chain depth limit reached; escalating to operator",
+                None,
                 None,
             )
             .await
@@ -3929,7 +4129,10 @@ mod await_chain_wait_tests {
     async fn test_await_chain_waits_for_fanout_threads() {
         let store = test_store().await;
         let source_thread = "t-fanout-source";
-        store.ensure_thread(source_thread, None).await.unwrap();
+        store
+            .ensure_thread(source_thread, None, None)
+            .await
+            .unwrap();
 
         // Insert the implementer's response on the source thread
         store
@@ -3939,6 +4142,7 @@ mod await_chain_wait_tests {
                 "operator",
                 "response",
                 "impl done",
+                None,
                 None,
             )
             .await
@@ -3982,7 +4186,15 @@ mod await_chain_wait_tests {
             store2.claim_next_execution(10).await.unwrap();
             store2.mark_execution_executing(&exec_1).await.unwrap();
             store2
-                .insert_message(&child_1, "reviewer-1", "operator", "response", "lgtm", None)
+                .insert_message(
+                    &child_1,
+                    "reviewer-1",
+                    "operator",
+                    "response",
+                    "lgtm",
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             store2
@@ -3993,7 +4205,15 @@ mod await_chain_wait_tests {
             store2.claim_next_execution(10).await.unwrap();
             store2.mark_execution_executing(&exec_2).await.unwrap();
             store2
-                .insert_message(&child_2, "reviewer-2", "operator", "response", "lgtm", None)
+                .insert_message(
+                    &child_2,
+                    "reviewer-2",
+                    "operator",
+                    "response",
+                    "lgtm",
+                    None,
+                    None,
+                )
                 .await
                 .unwrap();
             store2
@@ -4032,7 +4252,10 @@ mod await_chain_wait_tests {
     #[tokio::test]
     async fn test_count_pending_chain_and_fanout_work_zero_when_no_fanout() {
         let store = test_store().await;
-        store.ensure_thread("t-no-fanout", None).await.unwrap();
+        store
+            .ensure_thread("t-no-fanout", None, None)
+            .await
+            .unwrap();
 
         // No children, no pending work
         let count = store
@@ -4046,7 +4269,7 @@ mod await_chain_wait_tests {
     async fn test_count_pending_chain_and_fanout_work_counts_fanout_executions() {
         let store = test_store().await;
         let source = "t-count-source";
-        store.ensure_thread(source, None).await.unwrap();
+        store.ensure_thread(source, None, None).await.unwrap();
 
         // Create fan-out child with queued execution
         let results = store
@@ -4095,14 +4318,14 @@ mod await_chain_wait_tests {
         // Thread A: source, part of batch "shared-batch"
         let source_a = "t-sibling-a";
         store
-            .ensure_thread(source_a, Some("shared-batch"))
+            .ensure_thread(source_a, Some("shared-batch"), None)
             .await
             .unwrap();
 
         // Thread B: sibling in same batch but different source
         let source_b = "t-sibling-b";
         store
-            .ensure_thread(source_b, Some("shared-batch"))
+            .ensure_thread(source_b, Some("shared-batch"), None)
             .await
             .unwrap();
 
@@ -4155,7 +4378,7 @@ mod await_chain_wait_tests {
     async fn test_fanout_with_chain_on_child() {
         let store = test_store().await;
         let source = "t-child-chain";
-        store.ensure_thread(source, None).await.unwrap();
+        store.ensure_thread(source, None, None).await.unwrap();
 
         // Create fan-out child
         let results = store
@@ -4184,6 +4407,7 @@ mod await_chain_wait_tests {
                 "sub-reviewer",
                 "handoff",
                 "sub-review needed",
+                None,
                 None,
             )
             .await
@@ -4316,6 +4540,7 @@ mod fanout_tests {
                 "dispatch",
                 "implement feature X",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -4404,6 +4629,7 @@ mod fanout_tests {
                 "dispatch",
                 "implement feature",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -4450,7 +4676,7 @@ mod fanout_tests {
 
         // Create thread with existing batch_id
         store
-            .ensure_thread(source_thread, Some(batch_id))
+            .ensure_thread(source_thread, Some(batch_id), None)
             .await
             .unwrap();
 
@@ -4503,7 +4729,7 @@ mod fanout_tests {
         let thread_id = "fanout-gen-batch-test";
         let msg_id = store
             .insert_message(
-                thread_id, "operator", "agent-a", "dispatch", "do work", None,
+                thread_id, "operator", "agent-a", "dispatch", "do work", None, None,
             )
             .await
             .unwrap();
@@ -4574,6 +4800,7 @@ mod fanout_tests {
                 "dispatch",
                 "implement feature",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -4622,7 +4849,7 @@ mod orphan_pid_tests {
     #[tokio::test]
     async fn test_set_execution_pid() {
         let store = test_store().await;
-        store.ensure_thread("t-pid-1", None).await.unwrap();
+        store.ensure_thread("t-pid-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-pid-1", "focused").await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
 
@@ -4635,7 +4862,7 @@ mod orphan_pid_tests {
     #[tokio::test]
     async fn test_get_orphaned_executions_with_pid() {
         let store = test_store().await;
-        store.ensure_thread("t-pid-2", None).await.unwrap();
+        store.ensure_thread("t-pid-2", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-pid-2", "focused").await.unwrap();
         let _ = store.claim_next_execution(10).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -4650,7 +4877,7 @@ mod orphan_pid_tests {
     #[tokio::test]
     async fn test_orphaned_without_pid_excluded() {
         let store = test_store().await;
-        store.ensure_thread("t-pid-3", None).await.unwrap();
+        store.ensure_thread("t-pid-3", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-pid-3", "focused").await.unwrap();
         let _ = store.claim_next_execution(10).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -4666,7 +4893,7 @@ mod orphan_pid_tests {
     #[tokio::test]
     async fn test_completed_execution_not_orphaned() {
         let store = test_store().await;
-        store.ensure_thread("t-pid-4", None).await.unwrap();
+        store.ensure_thread("t-pid-4", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-pid-4", "focused").await.unwrap();
         let _ = store.claim_next_execution(10).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
@@ -4754,7 +4981,7 @@ mod read_log_tests {
         let tmp = tempfile::tempdir().unwrap();
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-1", None).await.unwrap();
+        store.ensure_thread("t-log-1", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-log-1", "focused").await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
         store
@@ -4797,7 +5024,7 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-2", None).await.unwrap();
+        store.ensure_thread("t-log-2", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-log-2", "focused").await.unwrap();
 
         let log_content = "hello world\nfoo bar\nbaz qux\nfinal line\n";
@@ -4831,7 +5058,7 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-3", None).await.unwrap();
+        store.ensure_thread("t-log-3", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-log-3", "focused").await.unwrap();
 
         let lines: Vec<String> = (0..10).map(|i| format!("line-{}", i)).collect();
@@ -4868,7 +5095,7 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-4", None).await.unwrap();
+        store.ensure_thread("t-log-4", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-log-4", "focused").await.unwrap();
 
         let lines: Vec<String> = (0..10).map(|i| format!("line-{}", i)).collect();
@@ -4904,7 +5131,7 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-5", None).await.unwrap();
+        store.ensure_thread("t-log-5", None, None).await.unwrap();
         let exec_id = store.insert_execution("t-log-5", "focused").await.unwrap();
 
         let lines: Vec<String> = (0..1500).map(|i| format!("line-{}", i)).collect();
@@ -4938,7 +5165,10 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-empty", None).await.unwrap();
+        store
+            .ensure_thread("t-log-empty", None, None)
+            .await
+            .unwrap();
         let exec_id = store
             .insert_execution("t-log-empty", "focused")
             .await
@@ -4971,7 +5201,7 @@ mod read_log_tests {
 
         let (server, store) = server_with_state_dir(tmp.path().to_path_buf()).await;
 
-        store.ensure_thread("t-log-eof", None).await.unwrap();
+        store.ensure_thread("t-log-eof", None, None).await.unwrap();
         let exec_id = store
             .insert_execution("t-log-eof", "focused")
             .await
@@ -5165,7 +5395,9 @@ mod session_resume_tests {
         // Seed: dispatch message + queued execution
         let thread_id = "t-mid-stream-sid";
         let msg_id = store
-            .insert_message(thread_id, "operator", "focused", "dispatch", "work", None)
+            .insert_message(
+                thread_id, "operator", "focused", "dispatch", "work", None, None,
+            )
             .await
             .unwrap();
         store
@@ -5238,7 +5470,7 @@ mod session_resume_tests {
         let thread_id = "t-crash-resume-e2e";
 
         // -- First execution: runs successfully, persists session ID --
-        store.ensure_thread(thread_id, None).await.unwrap();
+        store.ensure_thread(thread_id, None, None).await.unwrap();
         let msg_id = store
             .insert_message(
                 thread_id,
@@ -5246,6 +5478,7 @@ mod session_resume_tests {
                 "focused",
                 "dispatch",
                 "first run",
+                None,
                 None,
             )
             .await
@@ -5308,6 +5541,7 @@ mod session_resume_tests {
                 "dispatch",
                 "crash run",
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -5349,6 +5583,7 @@ mod session_resume_tests {
                 "focused",
                 "dispatch",
                 "resume run",
+                None,
                 None,
             )
             .await

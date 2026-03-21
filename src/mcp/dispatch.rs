@@ -56,6 +56,7 @@ impl OrchestratorMcpServer {
                 &params.intent,
                 &params.body,
                 params.batch.as_deref(),
+                params.summary.as_deref(),
             )
             .await
         {

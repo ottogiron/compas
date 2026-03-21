@@ -268,7 +268,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 
 | Tool | What it does |
 | --- | --- |
-| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution) |
+| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` (~80 chars) to label the thread |
 | `orch_close` | Close a thread as `completed` or `failed` |
 | `orch_abandon` | Cancel a thread and its active executions |
 | `orch_reopen` | Reopen a closed/failed/abandoned thread |
