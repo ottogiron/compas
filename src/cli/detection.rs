@@ -83,13 +83,20 @@ fn is_registered_claude() -> bool {
     }
 }
 
-/// Codex: run `codex mcp list` and look for "compas:" in the output.
+/// Codex: run `codex mcp list` and look for "compas" as a standalone name in the output.
+/// The output format is a table with columns: Name, Command, Args, ...
+/// Each row starts with the name followed by whitespace.
 fn is_registered_codex() -> bool {
     let output = Command::new("codex").args(["mcp", "list"]).output().ok();
     match output {
         Some(o) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
-            stdout.contains("compas:")
+            // Match "compas" at line start or preceded by whitespace, followed by whitespace
+            stdout.lines().any(|line| {
+                let trimmed = line.trim();
+                trimmed.starts_with("compas")
+                    && trimmed[6..].starts_with(|c: char| c.is_whitespace())
+            })
         }
         _ => false,
     }
