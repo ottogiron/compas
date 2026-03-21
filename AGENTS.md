@@ -91,6 +91,10 @@ The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only
 3. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test` + `lint-md`). **Do not push if this fails.**
 4. Push to remote after verification passes
 
+### Code Review Policy
+
+Operator-authored changes (not just dispatched work) must be sent to `compas-reviewer` for approval before committing. Use Mode B from the `orch-dispatch` skill: gather the diff, dispatch to the reviewer, act on findings.
+
 ## Release Checklist
 
 When tagging a new release:
