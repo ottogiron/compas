@@ -138,13 +138,40 @@ Captured raw stream-json from all four backends. Key findings:
   - Call `orch_tool_stats` after executions across multiple backends and verify tool counts
   - Call `orch_metrics` and verify cost section present
   - Test with no execution data — returns zeros, not errors
-- Status: Todo
+- Status: Done
+
+## Ticket OBS-04 — Dashboard cost and token visibility
+
+- Goal: Surface cost/token data in the TUI dashboard — per-agent in Agents tab, global summary in Ops footer
+- In scope:
+  - Add `format_tokens()` and `format_cost_usd()` helpers to `views/mod.rs` with unit tests
+  - Extend `ActivityData` with `cost_summary: Option<CostSummary>`, fetch via `store.cost_summary(None)` in `refresh_activity()`
+  - Extend `AgentsData` with `cost_by_agent: Vec<AgentCostSummary>`, fetch via `store.cost_by_agent()` in `refresh_agents()`
+  - Extend Ops footer in `views/activity.rs`: append `│  Cost: $1.23  Tok: 45.2K/12.1K` when cost/token data exists
+  - Extend agent cards in `views/agents.rs`: add cost/token line between Active count and recent executions
+  - Omit cost/token lines when no data exists (no empty noise)
+- Out of scope:
+  - New dashboard tab
+  - Tool stats table in dashboard (use orch_tool_stats MCP tool)
+  - New keybindings or interactive elements
+  - Store changes (all queries exist from OBS-01/02)
+- Dependencies: OBS-03.
+- Acceptance criteria:
+  - Ops footer shows cost and token totals when data exists
+  - Agent cards show per-agent cost/tokens when data exists
+  - No visual change when no cost/token data exists
+  - `make verify` passes
+- Verification:
+  - `make verify`
+  - `make dashboard-dev` — visually confirm Ops footer and Agents tab
+- Status: In Progress
 
 ## Execution Order
 
 1. OBS-01
 2. OBS-02
 3. OBS-03
+4. OBS-04
 
 ## Tracking Notes
 
@@ -182,9 +209,18 @@ Captured raw stream-json from all four backends. Key findings:
 - Complexity: S
 - Risk: Low
 - Start: TBD
+- End: 2026-03-21 16:09 UTC
+- Duration: 00:45:17
+- Notes: New orch_tool_stats tool + cost section in orch_metrics
+
+- Ticket: OBS-04
+- Owner: TBD
+- Complexity: S
+- Risk: Low
+- Start: 2026-03-21 16:25 UTC
 - End: TBD
 - Duration: TBD
-- Notes: New orch_tool_stats tool + cost section in orch_metrics
+- Notes: Dashboard-only changes, no store/MCP modifications. 4 files.
 
 ## Closure Evidence
 
