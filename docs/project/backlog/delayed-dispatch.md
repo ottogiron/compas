@@ -33,7 +33,7 @@ Created: 2026-03-21
 - Verification:
   - Retry integration tests pass with new column name
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket SCHED-2 — Delayed dispatch via orch_dispatch
 
@@ -100,3 +100,15 @@ Created: 2026-03-21
 - Key design decision: unify `retry_after` + `scheduled_for` into `eligible_at` (one column, one concept).
 - SCHED batch is independent of CRON batch — CRON depends on SCHED-2 but not vice versa.
 - Phase 3 (agent-initiated scheduling) explicitly deferred per architect recommendation.
+
+## Execution Metrics
+- Ticket: SCHED-1
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 19:32 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
+
+

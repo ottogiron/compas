@@ -32,7 +32,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for deserialization and validation
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket CRON-2 — Worker schedule evaluation loop
 
@@ -97,3 +97,15 @@ Created: 2026-03-21
 - CRON-2 depends on SCHED-2 (eligible_at infrastructure) — CRON batch can start with CRON-1 in parallel with SCHED batch, but CRON-2 must wait for SCHED-2.
 - Prior art: GitHub Actions cron schedules, Buildkite scheduled builds, Airflow DAG schedules.
 - Not in scope: agent-initiated recurring tasks (agents don't manage scheduling — ADR-015).
+
+## Execution Metrics
+- Ticket: CRON-1
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 19:32 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
+
+
