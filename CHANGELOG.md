@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `compas doctor` command: pre-flight validation with ordered checklist (config, target repo, state dir, backend CLIs, backend pings, worker heartbeat, MCP registration), actionable fix suggestions, `--fix` for auto-registering MCP servers, and exit code 0/1 based on pass/fail
 - `compas setup-mcp` command: auto-register compas as an MCP server in coding tools (Claude Code, Codex, OpenCode, Gemini) with `--tool` filter, `--remove` for unregistration, `--dry-run` preview, and idempotent behavior. Includes shared `detection` module for tool discovery reusable by future CLI commands.
 - `compas init` command: interactive and non-interactive config scaffolding with backend detection, overwrite protection, and commented/minimal YAML output
 - Improved config error messages: `load_config` now reports the missing file path and suggests `compas init` instead of a bare OS error

@@ -71,6 +71,15 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Validate setup and check readiness
+    Doctor {
+        /// Config file path (default: ~/.compas/config.yaml)
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Auto-fix issues where possible (e.g., register MCP servers)
+        #[arg(long)]
+        fix: bool,
+    },
     /// Create a new compas configuration file
     Init {
         /// Overwrite existing config file
@@ -148,6 +157,14 @@ async fn main() -> ExitCode {
             if let Err(e) = run_mcp_server(config).await {
                 eprintln!("error: {}", e);
                 return ExitCode::from(2);
+            }
+        }
+        Commands::Doctor { config, fix } => {
+            let config = effective_config_path(config);
+            let report = compas::cli::doctor::run(config, fix).await;
+            print!("{}", compas::cli::doctor::format_report(&report));
+            if report.has_failures() {
+                return ExitCode::from(1);
             }
         }
         Commands::SetupMcp {
