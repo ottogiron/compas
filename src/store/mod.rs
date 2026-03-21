@@ -849,6 +849,30 @@ impl Store {
         Ok(row.and_then(|(p,)| p).map(std::path::PathBuf::from))
     }
 
+    /// Get both the worktree path and its originating repo root for a thread.
+    ///
+    /// Used by the executor to decide whether a non-worktree agent should
+    /// inherit the thread's worktree (same-repo check).
+    pub async fn get_thread_worktree_info(
+        &self,
+        thread_id: &str,
+    ) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>, String> {
+        let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+            "SELECT worktree_path, worktree_repo_root FROM threads WHERE thread_id = ?",
+        )
+        .bind(thread_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("get_thread_worktree_info failed: {}", e))?;
+        Ok(row.and_then(|(p, r)| match (p, r) {
+            (Some(path), Some(root)) => Some((
+                std::path::PathBuf::from(path),
+                std::path::PathBuf::from(root),
+            )),
+            _ => None,
+        }))
+    }
+
     /// Return all threads with a worktree path set (may include threads pending cleanup).
     pub async fn threads_with_worktree_paths(&self) -> Result<Vec<ThreadWorktreeEntry>, String> {
         let rows: Vec<(String, String)> = sqlx::query_as(

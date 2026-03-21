@@ -2908,6 +2908,518 @@ mod worktree_tests {
             "no worktree path should be stored for shared mode"
         );
     }
+
+    /// When a worktree agent runs first and a non-worktree agent (same repo)
+    /// runs second on the same thread, the second agent should inherit the
+    /// worktree path.
+    #[tokio::test]
+    async fn test_worktree_inheritance_same_repo() {
+        let store = test_store().await;
+
+        // Create a real git repo for the worktree source
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo_path = repo_dir.path();
+        let init = Command::new("git")
+            .args(["init", &repo_path.to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &repo_path.to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed");
+
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
+
+        // Agent A: worktree mode
+        let dev_config = AgentConfig {
+            alias: "dev".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Dev agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: Some("worktree".to_string()),
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        // Agent B: no workspace (should inherit worktree)
+        let reviewer_config = AgentConfig {
+            alias: "reviewer".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Reviewer agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        let agent_configs = vec![dev_config, reviewer_config];
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let registry = Arc::new(registry);
+
+        // Create thread and run agent A (worktree)
+        store
+            .ensure_thread("t-inherit-1", None, None)
+            .await
+            .unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-inherit-1",
+                "operator",
+                "dev",
+                "dispatch",
+                "do work",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-inherit-1", "dev", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution.id, exec_id);
+
+        let output_a = compas::worker::execute_trigger(
+            &execution,
+            &store,
+            &registry,
+            &agent_configs,
+            "do work",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+            None,
+        )
+        .await;
+        assert!(output_a.success, "agent A execution should succeed");
+
+        // Verify worktree was created and stored
+        let wt_path = repo_path.join(".compas-worktrees").join("t-inherit-1");
+        assert!(wt_path.exists(), "worktree should exist");
+        let wt_info = store.get_thread_worktree_info("t-inherit-1").await.unwrap();
+        assert!(wt_info.is_some(), "worktree info should be stored");
+        let (stored_path, stored_root) = wt_info.unwrap();
+        assert_eq!(stored_path, wt_path);
+        assert_eq!(stored_root, repo_path.to_path_buf());
+
+        // Now run agent B (no workspace, same default_workdir = repo_path)
+        let msg_id_b = store
+            .insert_message(
+                "t-inherit-1",
+                "dev",
+                "reviewer",
+                "handoff",
+                "review this",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id_b = store
+            .insert_execution_with_dispatch("t-inherit-1", "reviewer", Some(msg_id_b), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution_b = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution_b.id, exec_id_b);
+
+        let output_b = compas::worker::execute_trigger(
+            &execution_b,
+            &store,
+            &registry,
+            &agent_configs,
+            "review this",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path, // same default_workdir as agent A
+            None,
+        )
+        .await;
+        assert!(output_b.success, "agent B execution should succeed");
+
+        // Cleanup
+        worktree_manager
+            .remove_worktree(repo_path, "t-inherit-1", None)
+            .unwrap();
+        let wt_root = repo_path.join(".compas-worktrees");
+        let _ = std::fs::remove_dir_all(&wt_root);
+    }
+
+    /// When a worktree agent and a non-worktree agent target different repos,
+    /// the non-worktree agent should NOT inherit the worktree.
+    #[tokio::test]
+    async fn test_worktree_inheritance_cross_repo_rejected() {
+        let store = test_store().await;
+
+        // Create a real git repo for the worktree source
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo_path = repo_dir.path();
+        let init = Command::new("git")
+            .args(["init", &repo_path.to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &repo_path.to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed");
+
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
+
+        // A second directory representing a different project
+        let other_repo_dir = tempfile::tempdir().unwrap();
+        let other_repo_path = other_repo_dir.path();
+
+        let dev_config = AgentConfig {
+            alias: "dev".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Dev agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: Some("worktree".to_string()),
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        // Reviewer targets a different repo
+        let reviewer_config = AgentConfig {
+            alias: "reviewer".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Reviewer agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: Some(other_repo_path.to_path_buf()),
+            workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        let agent_configs = vec![dev_config, reviewer_config];
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let registry = Arc::new(registry);
+
+        // Run agent A (worktree) on repo_path
+        store
+            .ensure_thread("t-crossrepo-1", None, None)
+            .await
+            .unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-crossrepo-1",
+                "operator",
+                "dev",
+                "dispatch",
+                "do work",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-crossrepo-1", "dev", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution.id, exec_id);
+
+        let output_a = compas::worker::execute_trigger(
+            &execution,
+            &store,
+            &registry,
+            &agent_configs,
+            "do work",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+            None,
+        )
+        .await;
+        assert!(output_a.success, "agent A should succeed");
+
+        // Verify worktree stored with repo_path as root
+        let wt_info = store
+            .get_thread_worktree_info("t-crossrepo-1")
+            .await
+            .unwrap();
+        assert!(wt_info.is_some());
+        let (_, stored_root) = wt_info.unwrap();
+        assert_eq!(stored_root, repo_path.to_path_buf());
+
+        // Run agent B (different workdir) — should NOT inherit
+        let msg_id_b = store
+            .insert_message(
+                "t-crossrepo-1",
+                "dev",
+                "reviewer",
+                "handoff",
+                "review this",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id_b = store
+            .insert_execution_with_dispatch("t-crossrepo-1", "reviewer", Some(msg_id_b), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution_b = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution_b.id, exec_id_b);
+
+        // default_workdir is repo_path, but reviewer has explicit workdir = other_repo_path
+        // The reviewer's agent_workdir resolves to other_repo_path (from agent config),
+        // which differs from the thread's worktree_repo_root (repo_path).
+        // Therefore, inheritance should NOT happen.
+        let output_b = compas::worker::execute_trigger(
+            &execution_b,
+            &store,
+            &registry,
+            &agent_configs,
+            "review this",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+            None,
+        )
+        .await;
+        assert!(
+            output_b.success,
+            "agent B should succeed using its own workdir"
+        );
+
+        // Cleanup
+        worktree_manager
+            .remove_worktree(repo_path, "t-crossrepo-1", None)
+            .unwrap();
+        let wt_root = repo_path.join(".compas-worktrees");
+        let _ = std::fs::remove_dir_all(&wt_root);
+    }
+
+    /// An agent with `workspace: shared` should NOT inherit the thread's
+    /// worktree even when targeting the same repo.
+    #[tokio::test]
+    async fn test_worktree_inheritance_shared_opt_out() {
+        let store = test_store().await;
+
+        // Create a real git repo
+        let repo_dir = tempfile::tempdir().unwrap();
+        let repo_path = repo_dir.path();
+        let init = Command::new("git")
+            .args(["init", &repo_path.to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &repo_path.to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "git commit failed");
+
+        let worktree_manager = std::sync::Arc::new(WorktreeManager::new());
+
+        let dev_config = AgentConfig {
+            alias: "dev".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Dev agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: Some("worktree".to_string()),
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        // Reviewer with explicit `workspace: shared` — same repo but opts out
+        let reviewer_config = AgentConfig {
+            alias: "reviewer".to_string(),
+            backend: "stub".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("Reviewer agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: Some("shared".to_string()),
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        };
+        let agent_configs = vec![dev_config, reviewer_config];
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let registry = Arc::new(registry);
+
+        // Run agent A (worktree)
+        store
+            .ensure_thread("t-shared-opt-1", None, None)
+            .await
+            .unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-shared-opt-1",
+                "operator",
+                "dev",
+                "dispatch",
+                "do work",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-shared-opt-1", "dev", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution.id, exec_id);
+
+        let output_a = compas::worker::execute_trigger(
+            &execution,
+            &store,
+            &registry,
+            &agent_configs,
+            "do work",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+            None,
+        )
+        .await;
+        assert!(output_a.success, "agent A should succeed");
+
+        // Run agent B (workspace: shared, same default_workdir)
+        let msg_id_b = store
+            .insert_message(
+                "t-shared-opt-1",
+                "dev",
+                "reviewer",
+                "handoff",
+                "review this",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id_b = store
+            .insert_execution_with_dispatch("t-shared-opt-1", "reviewer", Some(msg_id_b), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let execution_b = store.claim_next_execution(1).await.unwrap().unwrap();
+        assert_eq!(execution_b.id, exec_id_b);
+
+        // workspace: shared should prevent inheritance even though same repo
+        let output_b = compas::worker::execute_trigger(
+            &execution_b,
+            &store,
+            &registry,
+            &agent_configs,
+            "review this",
+            30,
+            None,
+            None,
+            &worktree_manager,
+            repo_path,
+            None,
+        )
+        .await;
+        assert!(
+            output_b.success,
+            "agent B should succeed using shared workdir"
+        );
+
+        // Cleanup
+        worktree_manager
+            .remove_worktree(repo_path, "t-shared-opt-1", None)
+            .unwrap();
+        let wt_root = repo_path.join(".compas-worktrees");
+        let _ = std::fs::remove_dir_all(&wt_root);
+    }
 }
 
 mod evo2_event_bus_tests {

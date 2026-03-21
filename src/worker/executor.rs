@@ -14,6 +14,14 @@ use crate::model::agent::Agent;
 use crate::store::{ExecutionRow, ExecutionStatus, Store};
 use crate::worktree::WorktreeManager;
 
+/// Compare two paths for equivalence, resolving symlinks and trailing slashes.
+fn paths_equivalent(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
+    }
+}
+
 /// Result of running a trigger execution.
 #[derive(Debug)]
 pub struct TriggerOutput {
@@ -216,8 +224,27 @@ pub async fn execute_trigger(
                 Some(agent_workdir)
             }
         }
-    } else {
+    } else if agent_config.workspace.as_deref() == Some("shared") {
+        // Explicit opt-out: agent wants the main repo state, not a worktree.
         agent_config.workdir.clone()
+    } else {
+        // workspace is None — eligible for thread worktree inheritance.
+        // Inherit if this thread has a worktree from a preceding agent AND
+        // the worktree was created from the same repo this agent targets.
+        match store.get_thread_worktree_info(&execution.thread_id).await {
+            Ok(Some((wt_path, wt_repo_root)))
+                if wt_path.exists() && paths_equivalent(&wt_repo_root, &agent_workdir) =>
+            {
+                tracing::info!(
+                    thread_id = %execution.thread_id,
+                    agent = %agent_alias,
+                    inherited_path = %wt_path.display(),
+                    "non-worktree agent inheriting thread worktree (same repo)"
+                );
+                Some(wt_path)
+            }
+            _ => agent_config.workdir.clone(),
+        }
     };
 
     let agent = Agent {

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Worktree handoff bug: non-worktree agents on the same thread now inherit the thread's worktree path when targeting the same repo, so reviewers see the dev agent's changes instead of the unchanged main repo. `workspace: shared` explicitly opts out of inheritance.
+
 ### Changed
 
 - Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored). Operators with existing worktrees at the old location should run `git worktree prune`.

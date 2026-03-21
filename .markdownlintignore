@@ -2,4 +2,5 @@
 .codex/
 .opencode/node_modules/
 .agents/node_modules/
+.compas-worktrees/
 target/
