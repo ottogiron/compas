@@ -1343,6 +1343,247 @@ mod dispatch_tests {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MCP Tool Integration Tests — Scheduled Visibility (SCHED-3)
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod scheduled_visibility_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_orch_tasks_filter_scheduled() {
+        let server = test_server().await;
+
+        // Create a scheduled execution (1 hour in the future).
+        let future_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as i64;
+        server
+            .store
+            .ensure_thread("t-sched-vis", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution_scheduled(
+                "t-sched-vis",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap();
+
+        // Also create a normal (immediate) execution.
+        server
+            .store
+            .ensure_thread("t-immediate", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution_with_dispatch("t-immediate", "focused", None, None)
+            .await
+            .unwrap();
+
+        // Without filter: should return both.
+        let result = server
+            .tasks_impl(TasksParams {
+                alias: None,
+                batch_id: None,
+                limit: None,
+                filter: None,
+            })
+            .await
+            .unwrap();
+        let json = extract_json(&result);
+        let arr = json.as_array().unwrap();
+        assert!(arr.len() >= 2, "should return at least 2 tasks");
+
+        // With filter=scheduled: should return only the scheduled one.
+        let result = server
+            .tasks_impl(TasksParams {
+                alias: None,
+                batch_id: None,
+                limit: None,
+                filter: Some("scheduled".to_string()),
+            })
+            .await
+            .unwrap();
+        let json = extract_json(&result);
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "should return exactly 1 scheduled task");
+        assert_eq!(arr[0]["thread_id"], "t-sched-vis");
+        assert!(
+            arr[0]["eligible_at"].is_string(),
+            "eligible_at should be ISO 8601 string"
+        );
+        assert_eq!(arr[0]["eligible_reason"], "scheduled");
+    }
+
+    #[tokio::test]
+    async fn test_orch_status_includes_scheduled_count() {
+        let server = test_server().await;
+
+        // Create a scheduled execution.
+        let future_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as i64;
+        server
+            .store
+            .ensure_thread("t-sched-count", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution_scheduled(
+                "t-sched-count",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap();
+
+        let result = server
+            .status_impl(StatusParams {
+                agent: None,
+                thread_id: None,
+            })
+            .await
+            .unwrap();
+        let json = extract_json(&result);
+        assert!(
+            json["scheduled_count"].as_i64().unwrap() >= 1,
+            "scheduled_count should be >= 1"
+        );
+        assert!(json["threads"].is_array(), "threads should be an array");
+    }
+
+    #[tokio::test]
+    async fn test_abandon_cancels_scheduled_execution() {
+        let server = test_server().await;
+
+        // Create a scheduled execution.
+        let future_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as i64;
+        server
+            .store
+            .ensure_thread("t-sched-abandon", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution_scheduled(
+                "t-sched-abandon",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap();
+
+        // Abandon should cancel the scheduled execution.
+        let result = server
+            .abandon_impl(AbandonParams {
+                thread_id: "t-sched-abandon".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["status"], "Abandoned");
+        assert!(json["executions_cancelled"].as_u64().unwrap() >= 1);
+
+        // Scheduled execution count should be 0 for this thread.
+        let exec = server
+            .store
+            .latest_execution("t-sched-abandon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(exec.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn test_count_scheduled_executions() {
+        let store = test_store().await;
+
+        // Initially 0.
+        let count = store.count_scheduled_executions().await.unwrap();
+        assert_eq!(count, 0);
+
+        // Add a scheduled execution (future).
+        let future_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as i64;
+        store
+            .ensure_thread("t-count-sched", None, None)
+            .await
+            .unwrap();
+        store
+            .insert_execution_scheduled(
+                "t-count-sched",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap();
+
+        let count = store.count_scheduled_executions().await.unwrap();
+        assert_eq!(count, 1);
+
+        // Add a normal (immediate) execution — should NOT increase count.
+        store
+            .ensure_thread("t-count-imm", None, None)
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch("t-count-imm", "focused", None, None)
+            .await
+            .unwrap();
+
+        let count = store.count_scheduled_executions().await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_orch_tasks_unknown_filter_rejected() {
+        let server = test_server().await;
+
+        let result = server
+            .tasks_impl(TasksParams {
+                alias: None,
+                batch_id: None,
+                limit: None,
+                filter: Some("bogus".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "unknown filter should return an error");
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MCP Tool Integration Tests — Lifecycle (close, abandon, reopen)
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1753,7 +1994,10 @@ mod query_tests {
 
         assert!(!is_error(&result));
         let json = extract_json(&result);
-        assert!(json.as_array().unwrap().len() >= 2);
+        let threads = json["threads"].as_array().unwrap();
+        assert!(threads.len() >= 2);
+        // scheduled_count is present in the response
+        assert!(json["scheduled_count"].is_number());
     }
 
     #[tokio::test]
@@ -1770,7 +2014,7 @@ mod query_tests {
             .unwrap();
 
         let json = extract_json(&result);
-        let arr = json.as_array().unwrap();
+        let arr = json["threads"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["thread_id"], "t-q-1");
     }
@@ -1789,7 +2033,7 @@ mod query_tests {
             .unwrap();
 
         let json = extract_json(&result);
-        let arr = json.as_array().unwrap();
+        let arr = json["threads"].as_array().unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["agent"], "spark");
     }
@@ -1962,6 +2206,7 @@ mod query_tests {
                 alias: None,
                 batch_id: None,
                 limit: Some(10),
+                filter: None,
             })
             .await
             .unwrap();
@@ -1981,6 +2226,7 @@ mod query_tests {
                 alias: Some("focused".to_string()),
                 batch_id: None,
                 limit: None,
+                filter: None,
             })
             .await
             .unwrap();
@@ -3756,6 +4002,7 @@ mod prompt_hash_tests {
                 alias: Some("focused".to_string()),
                 batch_id: None,
                 limit: Some(10),
+                filter: None,
             })
             .await
             .unwrap();

@@ -1751,6 +1751,55 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Count queued executions with a future `eligible_at` (scheduled but not yet eligible).
+    pub async fn count_scheduled_executions(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM executions
+             WHERE status = 'queued'
+               AND eligible_at IS NOT NULL
+               AND eligible_at > strftime('%s','now')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Get queued executions with a future `eligible_at`, ordered by soonest first.
+    /// Optional agent alias filter.
+    pub async fn get_scheduled_executions(
+        &self,
+        agent: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+        let mut sql = String::from(
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
+                    picked_up_at, started_at, finished_at, duration_ms,
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id,
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.status = 'queued'
+               AND e.eligible_at IS NOT NULL
+               AND e.eligible_at > strftime('%s','now')",
+        );
+        if agent.is_some() {
+            sql.push_str(" AND e.agent_alias = ?");
+        }
+        sql.push_str(" ORDER BY e.eligible_at ASC LIMIT ?");
+
+        let mut query = sqlx::query_as::<_, ExecutionRowDb>(&sql);
+        if let Some(a) = agent {
+            query = query.bind(a);
+        }
+        query = query.bind(limit);
+
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(row_to_execution).collect())
+    }
+
     /// Get the most recent executions for a specific agent, newest first.
     pub async fn recent_agent_executions(
         &self,
@@ -1822,7 +1871,8 @@ impl Store {
             "SELECT t.thread_id, t.batch_id, t.summary, t.status, t.created_at, t.updated_at,
                     e.id, COALESCE(e.agent_alias, m.to_alias), e.status, e.queued_at,
                     e.started_at, e.finished_at, e.duration_ms,
-                    e.error_detail, e.parsed_intent, e.prompt_hash
+                    e.error_detail, e.parsed_intent, e.prompt_hash,
+                    e.eligible_at, e.eligible_reason
              FROM threads t
              LEFT JOIN executions e ON e.thread_id = t.thread_id
                AND e.queued_at = (SELECT MAX(e2.queued_at) FROM executions e2 WHERE e2.thread_id = t.thread_id)
@@ -1841,25 +1891,7 @@ impl Store {
         }
         sql.push_str(" ORDER BY t.updated_at DESC LIMIT ?");
 
-        type Row = (
-            String,         // t.thread_id
-            Option<String>, // t.batch_id
-            Option<String>, // t.summary
-            String,         // t.status
-            i64,            // t.created_at
-            i64,            // t.updated_at
-            Option<String>, // e.id
-            Option<String>, // agent_alias
-            Option<String>, // e.status
-            Option<i64>,    // e.queued_at
-            Option<i64>,    // e.started_at
-            Option<i64>,    // e.finished_at
-            Option<i64>,    // e.duration_ms
-            Option<String>, // e.error_detail
-            Option<String>, // e.parsed_intent
-            Option<String>, // e.prompt_hash
-        );
-        let mut query = sqlx::query_as::<_, Row>(&sql);
+        let mut query = sqlx::query(&sql);
         if let Some(t) = thread_id {
             query = query.bind(t);
         }
@@ -1874,23 +1906,28 @@ impl Store {
         let rows = query.fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
-            .map(|r| ThreadStatusView {
-                thread_id: r.0,
-                batch_id: r.1,
-                summary: r.2,
-                thread_status: r.3,
-                thread_created_at: r.4,
-                thread_updated_at: r.5,
-                execution_id: r.6,
-                agent_alias: r.7,
-                execution_status: r.8,
-                queued_at: r.9,
-                started_at: r.10,
-                finished_at: r.11,
-                duration_ms: r.12,
-                error_detail: r.13,
-                parsed_intent: r.14,
-                prompt_hash: r.15,
+            .map(|r| {
+                use sqlx::Row;
+                ThreadStatusView {
+                    thread_id: r.get(0),
+                    batch_id: r.get(1),
+                    summary: r.get(2),
+                    thread_status: r.get(3),
+                    thread_created_at: r.get(4),
+                    thread_updated_at: r.get(5),
+                    execution_id: r.get(6),
+                    agent_alias: r.get(7),
+                    execution_status: r.get(8),
+                    queued_at: r.get(9),
+                    started_at: r.get(10),
+                    finished_at: r.get(11),
+                    duration_ms: r.get(12),
+                    error_detail: r.get(13),
+                    parsed_intent: r.get(14),
+                    prompt_hash: r.get(15),
+                    eligible_at: r.get(16),
+                    eligible_reason: r.get(17),
+                }
             })
             .collect())
     }
@@ -2847,6 +2884,10 @@ pub struct ThreadStatusView {
     pub error_detail: Option<String>,
     pub parsed_intent: Option<String>,
     pub prompt_hash: Option<String>,
+    /// Unix timestamp before which this execution is not eligible for pickup.
+    pub eligible_at: Option<i64>,
+    /// Reason for deferred eligibility (`scheduled`, `retry_backoff`).
+    pub eligible_reason: Option<String>,
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

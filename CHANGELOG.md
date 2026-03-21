@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Dashboard and MCP visibility for scheduled tasks (SCHED-3): `orch_tasks` supports `filter="scheduled"` to list only queued executions with a future `eligible_at` (returned as ISO 8601); `orch_status` includes `scheduled_count` in the response; Ops tab displays a "Scheduled" section between Running and Active Threads with human-readable due times (e.g. "in 8m 30s"); footer shows scheduled count when > 0; `orch_abandon` confirmed to cancel scheduled executions.
 - Config-declared recurring schedules (`schedules` section): define cron-triggered dispatches in config with agent targeting, cron expression validation (via `croner`), batch IDs, max runs safety cap, and enable/disable toggle (CRON-1)
 - Delayed dispatch via `scheduled_for` parameter on `orch_dispatch` (SCHED-2): operators can schedule executions for a future time using an ISO 8601 timestamp. The worker defers pickup until the scheduled time via the new `eligible_at` / `eligible_reason` columns on the executions table.
 - `orch_close` accepts optional `merge` field to atomically queue a merge with the close, eliminating the race between worktree cleanup and `orch_merge`

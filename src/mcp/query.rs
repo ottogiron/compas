@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use chrono::DateTime;
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
@@ -48,7 +49,7 @@ impl OrchestratorMcpServer {
         &self,
         params: StatusParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        match self
+        let rows = match self
             .store
             .status_view(
                 params.thread_id.as_deref(),
@@ -58,12 +59,24 @@ impl OrchestratorMcpServer {
             )
             .await
         {
-            Ok(rows) => {
-                let entries: Vec<StatusEntry> = rows.into_iter().map(StatusEntry::from).collect();
-                Ok(json_text(&entries))
-            }
-            Err(e) => Ok(err_text(format!("status query failed: {}", e))),
+            Ok(r) => r,
+            Err(e) => return Ok(err_text(format!("status query failed: {}", e))),
+        };
+
+        let scheduled_count = self.store.count_scheduled_executions().await.unwrap_or(0);
+
+        let entries: Vec<StatusEntry> = rows.into_iter().map(StatusEntry::from).collect();
+
+        #[derive(Serialize)]
+        struct StatusResponse {
+            threads: Vec<StatusEntry>,
+            scheduled_count: i64,
         }
+
+        Ok(json_text(&StatusResponse {
+            threads: entries,
+            scheduled_count,
+        }))
     }
 
     // ── orch_transcript ──────────────────────────────────────────────────
@@ -664,8 +677,76 @@ impl OrchestratorMcpServer {
     // ── orch_tasks ───────────────────────────────────────────────────────
 
     pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {
-        // Query executions — we use status_view as a convenient join
+        // Validate filter param.
+        if let Some(ref f) = params.filter {
+            if f != "scheduled" {
+                return Ok(err_text(format!(
+                    "unknown filter '{}'. Supported filters: 'scheduled'",
+                    f
+                )));
+            }
+        }
+
         let limit = params.limit.unwrap_or(20) as i64;
+
+        #[derive(Serialize)]
+        struct TaskEntry {
+            thread_id: String,
+            batch_id: Option<String>,
+            summary: Option<String>,
+            agent: Option<String>,
+            execution_status: Option<String>,
+            started_at: Option<i64>,
+            finished_at: Option<i64>,
+            duration_ms: Option<i64>,
+            error: Option<String>,
+            prompt_hash: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            eligible_at: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            eligible_reason: Option<String>,
+        }
+
+        if params.filter.as_deref() == Some("scheduled") {
+            // Dedicated DB query — avoids status_view limit truncation.
+            let execs = match self
+                .store
+                .get_scheduled_executions(params.alias.as_deref(), limit)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
+            };
+
+            let entries: Vec<TaskEntry> = execs
+                .into_iter()
+                .map(|e| {
+                    let eligible_at_iso = e.eligible_at.map(|ts| {
+                        DateTime::from_timestamp(ts, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| ts.to_string())
+                    });
+                    TaskEntry {
+                        thread_id: e.thread_id,
+                        batch_id: e.batch_id,
+                        summary: None,
+                        agent: Some(e.agent_alias),
+                        execution_status: Some(e.status),
+                        started_at: e.started_at,
+                        finished_at: e.finished_at,
+                        duration_ms: e.duration_ms,
+                        error: e.error_detail,
+                        prompt_hash: e.prompt_hash,
+                        eligible_at: eligible_at_iso,
+                        eligible_reason: e.eligible_reason,
+                    }
+                })
+                .collect();
+
+            return Ok(json_text(&entries));
+        }
+
+        // Default path: use status_view join.
         let views = match self
             .store
             .status_view(
@@ -680,34 +761,29 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
         };
 
-        #[derive(Serialize)]
-        struct TaskEntry {
-            thread_id: String,
-            batch_id: Option<String>,
-            summary: Option<String>,
-            agent: Option<String>,
-            execution_status: Option<String>,
-            started_at: Option<i64>,
-            finished_at: Option<i64>,
-            duration_ms: Option<i64>,
-            error: Option<String>,
-            prompt_hash: Option<String>,
-        }
-
         let entries: Vec<TaskEntry> = views
             .into_iter()
             .filter(|v| v.execution_id.is_some())
-            .map(|v| TaskEntry {
-                thread_id: v.thread_id,
-                batch_id: v.batch_id,
-                summary: v.summary,
-                agent: v.agent_alias,
-                execution_status: v.execution_status,
-                started_at: v.started_at,
-                finished_at: v.finished_at,
-                duration_ms: v.duration_ms,
-                error: v.error_detail,
-                prompt_hash: v.prompt_hash,
+            .map(|v| {
+                let eligible_at_iso = v.eligible_at.map(|ts| {
+                    DateTime::from_timestamp(ts, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(|| ts.to_string())
+                });
+                TaskEntry {
+                    thread_id: v.thread_id,
+                    batch_id: v.batch_id,
+                    summary: v.summary,
+                    agent: v.agent_alias,
+                    execution_status: v.execution_status,
+                    started_at: v.started_at,
+                    finished_at: v.finished_at,
+                    duration_ms: v.duration_ms,
+                    error: v.error_detail,
+                    prompt_hash: v.prompt_hash,
+                    eligible_at: eligible_at_iso,
+                    eligible_reason: v.eligible_reason,
+                }
             })
             .collect();
 
