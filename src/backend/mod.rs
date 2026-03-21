@@ -1,6 +1,7 @@
 pub mod claude;
 pub mod codex;
 pub mod gemini;
+pub mod generic;
 pub mod opencode;
 pub mod process;
 pub mod registry;
