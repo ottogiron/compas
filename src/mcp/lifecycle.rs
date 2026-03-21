@@ -4,7 +4,7 @@ use rmcp::model::CallToolResult;
 
 use super::params::*;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
-use crate::lifecycle::LifecycleService;
+use crate::lifecycle::{LifecycleService, MergeIntent};
 
 impl OrchestratorMcpServer {
     fn lifecycle_service(&self) -> LifecycleService {
@@ -14,10 +14,24 @@ impl OrchestratorMcpServer {
     // ── orch_close ───────────────────────────────────────────────────────
 
     pub async fn close_impl(&self, params: CloseParams) -> Result<CallToolResult, rmcp::ErrorData> {
+        let config = self.config.load();
         let status = match params.status {
             super::params::CloseStatus::Completed => crate::lifecycle::CloseStatus::Completed,
             super::params::CloseStatus::Failed => crate::lifecycle::CloseStatus::Failed,
         };
+
+        let merge_intent = params.merge.map(|m| {
+            let target_branch = m.target_branch.unwrap_or_else(|| "main".to_string());
+            let strategy = m
+                .strategy
+                .unwrap_or_else(|| config.orchestration.default_merge_strategy.clone());
+            MergeIntent {
+                target_branch,
+                strategy,
+                repo_root: config.default_workdir.clone(),
+            }
+        });
+
         match self
             .lifecycle_service()
             .close(
@@ -25,6 +39,7 @@ impl OrchestratorMcpServer {
                 &params.from,
                 status,
                 params.note.as_deref(),
+                merge_intent,
             )
             .await
         {

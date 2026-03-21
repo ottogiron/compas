@@ -50,6 +50,17 @@ pub struct CloseParams {
     pub status: CloseStatus,
     /// Optional close note
     pub note: Option<String>,
+    /// Optional: atomically queue a merge with the close.
+    /// Prevents the race where worktree cleanup runs before orch_merge is called.
+    pub merge: Option<CloseMergeParams>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
+pub struct CloseMergeParams {
+    /// Target branch (default: "main")
+    pub target_branch: Option<String>,
+    /// Merge strategy: "merge", "rebase", or "squash" (default from config)
+    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy)]

@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - Delayed dispatch via `scheduled_for` parameter on `orch_dispatch` (SCHED-2): operators can schedule executions for a future time using an ISO 8601 timestamp. The worker defers pickup until the scheduled time via the new `eligible_at` / `eligible_reason` columns on the executions table.
+- `orch_close` accepts optional `merge` field to atomically queue a merge with the close, eliminating the race between worktree cleanup and `orch_merge`
 - MCP tools: `orch_merge`, `orch_merge_status`, `orch_merge_cancel` for merge queue operations (MERGE-4). Includes `count_merge_ops_by_status` and `count_queued_merge_ops` store methods for accurate aggregate counts
 - Worker: merge queue polling, crash recovery, and stale merge detection (MERGE-3)
 - Dashboard cost/token visibility (OBS-04): Ops footer appends `│ Cost: $X.XX  Tok: NK/NK` when cost or token data exists; Agents tab cards show a per-agent cost/token row between the active count and recent executions. Format helpers `format_tokens` and `format_cost_usd` added to `dashboard::views`.

@@ -111,7 +111,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_close",
-        description = "Close a thread with a terminal status (completed or failed)."
+        description = "Close a thread with a terminal status (completed or failed). Optionally queue a merge atomically with the close by passing a `merge` object with `target_branch` and `strategy`."
     )]
     async fn orch_close(
         &self,

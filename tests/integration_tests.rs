@@ -1376,6 +1376,7 @@ mod lifecycle_tests {
                 from: "operator".to_string(),
                 status: CloseStatus::Completed,
                 note: Some("done".to_string()),
+                merge: None,
             })
             .await
             .unwrap();
@@ -1397,6 +1398,7 @@ mod lifecycle_tests {
                 from: "operator".to_string(),
                 status: CloseStatus::Failed,
                 note: Some("failed by operator".to_string()),
+                merge: None,
             })
             .await
             .unwrap();
@@ -1420,6 +1422,7 @@ mod lifecycle_tests {
                 from: "operator".to_string(),
                 status: CloseStatus::Completed,
                 note: None,
+                merge: None,
             })
             .await
             .unwrap();
@@ -1590,6 +1593,7 @@ mod lifecycle_tests {
                 from: "operator".to_string(),
                 status: CloseStatus::Completed,
                 note: Some("accepted".to_string()),
+                merge: None,
             })
             .await
             .unwrap();
@@ -1655,6 +1659,7 @@ mod lifecycle_tests {
                 from: "operator".to_string(),
                 status: CloseStatus::Failed,
                 note: Some("operator marked failed".to_string()),
+                merge: None,
             })
             .await
             .unwrap();
