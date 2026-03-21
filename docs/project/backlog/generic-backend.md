@@ -68,7 +68,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests with stub commands (`echo`, `cat`)
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket GBE-3 — Registry integration and documentation
 
@@ -111,6 +111,15 @@ Created: 2026-03-21
 - GBE and HOOKS backlogs are fully independent — can be developed in parallel.
 
 ## Execution Metrics
+
+- Ticket: GBE-2
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 15:52 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
 
 - Ticket: GBE-1
 - Owner: (pending)
