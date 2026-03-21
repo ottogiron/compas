@@ -207,6 +207,13 @@ pub struct ExecutionRow {
     pub original_dispatch_message_id: Option<i64>,
     /// OS PID of the spawned backend CLI process (for orphan detection).
     pub pid: Option<i64>,
+    /// Unix timestamp before which this execution is not eligible for pickup.
+    /// Used for scheduled dispatch (`eligible_reason = 'scheduled'`) and
+    /// will unify with `retry_after` in a future migration (SCHED-1).
+    pub eligible_at: Option<i64>,
+    /// Reason the execution has a deferred eligibility window.
+    /// Values: `'scheduled'` (operator-initiated delay), `'retry_backoff'` (future).
+    pub eligible_reason: Option<String>,
 }
 
 /// A stored execution event row (real-time telemetry).
@@ -489,6 +496,19 @@ impl Store {
         let has_num_turns = columns.iter().any(|c| c.1 == "num_turns");
         if !has_num_turns {
             sqlx::query("ALTER TABLE executions ADD COLUMN num_turns INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        // SCHED-2: delayed dispatch eligibility columns
+        let has_eligible_at = columns.iter().any(|c| c.1 == "eligible_at");
+        if !has_eligible_at {
+            sqlx::query("ALTER TABLE executions ADD COLUMN eligible_at INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_eligible_reason = columns.iter().any(|c| c.1 == "eligible_reason");
+        if !has_eligible_reason {
+            sqlx::query("ALTER TABLE executions ADD COLUMN eligible_reason TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -1321,16 +1341,43 @@ impl Store {
         dispatch_message_id: Option<i64>,
         prompt_hash: Option<&str>,
     ) -> Result<Option<String>, sqlx::Error> {
+        self.insert_execution_scheduled(
+            thread_id,
+            agent_alias,
+            dispatch_message_id,
+            prompt_hash,
+            None,
+            None,
+        )
+        .await
+    }
+
+    /// Insert a new queued execution with optional scheduling.
+    ///
+    /// When `eligible_at` is set, the execution will not be claimed by the
+    /// worker until that Unix timestamp has passed. `eligible_reason` records
+    /// why the execution is deferred (e.g. `"scheduled"`).
+    pub async fn insert_execution_scheduled(
+        &self,
+        thread_id: &str,
+        agent_alias: &str,
+        dispatch_message_id: Option<i64>,
+        prompt_hash: Option<&str>,
+        eligible_at: Option<i64>,
+        eligible_reason: Option<&str>,
+    ) -> Result<Option<String>, sqlx::Error> {
         let id = ulid::Ulid::new().to_string();
         let result = sqlx::query(
-            "INSERT OR IGNORE INTO executions (id, thread_id, agent_alias, dispatch_message_id, status, prompt_hash)
-             VALUES (?, ?, ?, ?, 'queued', ?)",
+            "INSERT OR IGNORE INTO executions (id, thread_id, agent_alias, dispatch_message_id, status, prompt_hash, eligible_at, eligible_reason)
+             VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)",
         )
         .bind(&id)
         .bind(thread_id)
         .bind(agent_alias)
         .bind(dispatch_message_id)
         .bind(prompt_hash)
+        .bind(eligible_at)
+        .bind(eligible_reason)
         .execute(&self.pool)
         .await?;
         if result.rows_affected() == 0 {
@@ -1401,6 +1448,7 @@ impl Store {
             "SELECT e.id FROM executions e
              WHERE e.status = 'queued'
              AND (e.retry_after IS NULL OR e.retry_after <= strftime('%s','now'))
+             AND (e.eligible_at IS NULL OR e.eligible_at <= strftime('%s','now'))
              AND (SELECT COUNT(*) FROM executions e2
                   WHERE e2.agent_alias = e.agent_alias
                   AND e2.status IN ('picked_up', 'executing')) < ?
@@ -1437,7 +1485,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -1657,7 +1706,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1680,7 +1730,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.thread_id = ?
@@ -1712,7 +1763,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.agent_alias = ?
@@ -1733,7 +1785,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              ORDER BY e.queued_at DESC LIMIT ?",
@@ -1892,7 +1945,8 @@ impl Store {
                     exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
-                    e.pid
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.id = ?",
@@ -2897,6 +2951,8 @@ struct ExecutionRowDb {
     error_category: Option<String>,
     original_dispatch_message_id: Option<i64>,
     pid: Option<i64>,
+    eligible_at: Option<i64>,
+    eligible_reason: Option<String>,
 }
 
 fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
@@ -2922,6 +2978,8 @@ fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
         error_category: r.error_category,
         original_dispatch_message_id: r.original_dispatch_message_id,
         pid: r.pid,
+        eligible_at: r.eligible_at,
+        eligible_reason: r.eligible_reason,
     }
 }
 
@@ -3399,6 +3457,68 @@ mod tests {
         assert!(
             claimed.is_some(),
             "retry execution should be claimed after retry_after"
+        );
+        assert_eq!(claimed.unwrap().id, exec_id);
+    }
+
+    #[tokio::test]
+    async fn test_claim_respects_eligible_at_future() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None, None).await.unwrap();
+
+        // Insert a scheduled execution with eligible_at far in the future.
+        let future_ts = chrono::Utc::now().timestamp() + 9999;
+        let exec_id = store
+            .insert_execution_scheduled(
+                "t-1",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap()
+            .expect("insert should succeed");
+
+        // Should NOT be claimable — eligible_at is in the future
+        let claimed = store.claim_next_execution(2).await.unwrap();
+        assert!(
+            claimed.is_none(),
+            "scheduled execution should not be claimed before eligible_at"
+        );
+
+        // Verify the execution was stored with eligible_at and eligible_reason.
+        let exec = store.get_execution(&exec_id).await.unwrap().unwrap();
+        assert_eq!(exec.eligible_at, Some(future_ts));
+        assert_eq!(exec.eligible_reason.as_deref(), Some("scheduled"));
+    }
+
+    #[tokio::test]
+    async fn test_claim_picks_up_eligible_at_past() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None, None).await.unwrap();
+
+        // Insert a scheduled execution with eligible_at in the past.
+        let past_ts = chrono::Utc::now().timestamp() - 10;
+        let exec_id = store
+            .insert_execution_scheduled(
+                "t-1",
+                "focused",
+                None,
+                None,
+                Some(past_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap()
+            .expect("insert should succeed");
+
+        // Should be claimable — eligible_at is in the past
+        let claimed = store.claim_next_execution(2).await.unwrap();
+        assert!(
+            claimed.is_some(),
+            "scheduled execution should be claimed after eligible_at"
         );
         assert_eq!(claimed.unwrap().id, exec_id);
     }

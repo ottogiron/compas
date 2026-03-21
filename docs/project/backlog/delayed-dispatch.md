@@ -60,7 +60,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: dispatch with `scheduled_for` 5 seconds in future, verify execution not claimed immediately, verify claimed after delay
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket SCHED-3 — Dashboard and MCP visibility
 
@@ -104,13 +104,14 @@ Created: 2026-03-21
 ## Execution Metrics
 
 - Ticket: SCHED-2
-- Owner: (pending)
-- Complexity: (pending)
-- Risk: (pending)
+- Owner: compas-dev
+- Complexity: M
+- Risk: Low
 - Start: 2026-03-21 20:02 UTC
-- End: (pending)
-- Duration: (pending)
-- Notes: (pending)
+- End: 2026-03-21 20:11 UTC
+- Duration: 00:12:01
+- Notes: Recovered from lost session. Worktree verified by reviewer, merged by operator.
+
 - Ticket: SCHED-1
 - Owner: (pending)
 - Complexity: (pending)

@@ -380,6 +380,8 @@ mod tests {
                 error_category: None,
                 original_dispatch_message_id: None,
                 pid: None,
+                eligible_at: None,
+                eligible_reason: None,
             },
             crate::store::ExecutionRow {
                 id: "2".to_string(),
@@ -403,6 +405,8 @@ mod tests {
                 error_category: None,
                 original_dispatch_message_id: None,
                 pid: None,
+                eligible_at: None,
+                eligible_reason: None,
             },
             crate::store::ExecutionRow {
                 id: "3".to_string(),
@@ -426,6 +430,8 @@ mod tests {
                 error_category: None,
                 original_dispatch_message_id: None,
                 pid: None,
+                eligible_at: None,
+                eligible_reason: None,
             },
         ];
         let groups = group_execution_indices_by_batch(&rows, None, 50);
@@ -460,6 +466,8 @@ mod tests {
                 error_category: None,
                 original_dispatch_message_id: None,
                 pid: None,
+                eligible_at: None,
+                eligible_reason: None,
             });
         }
         let groups = group_execution_indices_by_batch(&rows, Some("b1"), 50);
@@ -496,6 +504,8 @@ mod tests {
             error_category: None,
             original_dispatch_message_id: None,
             pid: None,
+            eligible_at: None,
+            eligible_reason: None,
         }];
         let targets = history_selectable_targets(&rows, None, 50);
         assert!(matches!(targets.first(), Some(HistorySelectable::Batch(_))));
@@ -525,6 +535,8 @@ mod tests {
             error_category: None,
             original_dispatch_message_id: None,
             pid: None,
+            eligible_at: None,
+            eligible_reason: None,
         }];
         let targets = history_selectable_targets(&rows, Some("b1"), 50);
         assert!(targets

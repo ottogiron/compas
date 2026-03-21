@@ -78,7 +78,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_dispatch",
-        description = "Send a message to an agent. Creates or continues a thread. After dispatch, wait for the response using CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 900` (blocking). The response includes a `next_step` command for direct responses; add `--await-chain` if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
+        description = "Send a message to an agent. Creates or continues a thread. Supports delayed execution via `scheduled_for` (ISO 8601 timestamp, e.g. '2026-03-21T20:00:00Z') — the agent won't be triggered until that time. After dispatch, wait for the response using CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 900` (blocking). The response includes a `next_step` command for direct responses; add `--await-chain` if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
     )]
     async fn orch_dispatch(
         &self,

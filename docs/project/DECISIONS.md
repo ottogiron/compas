@@ -357,3 +357,22 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 - **Built-in backends remain as-is** — Claude, Codex, Gemini, and OpenCode have nuanced JSONL streaming parsers, telemetry extraction, and session management that a generic schema cannot express cleanly. Generic backends handle the simpler case.
 - **Restart-required, no hot-reload** — consistent with `default_workdir` and other structural config. Backend registration happens at startup; changing definitions requires a worker restart.
 - **`env_remove` composes with per-agent `env`** — agent `env` adds variables, backend `env_remove` strips them. This lets a generic backend clean up keys that should not leak to the subprocess (e.g., `ANTHROPIC_API_KEY` when running a non-Anthropic tool).
+
+## ADR-023: Delayed dispatch and eligible_at unification
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** Operators need to schedule agent work for a future time (e.g., "run this at 8 PM"). The existing `retry_after` column on executions serves a similar purpose (deferring worker pickup) but is semantically tied to retry backoff.
+
+**Decision:** Introduce `eligible_at` (INTEGER, nullable) and `eligible_reason` (TEXT, nullable) columns on the `executions` table as a generalized eligibility gate. `orch_dispatch` gains a `scheduled_for` parameter (ISO 8601 timestamp) that, when set, pre-creates the execution with `eligible_at` = parsed timestamp and `eligible_reason = 'scheduled'`. The worker's `claim_next_execution()` query gates on `eligible_at IS NULL OR eligible_at <= now` in addition to the existing `retry_after` check.
+
+**Unification plan (SCHED-1, deferred):** A future migration will rename `retry_after` → `eligible_at` and set `eligible_reason = 'retry_backoff'` for retry rows, collapsing the two deferral mechanisms into one column. Until then, both columns coexist — `retry_after` for retries, `eligible_at` for scheduled dispatch.
+
+**Key choices:**
+
+- **Pre-create execution at dispatch time** rather than storing `scheduled_for` on the message. This uses the existing `INSERT OR IGNORE` + partial UNIQUE index on `dispatch_message_id` for dedup safety: the worker's trigger loop will attempt to create an execution for the same dispatch message and silently skip it. The execution is created once, at dispatch, with `eligible_at` set.
+- **ISO 8601 parsing via `chrono::DateTime::parse_from_rfc3339`** — standard, unambiguous, timezone-aware. Past timestamps are rejected at dispatch time with an actionable error message.
+- **`eligible_reason` as free-text, not enum** — extensible for future deferral reasons (e.g., `'dependency'`, `'rate_limit'`) without schema changes.
+- **No prompt_hash on pre-created execution** — the worker would normally compute prompt_hash at trigger time. For scheduled dispatches, the execution is created before the worker sees it. The prompt_hash field is left NULL; the worker does not overwrite it since the execution is already linked. This is an acceptable trade-off for v1.
+- **Response includes `scheduled_for` and `execution_id`** — the operator can verify the schedule took effect and track the execution directly.

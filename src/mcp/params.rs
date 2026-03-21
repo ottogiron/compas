@@ -21,6 +21,9 @@ pub struct DispatchParams {
     pub thread_id: Option<String>,
     /// Short one-line summary (~80 chars) describing the thread's purpose
     pub summary: Option<String>,
+    /// Optional ISO 8601 timestamp (e.g. "2026-03-21T20:00:00Z") for delayed execution.
+    /// When set, the execution will not be eligible for worker pickup until this time.
+    pub scheduled_for: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
