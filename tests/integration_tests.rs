@@ -4962,3 +4962,387 @@ mod read_log_tests {
         assert_eq!(v["lines"], serde_json::json!([]));
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Session Resume After Crash Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod session_resume_tests {
+    use super::*;
+    use compas::events::{EventBus, OrchestratorEvent};
+    use compas::worker::WorkerRunner;
+    use compas::worktree::WorktreeManager;
+    use tokio::sync::Semaphore;
+
+    /// Stub backend that emits a Claude-format init JSONL line through stdout_tx
+    /// before returning, so consume_telemetry can pick up the session ID mid-stream.
+    /// Also captures the `resume_session_id` passed on each trigger for test assertions.
+    #[derive(Debug)]
+    struct StreamingStubBackend {
+        session_id: String,
+        /// Captures the resume_session_id received on each trigger call.
+        captured_resume_ids: std::sync::Mutex<Vec<Option<String>>>,
+    }
+
+    impl StreamingStubBackend {
+        fn new(session_id: &str) -> Self {
+            Self {
+                session_id: session_id.to_string(),
+                captured_resume_ids: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Backend for StreamingStubBackend {
+        fn name(&self) -> &str {
+            "claude"
+        }
+
+        async fn start_session(&self, agent: &Agent) -> OrchResult<Session> {
+            Ok(Session {
+                id: self.session_id.clone(),
+                agent_alias: agent.alias.clone(),
+                backend: "claude".to_string(),
+                started_at: chrono::Utc::now(),
+                resume_session_id: None,
+                stdout_tx: None,
+                pid_tx: None,
+            })
+        }
+
+        async fn trigger(
+            &self,
+            _agent: &Agent,
+            session: &Session,
+            instruction: Option<&str>,
+        ) -> OrchResult<BackendOutput> {
+            // Capture the resume_session_id for test assertions.
+            self.captured_resume_ids
+                .lock()
+                .unwrap()
+                .push(session.resume_session_id.clone());
+
+            // Emit a Claude-format init line through stdout_tx so the telemetry
+            // consumer can extract the session ID mid-stream.
+            if let Some(ref tx) = session.stdout_tx {
+                let init_line = format!(
+                    r#"{{"type":"system","subtype":"init","session_id":"{}","tools":[],"model":"test"}}"#,
+                    self.session_id
+                );
+                let _ = tx.try_send(init_line);
+                // Small yield so the telemetry consumer has a chance to process.
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            let result_text = format!(
+                "streaming stub response to: {}",
+                instruction.unwrap_or("(none)")
+            );
+            Ok(BackendOutput {
+                success: true,
+                result_text: result_text.clone(),
+                parsed_intent: None,
+                session_id: Some(session.id.clone()),
+                raw_output: result_text,
+                error_category: None,
+                pid: None,
+            })
+        }
+
+        async fn session_status(&self, _agent: &Agent) -> OrchResult<Option<SessionStatus>> {
+            Ok(Some(SessionStatus::Running))
+        }
+
+        async fn kill_session(
+            &self,
+            _agent: &Agent,
+            _session: &Session,
+            _reason: &str,
+        ) -> OrchResult<()> {
+            Ok(())
+        }
+
+        async fn ping(&self, _agent: &Agent, _timeout_secs: u64) -> PingResult {
+            PingResult {
+                alive: true,
+                latency_ms: 1,
+                detail: Some("streaming stub ping".into()),
+            }
+        }
+    }
+
+    /// Test that consume_telemetry persists the session ID mid-stream when the
+    /// backend emits a Claude-format init JSONL line through the stdout channel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_mid_stream_session_id_persistence_via_telemetry() {
+        let store = test_store().await;
+
+        let session_id = "mid-stream-sid-abc123";
+        let mut registry = BackendRegistry::new();
+        registry.register("claude", Arc::new(StreamingStubBackend::new(session_id)));
+
+        // Config with backend = "claude" so consume_telemetry uses the Claude parser.
+        let config = OrchestratorConfig {
+            target_repo_root: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/compas-test-stream"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "focused".to_string(),
+                backend: "claude".to_string(),
+                role: AgentRole::Worker,
+                model: Some("test-model".to_string()),
+                prompt: Some("You are a test agent.".to_string()),
+                prompt_file: None,
+                timeout_secs: Some(30),
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+        };
+
+        let config_handle = ConfigHandle::new(config.clone());
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+        let worktree_manager = WorktreeManager::new();
+
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Seed: dispatch message + queued execution
+        let thread_id = "t-mid-stream-sid";
+        let msg_id = store
+            .insert_message(thread_id, "operator", "focused", "dispatch", "work", None)
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "focused", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        // Run poll_once to claim and spawn the execution
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for the execution to complete
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Ok(OrchestratorEvent::MessageReceived { .. })) => break,
+                Ok(Ok(_)) => continue,
+                Ok(Err(_)) | Err(_) => break,
+            }
+        }
+
+        // Allow the telemetry consumer task to finish flushing
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // Verify: session ID was persisted mid-stream by consume_telemetry
+        let sid = store
+            .get_last_backend_session_id(thread_id, "focused")
+            .await
+            .unwrap();
+        assert_eq!(
+            sid.as_deref(),
+            Some(session_id),
+            "session ID should be persisted mid-stream by consume_telemetry"
+        );
+    }
+
+    /// End-to-end test: first execute_trigger persists session ID mid-stream,
+    /// then we crash the execution, then a second execute_trigger on the same
+    /// thread verifies that the backend receives the crashed session's ID as
+    /// resume_session_id.
+    #[tokio::test]
+    async fn test_crash_resume_session_id_flows_through_execute_trigger() {
+        let store = test_store().await;
+
+        let session_id = "crash-resume-sid-42";
+        let streaming_backend = Arc::new(StreamingStubBackend::new(session_id));
+
+        let mut registry = BackendRegistry::new();
+        registry.register("claude", streaming_backend.clone());
+        let registry = Arc::new(registry);
+
+        let agent_configs = vec![AgentConfig {
+            alias: "focused".to_string(),
+            backend: "claude".to_string(),
+            role: AgentRole::Worker,
+            model: Some("test-model".to_string()),
+            prompt: Some("You are a test agent.".to_string()),
+            prompt_file: None,
+            timeout_secs: Some(30),
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        }];
+
+        let worktree_manager = Arc::new(WorktreeManager::new());
+        let thread_id = "t-crash-resume-e2e";
+
+        // -- First execution: runs successfully, persists session ID --
+        store.ensure_thread(thread_id, None).await.unwrap();
+        let msg_id = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "focused",
+                "dispatch",
+                "first run",
+                None,
+            )
+            .await
+            .unwrap();
+        let _ = store
+            .insert_execution_with_dispatch(thread_id, "focused", Some(msg_id), None)
+            .await
+            .unwrap();
+        let exec1 = store.claim_next_execution(2).await.unwrap().unwrap();
+
+        // Create a stdout channel so consume_telemetry can run inline
+        let (stdout_tx, _stdout_rx) = std::sync::mpsc::sync_channel::<String>(128);
+        let stdout_tx = Arc::new(stdout_tx);
+
+        let output1 = compas::worker::execute_trigger(
+            &exec1,
+            &store,
+            &registry,
+            &agent_configs,
+            "first run",
+            30,
+            None,
+            Some(stdout_tx),
+            &worktree_manager,
+            std::path::Path::new("/tmp"),
+            None,
+        )
+        .await;
+        assert!(output1.success, "first execution should succeed");
+
+        // First trigger should have no resume_session_id (fresh thread)
+        {
+            let captured = streaming_backend.captured_resume_ids.lock().unwrap();
+            assert_eq!(captured.len(), 1);
+            assert_eq!(
+                captured[0], None,
+                "first execution should have no resume_session_id"
+            );
+        }
+
+        // Verify session ID was persisted (either mid-stream or safety net)
+        let sid = store
+            .get_last_backend_session_id(thread_id, "focused")
+            .await
+            .unwrap();
+        assert_eq!(
+            sid.as_deref(),
+            Some(session_id),
+            "session ID should be persisted after first execution"
+        );
+
+        // -- Simulate crash: mark the execution as crashed --
+        // (The executor already completed it, so we backdate to simulate a crash scenario.
+        // Instead, we manually set the session ID on a new crashed execution.)
+        let msg_id_crash = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "focused",
+                "dispatch",
+                "crash run",
+                None,
+            )
+            .await
+            .unwrap();
+        let crash_exec_id = store
+            .insert_execution_with_dispatch(thread_id, "focused", Some(msg_id_crash), None)
+            .await
+            .unwrap()
+            .unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store
+            .mark_execution_executing(&crash_exec_id)
+            .await
+            .unwrap();
+        // Simulate mid-stream persistence before crash
+        store
+            .set_backend_session_id(&crash_exec_id, session_id)
+            .await
+            .unwrap();
+        store
+            .fail_execution(
+                &crash_exec_id,
+                "worker crashed",
+                None,
+                500,
+                ExecutionStatus::Crashed,
+            )
+            .await
+            .unwrap();
+
+        // -- Second execution after crash: should receive resume_session_id --
+        let msg_id_2 = store
+            .insert_message(
+                thread_id,
+                "operator",
+                "focused",
+                "dispatch",
+                "resume run",
+                None,
+            )
+            .await
+            .unwrap();
+        let _ = store
+            .insert_execution_with_dispatch(thread_id, "focused", Some(msg_id_2), None)
+            .await
+            .unwrap();
+        let exec2 = store.claim_next_execution(2).await.unwrap().unwrap();
+
+        let (stdout_tx2, _stdout_rx2) = std::sync::mpsc::sync_channel::<String>(128);
+        let stdout_tx2 = Arc::new(stdout_tx2);
+
+        let output2 = compas::worker::execute_trigger(
+            &exec2,
+            &store,
+            &registry,
+            &agent_configs,
+            "resume run",
+            30,
+            None,
+            Some(stdout_tx2),
+            &worktree_manager,
+            std::path::Path::new("/tmp"),
+            None,
+        )
+        .await;
+        assert!(output2.success, "second execution should succeed");
+
+        // The backend should have received the crashed session's ID as resume_session_id.
+        // Two trigger calls total: first execute_trigger + second execute_trigger.
+        // The crash was simulated manually (no trigger call).
+        let captured = streaming_backend.captured_resume_ids.lock().unwrap();
+        assert_eq!(captured.len(), 2, "should have 2 trigger calls total");
+        assert_eq!(
+            captured[1].as_deref(),
+            Some(session_id),
+            "second execution after crash should receive resume_session_id from crashed execution"
+        );
+    }
+}

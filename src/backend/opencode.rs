@@ -311,6 +311,24 @@ impl Backend for OpenCodeBackend {
     }
 }
 
+/// Extract the OpenCode session ID from a single JSONL line.
+///
+/// Every event line from `opencode run --format json` contains a top-level
+/// `"sessionID"` field. Returns `Some(session_id)` if the line contains a
+/// non-empty `sessionID`.
+pub fn extract_session_id_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let sid = val.get("sessionID").and_then(|v| v.as_str())?;
+    if sid.is_empty() {
+        return None;
+    }
+    Some(sid.to_string())
+}
+
 /// Maximum length for the `detail` field (raw JSON) stored per event.
 const MAX_DETAIL_LEN: usize = 2048;
 
@@ -674,5 +692,48 @@ mod tests {
         assert!(parse_opencode_stream_line("").is_none());
         assert!(parse_opencode_stream_line("not json").is_none());
         assert!(parse_opencode_stream_line(r#"{"no_type":true}"#).is_none());
+    }
+
+    // -- extract_session_id_from_line tests --
+
+    #[test]
+    fn test_extract_session_id_from_line_step_start() {
+        let line = r#"{"type":"step_start","timestamp":123,"sessionID":"ses_abc123"}"#;
+        assert_eq!(
+            extract_session_id_from_line(line),
+            Some("ses_abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_text_event() {
+        let line =
+            r#"{"type":"text","timestamp":123,"sessionID":"ses_xyz","part":{"text":"hello"}}"#;
+        assert_eq!(
+            extract_session_id_from_line(line),
+            Some("ses_xyz".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_no_session_field() {
+        let line = r#"{"type":"step_start","timestamp":123}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty_session() {
+        let line = r#"{"type":"step_start","sessionID":""}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty() {
+        assert_eq!(extract_session_id_from_line(""), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_garbage() {
+        assert_eq!(extract_session_id_from_line("not json"), None);
     }
 }

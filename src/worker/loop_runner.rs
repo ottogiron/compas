@@ -580,6 +580,10 @@ async fn consume_telemetry(
     use crate::backend::ExecutionEvent;
     use std::time::{Duration, Instant};
 
+    use crate::backend::claude::extract_session_id_from_line as claude_extract;
+    use crate::backend::codex::extract_session_id_from_line as codex_extract;
+    use crate::backend::opencode::extract_session_id_from_line as opencode_extract;
+
     let parser: fn(&str) -> Option<ExecutionEvent> = match backend_name {
         "claude" => parse_claude_stream_line,
         "codex" => parse_codex_stream_line,
@@ -587,13 +591,43 @@ async fn consume_telemetry(
         _ => return, // No parser for this backend (e.g., gemini)
     };
 
+    let session_id_extractor: fn(&str) -> Option<String> = match backend_name {
+        "claude" => claude_extract,
+        "codex" => codex_extract,
+        "opencode" => opencode_extract,
+        _ => unreachable!("backend matched parser but not session extractor"),
+    };
+
     let mut buffer: Vec<ExecutionEvent> = Vec::new();
     let mut event_index: i32 = 0;
     let mut last_flush = Instant::now();
+    let mut session_id_persisted = false;
 
     loop {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(line) => {
+                // Mid-stream session ID persistence: extract and persist the
+                // backend session ID from the first matching stdout line. This
+                // is a one-shot operation so the session ID survives crashes.
+                if !session_id_persisted {
+                    if let Some(sid) = session_id_extractor(&line) {
+                        if let Err(e) = store.set_backend_session_id(execution_id, &sid).await {
+                            tracing::warn!(
+                                exec_id = %execution_id,
+                                error = %e,
+                                "failed to persist session ID mid-stream"
+                            );
+                        } else {
+                            tracing::debug!(
+                                exec_id = %execution_id,
+                                session_id = %sid,
+                                "persisted backend session ID mid-stream"
+                            );
+                            session_id_persisted = true;
+                        }
+                    }
+                }
+
                 if let Some(mut event) = parser(&line) {
                     event.event_index = event_index;
                     event_index += 1;

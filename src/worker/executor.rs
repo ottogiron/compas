@@ -296,6 +296,25 @@ pub async fn execute_trigger(
             let mut output_text = result.result_text.clone();
             let error_category = result.error_category.clone();
 
+            // Persist the backend session ID unconditionally (safety net).
+            // The telemetry consumer may have already persisted it mid-stream,
+            // but this ensures it's captured even if the consumer missed it.
+            // The write is idempotent.
+            if let Some(ref backend_session_id) = result.session_id {
+                if !backend_session_id.is_empty() {
+                    if let Err(e) = store
+                        .set_backend_session_id(&exec_id, backend_session_id)
+                        .await
+                    {
+                        tracing::warn!(
+                            exec_id = %exec_id,
+                            error = %e,
+                            "failed to persist backend session ID (safety net)"
+                        );
+                    }
+                }
+            }
+
             // Append worktree uncommitted change status when applicable.
             // Uses spawn_blocking because worktree_status runs git subprocesses.
             if result.success {
@@ -333,23 +352,6 @@ pub async fn execute_trigger(
                         tracing::warn!(exec_id = %exec_id, error = %e, "complete_execution failed");
                     }
                     _ => {}
-                }
-
-                // Persist the backend session ID so the next dispatch to this
-                // thread+agent can resume the same CLI session.
-                if let Some(ref backend_session_id) = result.session_id {
-                    if !backend_session_id.is_empty() {
-                        if let Err(e) = store
-                            .set_backend_session_id(&exec_id, backend_session_id)
-                            .await
-                        {
-                            tracing::warn!(
-                                exec_id = %exec_id,
-                                error = %e,
-                                "failed to persist backend session ID"
-                            );
-                        }
-                    }
                 }
             } else {
                 match store

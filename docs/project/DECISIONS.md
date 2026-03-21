@@ -237,3 +237,27 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 - **Guard in `run_worker()`**, not just `spawn_worker_process()` — covers both `compas worker` and `dashboard --with-worker` paths.
 - **`spawn_worker_process()` keeps its pre-flight check** — avoids spawning a child process that would immediately exit due to the guard.
 - **`DaemonLockHeld` error enriched** with `worker_id`, PID, and heartbeat age for actionable diagnostics.
+
+## ADR-017: Session resume after crash (early session ID persistence)
+
+**Date:** 2026-03
+**Status:** Active
+
+Backend session IDs were only persisted on successful completion (`executor.rs`, inside `if result.success`). When an execution crashed, the session ID was lost, forcing the agent to start a fresh CLI session on re-dispatch instead of resuming conversation context.
+
+**Decision:** Persist the backend session ID mid-stream, within milliseconds of the first backend output line, via the telemetry consumer. Additionally, move the executor's `set_backend_session_id` call out of the success guard as an unconditional safety net. Update `get_last_backend_session_id` to return session IDs from any execution status (not just completed).
+
+**Implementation:**
+
+- Per-backend `extract_session_id_from_line(line)` functions parse the session ID from the first JSONL stdout line (Claude `system/init`, Codex `thread.started`, OpenCode any line with `sessionID`).
+- The telemetry consumer (`consume_telemetry`) calls the appropriate extractor on each received line. On first match, it calls `store.set_backend_session_id()` and sets a `session_id_persisted` flag (one-shot per execution).
+- The executor persists the session ID unconditionally from `BackendOutput` as a fallback (idempotent write).
+- `get_last_backend_session_id` no longer filters on `status = 'completed'`; it uses `COALESCE(finished_at, started_at, queued_at) DESC` ordering and logs when the returned session comes from a non-completed execution.
+
+**Key choices:**
+
+- **Mid-stream over post-execution** because crashes lose post-execution writes. The telemetry channel already receives stdout lines in real time, making it the natural insertion point.
+- **One-shot flag** (`session_id_persisted`) avoids redundant DB writes on every stdout line.
+- **Safety net in executor** (unconditional write) ensures session ID is captured even if the telemetry consumer missed it (e.g., channel backpressure, backend emits session ID after the init line).
+- **No status filter in query** because a crashed execution's session ID is just as valid for resume as a completed one. The backend CLI maintains the same session state regardless of how the orchestrator exited.
+- **Gemini excluded** because it is stateless (no session ID concept).

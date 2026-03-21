@@ -352,6 +352,28 @@ impl Backend for CodexBackend {
     }
 }
 
+/// Extract the Codex thread ID from a single JSONL line.
+///
+/// The `thread.started` event is the first line emitted by Codex CLI:
+/// `{"type":"thread.started","thread_id":"..."}`
+///
+/// Returns `Some(thread_id)` if the line is a thread.started event with a non-empty thread_id.
+pub fn extract_session_id_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    if val.get("type").and_then(|t| t.as_str()) != Some("thread.started") {
+        return None;
+    }
+    let tid = val.get("thread_id").and_then(|v| v.as_str())?;
+    if tid.is_empty() {
+        return None;
+    }
+    Some(tid.to_string())
+}
+
 /// Maximum length for the `detail` field (raw JSON) stored per event.
 const MAX_DETAIL_LEN: usize = 2048;
 
@@ -729,5 +751,44 @@ mod tests {
         assert!(parse_codex_stream_line("").is_none());
         assert!(parse_codex_stream_line("not json").is_none());
         assert!(parse_codex_stream_line(r#"{"no_type":true}"#).is_none());
+    }
+
+    // -- extract_session_id_from_line tests --
+
+    #[test]
+    fn test_extract_session_id_from_line_thread_started() {
+        let line = r#"{"type":"thread.started","thread_id":"019c5d27-abc"}"#;
+        assert_eq!(
+            extract_session_id_from_line(line),
+            Some("019c5d27-abc".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_non_thread_started() {
+        let line = r#"{"type":"turn.started"}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty_thread_id() {
+        let line = r#"{"type":"thread.started","thread_id":""}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty() {
+        assert_eq!(extract_session_id_from_line(""), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_garbage() {
+        assert_eq!(extract_session_id_from_line("not json"), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_no_thread_id_field() {
+        let line = r#"{"type":"thread.started"}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
     }
 }

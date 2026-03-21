@@ -297,6 +297,31 @@ impl Backend for ClaudeCodeBackend {
     }
 }
 
+/// Extract the Claude session ID from a single JSONL line.
+///
+/// The `init` event is the very first line emitted by Claude CLI in stream-json mode:
+/// `{"type":"system","subtype":"init","session_id":"abc-123",...}`
+///
+/// Returns `Some(session_id)` if the line is a system/init event with a non-empty session_id.
+pub fn extract_session_id_from_line(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    if val.get("type").and_then(|t| t.as_str()) != Some("system") {
+        return None;
+    }
+    if val.get("subtype").and_then(|t| t.as_str()) != Some("init") {
+        return None;
+    }
+    let sid = val.get("session_id").and_then(|s| s.as_str())?;
+    if sid.is_empty() {
+        return None;
+    }
+    Some(sid.to_string())
+}
+
 /// Maximum length for the `detail` field (raw JSON) stored per event.
 const MAX_DETAIL_LEN: usize = 2048;
 
@@ -745,5 +770,52 @@ mod tests {
     #[test]
     fn test_parse_claude_stream_json_without_type() {
         assert!(parse_claude_stream_line(r#"{"foo":"bar"}"#).is_none());
+    }
+
+    // -- extract_session_id_from_line tests --
+
+    #[test]
+    fn test_extract_session_id_from_line_init_event() {
+        let line = r#"{"type":"system","subtype":"init","session_id":"abc-123","tools":[],"model":"claude-sonnet-4-20250514"}"#;
+        assert_eq!(
+            extract_session_id_from_line(line),
+            Some("abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_non_init_event() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_result_event() {
+        // Result events have session_id but are NOT init events
+        let line =
+            r#"{"type":"result","subtype":"success","result":"done","session_id":"abc-123"}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty_session_id() {
+        let line = r#"{"type":"system","subtype":"init","session_id":""}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_empty_line() {
+        assert_eq!(extract_session_id_from_line(""), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_garbage() {
+        assert_eq!(extract_session_id_from_line("not json"), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_line_system_non_init_subtype() {
+        let line = r#"{"type":"system","subtype":"other","session_id":"abc-123"}"#;
+        assert_eq!(extract_session_id_from_line(line), None);
     }
 }

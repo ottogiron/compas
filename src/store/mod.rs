@@ -1638,27 +1638,40 @@ impl Store {
         Ok(row.map(row_to_execution))
     }
 
-    /// Retrieve the backend-specific session ID from the most recent completed
-    /// execution for a given thread+agent pair.
+    /// Retrieve the backend-specific session ID from the most recent execution
+    /// (any status) for a given thread+agent pair.
     ///
     /// Used by the executor to resume a prior CLI session rather than starting
-    /// a fresh one on every dispatch.
+    /// a fresh one on every dispatch. Session IDs are now persisted mid-stream
+    /// (within milliseconds of backend startup), so crashed and failed
+    /// executions also have valid session IDs for resumption.
     pub async fn get_last_backend_session_id(
         &self,
         thread_id: &str,
         agent_alias: &str,
     ) -> Result<Option<String>, sqlx::Error> {
-        let row: Option<(String,)> = sqlx::query_as(
-            "SELECT backend_session_id FROM executions
+        let row: Option<(String, String)> = sqlx::query_as(
+            "SELECT backend_session_id, status FROM executions
              WHERE thread_id = ? AND agent_alias = ? AND backend_session_id IS NOT NULL
-               AND status = 'completed'
-             ORDER BY finished_at DESC, id DESC LIMIT 1",
+             ORDER BY COALESCE(finished_at, started_at, queued_at) DESC, id DESC LIMIT 1",
         )
         .bind(thread_id)
         .bind(agent_alias)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(row.map(|r| r.0))
+        if let Some((sid, status)) = row {
+            if status != "completed" {
+                tracing::debug!(
+                    thread_id = %thread_id,
+                    agent_alias = %agent_alias,
+                    status = %status,
+                    "resuming session from non-completed execution"
+                );
+            }
+            Ok(Some(sid))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Persist the backend-specific session ID for an execution so future
@@ -2350,7 +2363,7 @@ mod tests {
             .await
             .unwrap();
 
-        // get_last_backend_session_id must return the latest completed one.
+        // get_last_backend_session_id must return the most recent session ID (any status).
         let sid = store
             .get_last_backend_session_id("t-1", "focused")
             .await
@@ -2430,7 +2443,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_last_backend_session_id_ignores_failed_executions() {
+    async fn test_get_last_backend_session_id_returns_from_failed_executions() {
         let store = test_store().await;
         store.ensure_thread("t-1", None).await.unwrap();
 
@@ -2453,11 +2466,72 @@ mod tests {
             .await
             .unwrap();
 
-        // Should not return session IDs from failed executions.
+        // Session IDs from failed executions ARE now returned for resume.
         let sid = store
             .get_last_backend_session_id("t-1", "focused")
             .await
             .unwrap();
-        assert_eq!(sid, None);
+        assert_eq!(sid.as_deref(), Some("claude-sid-failed"));
+    }
+
+    #[tokio::test]
+    async fn test_get_last_backend_session_id_crashed_most_recent_wins() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // First crashed execution
+        let exec_id_1 = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id_1).await.unwrap();
+        store
+            .set_backend_session_id(&exec_id_1, "sid-first-crash")
+            .await
+            .unwrap();
+        store
+            .fail_execution(&exec_id_1, "crash 1", None, 100, ExecutionStatus::Crashed)
+            .await
+            .unwrap();
+
+        // Second crashed execution (more recent)
+        let exec_id_2 = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id_2).await.unwrap();
+        store
+            .set_backend_session_id(&exec_id_2, "sid-second-crash")
+            .await
+            .unwrap();
+        store
+            .fail_execution(&exec_id_2, "crash 2", None, 200, ExecutionStatus::Crashed)
+            .await
+            .unwrap();
+
+        // Most recent session ID should win
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid.as_deref(), Some("sid-second-crash"));
+    }
+
+    #[tokio::test]
+    async fn test_get_last_backend_session_id_from_executing_row() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", None).await.unwrap();
+
+        // A still-executing row with an early-persisted session ID
+        let exec_id = store.insert_execution("t-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(2).await.unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store
+            .set_backend_session_id(&exec_id, "sid-early-persist")
+            .await
+            .unwrap();
+
+        // Should return the early-persisted session ID even though status is "executing"
+        let sid = store
+            .get_last_backend_session_id("t-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(sid.as_deref(), Some("sid-early-persist"));
     }
 }
