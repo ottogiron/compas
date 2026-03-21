@@ -286,3 +286,25 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 - Add a `force_cleanup: true` flag to `orch_close` — deferred; adds MCP API surface for an edge case.
 - Delete after N failed retries — rejected; unbounded retry is safer than silent deletion after a threshold.
 - Return `Ok(None)` on git failure (treat as clean) — rejected; this is the original bug. A permissions error or mount issue should not allow deletion.
+
+## ADR-019: Merge queue for worktree branch integration
+
+**Date:** 2026-03
+**Status:** Active
+**Architect review thread:** `01KM8KDH2TWQBGYC5W4PC7NDDP`
+
+**FIFO queue model over lock-based coordination.** A `merge_operations` table with `claim_next_merge_op` provides a FIFO serialization primitive: visibility (queue state is inspectable), auditability (records persist after completion), ordering (natural FIFO), and architectural consistency (mirrors the existing `claim_next_execution` pattern for agent executions). Industry precedent: GitHub Merge Queue, Terraform Cloud Run Queue, and GitLab Merge Trains all converge on queue-based coordination over lock-based schemes for the same reasons.
+
+**Focused `merge_operations` table, not a generalized `coordination_ops` table.** Every existing table is purpose-built: threads, messages, executions. A `merge_operations` table names the concept explicitly. A generalized `coordination_ops` table would be premature — extract a shared abstraction when a second coordination use case arrives.
+
+**Worker executes merges in temporary worktrees** (`git worktree add .compas-worktrees/merge-{op_id} {target_branch}`). Never touches the operator's main checkout. Rationale: mutating the operator's working directory from a background daemon violates least surprise; a crash mid-merge would leave the main repo in a conflicted state. Temporary worktrees isolate the operation completely.
+
+**Per-target-branch serialization.** The `target_branch` column is the serialization key. `claim_next_merge_op` only claims an operation when no other operation for the same `target_branch` is currently claimed or executing. Merge operations targeting different branches run concurrently.
+
+**No push in v1.** Push requires a complete auth story (SSH agent forwarding, credential helpers, tokens). v1 merges only; the operator pushes after review. This keeps v1 focused and avoids encoding an auth model before it is well understood.
+
+**Completed and Failed threads eligible for merge.** Not Active (agent may still be writing commits) or Abandoned (explicit operator abandonment signals no merge intent).
+
+**Merge timeout 30s** (not 300s). Git operations are fast; a merge taking longer than 30 seconds indicates a hung process or filesystem problem, not a long-running operation. Long-running ops at the merge stage signal a bug.
+
+**Worktree cleanup blocked for threads with pending merge ops.** The stale-worktree cleanup loop performs a cross-table query before removing a worktree: if any `merge_operations` row for the thread is in `pending` or `claimed` status, cleanup is skipped. This prevents a race where the cleanup cycle deletes the worktree while a merge operation is in flight or queued.

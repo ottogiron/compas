@@ -192,6 +192,12 @@ pub struct OrchestrationConfig {
     /// Age threshold (seconds) after which non-running Active threads are considered stale.
     #[serde(default = "default_stale_active_secs")]
     pub stale_active_secs: u64,
+    /// Timeout in seconds for merge operations (default 30).
+    #[serde(default = "default_merge_timeout_secs")]
+    pub merge_timeout_secs: u64,
+    /// Default merge strategy: "merge", "rebase", or "squash" (default "merge").
+    #[serde(default = "default_merge_strategy")]
+    pub default_merge_strategy: String,
 }
 
 impl Default for OrchestrationConfig {
@@ -205,6 +211,8 @@ impl Default for OrchestrationConfig {
             ping_cache_ttl_secs: default_ping_cache_ttl_secs(),
             log_retention_count: default_log_retention_count(),
             stale_active_secs: default_stale_active_secs(),
+            merge_timeout_secs: default_merge_timeout_secs(),
+            default_merge_strategy: default_merge_strategy(),
         }
     }
 }
@@ -239,6 +247,14 @@ fn default_stale_active_secs() -> u64 {
 
 fn default_execution_timeout_secs() -> u64 {
     600
+}
+
+fn default_merge_timeout_secs() -> u64 {
+    30
+}
+
+fn default_merge_strategy() -> String {
+    "merge".to_string()
 }
 
 /// Agent role determines worker behavior.
