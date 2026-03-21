@@ -17,12 +17,14 @@ Created: 2026-03-21
 Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2CDTN5JCSN4PJ03D6J1`, 2026-03-21).
 
 **Key decisions:**
+
 - Config location: keep `~/.compas/` (ADR-013, matches ecosystem conventions)
 - Interactive prompt crate: `dialoguer 0.11` (mature, minimal deps, 1.3M downloads/month)
 - New module: `src/cli/` with `init.rs`, `doctor.rs`, `setup_mcp.rs`, `detection.rs`
 - Phased delivery: error messages + init first, then setup mcp, then doctor
 
 **Current onboarding (7 manual steps) → Target (4 commands):**
+
 1. `cargo install --git ...`
 2. `compas init`
 3. `compas setup mcp`
