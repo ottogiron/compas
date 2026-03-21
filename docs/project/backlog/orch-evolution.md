@@ -405,6 +405,42 @@ Created: 2026-03-14
   - `make verify`
 - Status: Done
 
+## Ticket ORCH-EVO-16 — Session Resume After Crash (Early Session ID Persistence)
+
+- Goal: Enable agents to resume their CLI session after a crashed execution by persisting the backend session ID mid-stream (not only on success), so re-dispatches to the same thread restore full conversation context alongside the preserved worktree.
+- In scope:
+  - Add `extract_session_id_from_line(line: &str) -> Option<String>` to Claude, Codex, and OpenCode backends:
+    - Claude: parse `{"type":"system","subtype":"init","session_id":"..."}` (first JSONL line)
+    - Codex: parse `{"type":"thread.started","thread_id":"..."}` (first event)
+    - OpenCode: parse any JSONL line with `"sessionID"` field
+  - Modify `consume_telemetry()` in `src/worker/loop_runner.rs` to call the appropriate extractor on each stdout line and persist via `store.set_backend_session_id()` on first match (one-shot per execution)
+  - Move `set_backend_session_id` call in `src/worker/executor.rs` out of the `if result.success` block to unconditionally persist after trigger completes (safety net for mid-stream persistence)
+  - Update `get_last_backend_session_id` query in `src/store/mod.rs`:
+    - Remove `AND status = 'completed'` filter
+    - Change ORDER BY to `COALESCE(finished_at, started_at, queued_at) DESC, id DESC`
+    - The existing `backend_session_id IS NOT NULL` filter is sufficient
+  - Gemini is stateless — no changes needed
+- Out of scope:
+  - Fallback mechanism (try resume, retry fresh on failure) — deferred, low risk per architect assessment
+  - Background session ID garbage collection
+  - Changing backend CLI session handling
+- Dependencies: None
+- Acceptance criteria:
+  - When an execution crashes, its `backend_session_id` is already persisted in SQLite (persisted mid-stream, not on completion)
+  - `get_last_backend_session_id` returns session IDs from crashed/failed executions, not just completed
+  - Re-dispatch to the same thread after a crash passes the correct session ID to the backend CLI (`-r` for Claude, `exec resume` for Codex, `-s` for OpenCode)
+  - Worktree is preserved (already works) + session context is preserved (new behavior) = full crash resume
+  - Existing session resume for completed executions continues to work unchanged
+  - `make verify` passes
+- Verification:
+  - Unit tests for `extract_session_id_from_line` per backend (Claude init line, Codex thread.started, OpenCode sessionID)
+  - Update `test_get_last_backend_session_id_ignores_failed_executions` → verify failed/crashed executions ARE returned
+  - New test: two crashed executions on same thread, most recent session ID wins
+  - New test: early-persisted session ID from still-executing row is returned
+  - Integration test: dispatch → persist session ID → mark crashed → re-dispatch → verify session ID passed to backend
+  - `make verify`
+- Status: Todo
+
 ## Execution Order
 
 1. ~~ORCH-EVO-2 (Event Broadcast — done)~~
@@ -416,7 +452,8 @@ Created: 2026-03-14
 7. ~~ORCH-EVO-12 (Retry with Error Classification — done)~~
 8. ~~ORCH-EVO-13 (Prompt Version Hashing — done)~~
 9. ~~ORCH-EVO-15 (Health Check Performance — done)~~
-10. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
+10. ORCH-EVO-16 (Session Resume After Crash — high value, enables crash recovery with full context)
+11. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
 11. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
 12. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
 13. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
