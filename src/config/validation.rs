@@ -266,6 +266,18 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                     sched.name
                 )));
             }
+            if sched.agent.is_empty() {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: schedule '{}' agent must not be empty",
+                    sched.name
+                )));
+            }
+            if sched.body.is_empty() {
+                return Err(OrchestratorError::Config(format!(
+                    "schedules: schedule '{}' body must not be empty",
+                    sched.name
+                )));
+            }
             if !all_aliases.contains(sched.agent.as_str()) {
                 return Err(OrchestratorError::Config(format!(
                     "schedules: schedule '{}' references unknown agent alias '{}'",
@@ -1815,5 +1827,49 @@ schedules:
 "#;
         let err = crate::config::load_config_from_str(yaml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn test_schedule_config_empty_agent_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: ""
+    cron: "*/5 * * * *"
+    body: "Run CI checks"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("agent must not be empty"),
+            "expected 'agent must not be empty', got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_schedule_config_empty_body_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: coder
+    backend: stub
+schedules:
+  - name: ci-check
+    agent: coder
+    cron: "*/5 * * * *"
+    body: ""
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(
+            err.to_string().contains("body must not be empty"),
+            "expected 'body must not be empty', got: {}",
+            err
+        );
     }
 }

@@ -60,7 +60,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: configure schedule with short cron interval, verify dispatch message created
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket CRON-3 — Dashboard and documentation
 
