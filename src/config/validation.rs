@@ -1,6 +1,9 @@
-use super::types::{AgentRole, HandoffTarget, OrchestratorConfig};
+use super::types::{AgentRole, HandoffTarget, OrchestratorConfig, OutputFormat};
 use crate::error::{OrchestratorError, Result};
 use std::collections::HashSet;
+
+/// Built-in backend names that cannot be used in `backend_definitions`.
+const BUILTIN_BACKEND_NAMES: &[&str] = &["claude", "codex", "gemini", "opencode"];
 
 /// Validate an orchestrator configuration.
 pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
@@ -240,6 +243,73 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         }
     }
 
+    // ── Backend definitions validation (GBE-1) ──
+    if let Some(ref defs) = config.backend_definitions {
+        let mut seen_names = HashSet::new();
+        for def in defs {
+            if def.name.is_empty() {
+                return Err(OrchestratorError::Config(
+                    "backend_definitions: name must not be empty".into(),
+                ));
+            }
+            if BUILTIN_BACKEND_NAMES.contains(&def.name.as_str()) {
+                return Err(OrchestratorError::Config(format!(
+                    "backend_definitions: name '{}' conflicts with built-in backend",
+                    def.name
+                )));
+            }
+            if !seen_names.insert(&def.name) {
+                return Err(OrchestratorError::Config(format!(
+                    "backend_definitions: duplicate name '{}'",
+                    def.name
+                )));
+            }
+            if def.command.is_empty() {
+                return Err(OrchestratorError::Config(format!(
+                    "backend_definitions: '{}' command must not be empty",
+                    def.name
+                )));
+            }
+            if def.args.iter().any(|a| a.trim().is_empty()) {
+                return Err(OrchestratorError::Config(format!(
+                    "backend_definitions: '{}' args must not contain empty entries",
+                    def.name
+                )));
+            }
+            if let Some(ref env_remove) = def.env_remove {
+                if env_remove.iter().any(|v| v.trim().is_empty()) {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' env_remove must not contain empty entries",
+                        def.name
+                    )));
+                }
+            }
+            if let Some(ref resume) = def.resume {
+                if resume.session_id_arg.is_empty() {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' resume.session_id_arg must not be empty",
+                        def.name
+                    )));
+                }
+            }
+            // result_field / session_id_field only make sense for json/jsonl formats
+            if def.output.format == OutputFormat::Plaintext {
+                if def.output.result_field.is_some() {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' output.result_field is only valid for json/jsonl format",
+                        def.name
+                    )));
+                }
+                if def.output.session_id_field.is_some() {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' output.session_id_field is only valid for json/jsonl format",
+                        def.name
+                    )));
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -299,6 +369,7 @@ mod tests {
             orchestration: Default::default(),
             database: Default::default(),
             notifications: Default::default(),
+            backend_definitions: None,
         }
     }
 
@@ -1036,5 +1107,312 @@ agents:
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.default_workdir, PathBuf::from("/tmp"));
         assert!(validate_config(&config).is_ok());
+    }
+
+    // ── Backend definitions validation tests (GBE-1) ──
+
+    #[test]
+    fn test_backend_definitions_valid_minimal() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: aider
+backend_definitions:
+  - name: aider
+    command: aider
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let defs = config.backend_definitions.unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "aider");
+        assert_eq!(defs[0].command, "aider");
+        assert!(defs[0].args.is_empty());
+        assert!(defs[0].resume.is_none());
+        assert!(defs[0].ping.is_none());
+        assert!(defs[0].env_remove.is_none());
+    }
+
+    #[test]
+    fn test_backend_definitions_valid_full() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: my-tool
+backend_definitions:
+  - name: my-tool
+    command: /usr/local/bin/my-tool
+    args:
+      - "--model"
+      - "{{model}}"
+      - "--prompt"
+      - "{{instruction}}"
+    resume:
+      flag: "--resume"
+      session_id_arg: "{{session_id}}"
+    output:
+      format: json
+      result_field: response
+      session_id_field: sid
+    ping:
+      command: my-tool
+      args: ["--version"]
+    env_remove:
+      - SOME_VAR
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let defs = config.backend_definitions.unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].name, "my-tool");
+        assert_eq!(defs[0].args.len(), 4);
+        assert!(defs[0].resume.is_some());
+        let resume = defs[0].resume.as_ref().unwrap();
+        assert_eq!(resume.flag, "--resume");
+        assert_eq!(resume.session_id_arg, "{{session_id}}");
+        assert_eq!(
+            defs[0].output.format,
+            crate::config::types::OutputFormat::Json
+        );
+        assert_eq!(defs[0].output.result_field.as_deref(), Some("response"));
+        assert_eq!(defs[0].output.session_id_field.as_deref(), Some("sid"));
+        let ping = defs[0].ping.as_ref().unwrap();
+        assert_eq!(ping.command, "my-tool");
+        assert_eq!(ping.args, vec!["--version"]);
+        assert_eq!(
+            defs[0].env_remove.as_ref().unwrap(),
+            &vec!["SOME_VAR".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_backend_definitions_empty_name_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: ""
+    command: some-cmd
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("name must not be empty"));
+    }
+
+    #[test]
+    fn test_backend_definitions_duplicate_name_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: aider
+    command: aider
+  - name: aider
+    command: aider2
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("duplicate name 'aider'"));
+    }
+
+    #[test]
+    fn test_backend_definitions_builtin_name_conflict_rejected() {
+        for builtin in &["claude", "codex", "gemini", "opencode"] {
+            let yaml = format!(
+                r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: {builtin}
+    command: some-cmd
+"#
+            );
+            let err = crate::config::load_config_from_str(&yaml).unwrap_err();
+            assert!(
+                err.to_string().contains("conflicts with built-in backend"),
+                "expected built-in conflict error for '{builtin}', got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_backend_definitions_empty_command_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: aider
+    command: ""
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("command must not be empty"));
+    }
+
+    #[test]
+    fn test_backend_definitions_absent_is_backward_compatible() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert!(config.backend_definitions.is_none());
+    }
+
+    #[test]
+    fn test_backend_definitions_empty_vec_is_valid() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions: []
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        assert_eq!(config.backend_definitions.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_backend_definitions_output_format_jsonl() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: my-tool
+backend_definitions:
+  - name: my-tool
+    command: my-tool
+    output:
+      format: jsonl
+      result_field: text
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let defs = config.backend_definitions.unwrap();
+        assert_eq!(
+            defs[0].output.format,
+            crate::config::types::OutputFormat::Jsonl
+        );
+        assert_eq!(defs[0].output.result_field.as_deref(), Some("text"));
+    }
+
+    #[test]
+    fn test_backend_definitions_plaintext_with_result_field_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: my-tool
+    command: my-tool
+    output:
+      format: plaintext
+      result_field: text
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("result_field is only valid for json/jsonl"));
+    }
+
+    #[test]
+    fn test_backend_definitions_plaintext_with_session_id_field_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: my-tool
+    command: my-tool
+    output:
+      format: plaintext
+      session_id_field: sid
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("session_id_field is only valid for json/jsonl"));
+    }
+
+    #[test]
+    fn test_backend_definitions_multiple_valid() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: aider
+  - alias: a2
+    backend: custom
+backend_definitions:
+  - name: aider
+    command: aider
+  - name: custom
+    command: /opt/bin/custom-tool
+    args: ["--prompt", "{{instruction}}"]
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let defs = config.backend_definitions.unwrap();
+        assert_eq!(defs.len(), 2);
+        assert_eq!(defs[0].name, "aider");
+        assert_eq!(defs[1].name, "custom");
+    }
+
+    #[test]
+    fn test_backend_definitions_unknown_field_rejected() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+backend_definitions:
+  - name: aider
+    command: aider
+    model_flag: "--model"
+"#;
+        let err = crate::config::load_config_from_str(yaml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn test_backend_definitions_output_default_is_plaintext() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: aider
+backend_definitions:
+  - name: aider
+    command: aider
+"#;
+        let config = crate::config::load_config_from_str(yaml).unwrap();
+        let defs = config.backend_definitions.unwrap();
+        assert_eq!(
+            defs[0].output.format,
+            crate::config::types::OutputFormat::Plaintext
+        );
+        assert!(defs[0].output.result_field.is_none());
+        assert!(defs[0].output.session_id_field.is_none());
     }
 }
