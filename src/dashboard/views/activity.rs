@@ -450,7 +450,7 @@ fn render_ops_list(
                             let truncated = super::truncate(summary, 50);
                             let mut spans = vec![
                                 Span::raw("     └ "),
-                                Span::styled(truncated, Style::default().fg(Color::DarkGray)),
+                                Span::styled(truncated, Style::default().fg(theme::TEXT_DIM)),
                             ];
                             if is_selected {
                                 spans.push(Span::styled(
@@ -669,19 +669,43 @@ fn make_batch_detail_line(batch: &BatchProgress) -> Line<'static> {
     // Batch rows only appear when drill_batch is None (Batches/Active Batches sections
     // are guarded by `if app.drill_batch.is_none()`), so always show [Enter] drill.
     let (key, label) = ("[Enter]", " drill");
-    Line::from(vec![
-        Span::raw("     \u{2514}\u{2500} "),
-        Span::styled(
-            format!(
-                "a:{} c:{} f:{}",
-                batch.active, batch.completed, batch.failed
-            ),
-            Style::default().fg(theme::TEXT_DIM),
-        ),
-        Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
-        Span::styled(key.to_string(), Style::default().fg(theme::ACCENT)),
-        Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM)),
-    ])
+    let mut spans = vec![Span::raw("     \u{2514}\u{2500} ")];
+
+    // "N active · N done · N fail" with semantic colors
+    spans.push(Span::styled(
+        batch.active.to_string(),
+        Style::default().fg(theme::ACCENT),
+    ));
+    spans.push(Span::styled(
+        " active",
+        Style::default().fg(theme::TEXT_DIM),
+    ));
+    spans.push(Span::styled(" · ", Style::default().fg(theme::BORDER_DIM)));
+    spans.push(Span::styled(
+        batch.completed.to_string(),
+        Style::default().fg(theme::SUCCESS_DIM),
+    ));
+    spans.push(Span::styled(" done", Style::default().fg(theme::TEXT_DIM)));
+    spans.push(Span::styled(" · ", Style::default().fg(theme::BORDER_DIM)));
+    spans.push(Span::styled(
+        batch.failed.to_string(),
+        Style::default().fg(theme::FAILURE),
+    ));
+    spans.push(Span::styled(" fail", Style::default().fg(theme::TEXT_DIM)));
+
+    spans.push(Span::styled(
+        " \u{2502} ",
+        Style::default().fg(theme::BORDER_DIM),
+    ));
+    spans.push(Span::styled(
+        key.to_string(),
+        Style::default().fg(theme::ACCENT),
+    ));
+    spans.push(Span::styled(
+        label.to_string(),
+        Style::default().fg(theme::TEXT_DIM),
+    ));
+    Line::from(spans)
 }
 
 fn make_thread_line(
@@ -693,9 +717,9 @@ fn make_thread_line(
     let (icon, icon_color) = row_icon(t);
     let is_wide = width >= 100;
     let thread_id = if is_wide {
-        super::truncate(&t.thread_id, 16)
+        super::truncate_left(&t.thread_id, 8)
     } else {
-        super::truncate(&t.thread_id, 10)
+        super::truncate_left(&t.thread_id, 6)
     };
     let (status_text, status_color) = row_status_display(t);
     let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
@@ -720,7 +744,7 @@ fn make_thread_line(
     let mut spans = vec![
         Span::styled(format!(" {} ", icon), Style::new().fg(icon_color).bg(bg)),
         Span::styled(
-            format!("{:<w$}", thread_id, w = if is_wide { 18 } else { 12 }),
+            format!("{:<w$}", thread_id, w = if is_wide { 10 } else { 8 }),
             Style::new()
                 .fg(theme::TEXT_BRIGHT)
                 .bg(bg)
@@ -739,9 +763,15 @@ fn make_thread_line(
         ),
     ];
 
+    // Separator between Agent and Summary
+    spans.push(Span::styled(
+        " │ ",
+        Style::new().fg(theme::BORDER_DIM).bg(bg),
+    ));
+
     // Summary column (between agent and batch_id)
     let summary_text = t.summary.as_deref().unwrap_or("-");
-    let (summary_trunc, summary_width) = if is_wide { (24, 26) } else { (16, 18) };
+    let (summary_trunc, summary_width) = if is_wide { (20, 22) } else { (14, 16) };
     spans.push(Span::styled(
         format!(
             "{:<w$}",
@@ -755,6 +785,11 @@ fn make_thread_line(
     ));
 
     if is_wide {
+        // Separator between Summary and Batch
+        spans.push(Span::styled(
+            " │ ",
+            Style::new().fg(theme::BORDER_DIM).bg(bg),
+        ));
         spans.push(Span::styled(
             format!("{:<14}", batch),
             Style::new()
@@ -860,19 +895,51 @@ fn make_batch_line(
     ];
 
     if is_wide {
-        spans.push(Span::styled(
-            format!(
-                "a:{} c:{} f:{}",
-                batch.active, batch.completed, batch.failed
-            ),
-            Style::new()
-                .fg(if batch.failed > 0 {
-                    theme::FAILURE
-                } else {
-                    theme::TEXT_DIM
-                })
-                .bg(bg),
-        ));
+        // Build batch stats with zero-suppression and semantic colors
+        let mut parts: Vec<Span<'static>> = Vec::new();
+        if batch.active > 0 {
+            parts.push(Span::styled(
+                batch.active.to_string(),
+                Style::new().fg(theme::ACCENT).bg(bg),
+            ));
+            parts.push(Span::styled(
+                " active",
+                Style::new().fg(theme::TEXT_DIM).bg(bg),
+            ));
+        }
+        if batch.completed > 0 {
+            if !parts.is_empty() {
+                parts.push(Span::styled(
+                    " · ",
+                    Style::new().fg(theme::BORDER_DIM).bg(bg),
+                ));
+            }
+            parts.push(Span::styled(
+                batch.completed.to_string(),
+                Style::new().fg(theme::SUCCESS_DIM).bg(bg),
+            ));
+            parts.push(Span::styled(
+                " done",
+                Style::new().fg(theme::TEXT_DIM).bg(bg),
+            ));
+        }
+        if batch.failed > 0 {
+            if !parts.is_empty() {
+                parts.push(Span::styled(
+                    " · ",
+                    Style::new().fg(theme::BORDER_DIM).bg(bg),
+                ));
+            }
+            parts.push(Span::styled(
+                batch.failed.to_string(),
+                Style::new().fg(theme::FAILURE).bg(bg),
+            ));
+            parts.push(Span::styled(
+                " fail",
+                Style::new().fg(theme::TEXT_DIM).bg(bg),
+            ));
+        }
+        spans.extend(parts);
     }
 
     spans.push(Span::styled(

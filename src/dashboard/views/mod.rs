@@ -95,6 +95,19 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
     }
 }
 
+/// Truncate from the left: returns `…` + last `suffix_len` chars.
+/// If the string fits in `suffix_len + 1`, returns it unchanged.
+pub fn truncate_left(s: &str, suffix_len: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= suffix_len + 1 {
+        return s.to_string();
+    }
+    format!(
+        "…{}",
+        chars[chars.len() - suffix_len..].iter().collect::<String>()
+    )
+}
+
 // ── Shared colour helpers ──────────────────────────────────────────────────────
 
 /// Color for thread status values.
@@ -395,5 +408,36 @@ mod tests {
         assert_eq!(truncate("日本語テスト", 4), "日本語…");
         assert_eq!(truncate("café", 4), "café"); // exactly 4 chars
         assert_eq!(truncate("café", 3), "ca…");
+    }
+
+    // truncate_left
+
+    #[test]
+    fn test_truncate_left_short_string_passes_through() {
+        // 5 chars, suffix_len=7 → 5 <= 8 → unchanged
+        assert_eq!(truncate_left("hello", 7), "hello");
+    }
+
+    #[test]
+    fn test_truncate_left_exact_boundary_passes_through() {
+        // 8 chars, suffix_len=7 → 8 <= 8 → unchanged
+        assert_eq!(truncate_left("abcdefgh", 7), "abcdefgh");
+    }
+
+    #[test]
+    fn test_truncate_left_long_string_truncates() {
+        // 26 chars, suffix_len=7 → "…" + last 7
+        assert_eq!(truncate_left("01JXHY9F7601KMTNEWCR2ABCDE", 7), "…R2ABCDE");
+    }
+
+    #[test]
+    fn test_truncate_left_empty_string() {
+        assert_eq!(truncate_left("", 7), "");
+    }
+
+    #[test]
+    fn test_truncate_left_non_ascii() {
+        // 6 chars, suffix_len=3 → 6 > 4 → "…" + last 3
+        assert_eq!(truncate_left("日本語テスト", 3), "…テスト");
     }
 }

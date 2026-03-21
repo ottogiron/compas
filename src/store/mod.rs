@@ -2099,6 +2099,44 @@ impl Store {
         }))
     }
 
+    /// Fetch the most recent execution event that represents meaningful progress,
+    /// excluding noisy event types (`tool_result`, `turn_complete`).
+    pub async fn get_latest_progress_event(
+        &self,
+        execution_id: &str,
+    ) -> Result<Option<ExecutionEventRow>, sqlx::Error> {
+        let row: Option<(
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            i32,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index, tool_name
+                 FROM execution_events
+                 WHERE execution_id = ? AND event_type NOT IN ('tool_result', 'turn_complete')
+                 ORDER BY event_index DESC
+                 LIMIT 1",
+        )
+        .bind(execution_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| ExecutionEventRow {
+            id: r.0,
+            execution_id: r.1,
+            event_type: r.2,
+            summary: r.3,
+            detail: r.4,
+            timestamp_ms: r.5,
+            event_index: r.6,
+            tool_name: r.7,
+        }))
+    }
+
     /// Delete execution_events rows for executions that are not among the
     /// `retention_count` most recent executions (by `queued_at`). This prevents
     /// unbounded growth of the telemetry table.
@@ -3484,6 +3522,108 @@ mod tests {
             .expect("should have a latest event");
         assert_eq!(latest.event_type, "turn_complete");
         assert!(latest.tool_name.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_progress_event_excludes_noisy_events() {
+        let store = test_store().await;
+        store.ensure_thread("t-prog", None, None).await.unwrap();
+        let exec_id = store
+            .insert_execution("t-prog", "agent-prog")
+            .await
+            .unwrap();
+
+        // Insert: tool_call (0), tool_result (1), turn_complete (2)
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Read src/lib.rs".to_string(),
+                detail: None,
+                timestamp_ms: 1000,
+                event_index: 0,
+                tool_name: Some("Read".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "tu_01: completed".to_string(),
+                detail: None,
+                timestamp_ms: 1001,
+                event_index: 1,
+                tool_name: None,
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "turn_complete".to_string(),
+                summary: "completed".to_string(),
+                detail: None,
+                timestamp_ms: 1002,
+                event_index: 2,
+                tool_name: None,
+            },
+        ];
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        // get_latest_progress_event should skip tool_result and turn_complete,
+        // returning the tool_call at index 0.
+        let progress = store
+            .get_latest_progress_event(&exec_id)
+            .await
+            .unwrap()
+            .expect("should find the tool_call event");
+        assert_eq!(progress.event_type, "tool_call");
+        assert_eq!(progress.summary, "Read src/lib.rs");
+        assert_eq!(progress.event_index, 0);
+
+        // get_latest_execution_event (unfiltered) still returns the last event.
+        let latest = store
+            .get_latest_execution_event(&exec_id)
+            .await
+            .unwrap()
+            .expect("should find the turn_complete event");
+        assert_eq!(latest.event_type, "turn_complete");
+    }
+
+    #[tokio::test]
+    async fn test_get_latest_progress_event_returns_none_when_only_noisy() {
+        let store = test_store().await;
+        store.ensure_thread("t-noisy", None, None).await.unwrap();
+        let exec_id = store
+            .insert_execution("t-noisy", "agent-noisy")
+            .await
+            .unwrap();
+
+        // Insert only tool_result and turn_complete — no meaningful progress events.
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "tu_01: completed".to_string(),
+                detail: None,
+                timestamp_ms: 1000,
+                event_index: 0,
+                tool_name: None,
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "turn_complete".to_string(),
+                summary: "completed".to_string(),
+                detail: None,
+                timestamp_ms: 1001,
+                event_index: 1,
+                tool_name: None,
+            },
+        ];
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        // Should return None — all events are excluded.
+        let result = store.get_latest_progress_event(&exec_id).await.unwrap();
+        assert!(
+            result.is_none(),
+            "should return None when only noisy events exist"
+        );
     }
 
     // ── OBS-02: observability aggregate tests ────────────────────────────

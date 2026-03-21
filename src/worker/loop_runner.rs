@@ -668,12 +668,16 @@ async fn consume_telemetry(
                     event.event_index = event_index;
                     event_index += 1;
 
-                    event_bus.emit(OrchestratorEvent::ExecutionProgress {
-                        execution_id: execution_id.to_string(),
-                        thread_id: thread_id.to_string(),
-                        agent_alias: agent_alias.to_string(),
-                        summary: event.summary.clone(),
-                    });
+                    // Skip noisy event types from the live progress bus — they
+                    // still get stored in the DB via the buffer flush below.
+                    if event.event_type != "tool_result" && event.event_type != "turn_complete" {
+                        event_bus.emit(OrchestratorEvent::ExecutionProgress {
+                            execution_id: execution_id.to_string(),
+                            thread_id: thread_id.to_string(),
+                            agent_alias: agent_alias.to_string(),
+                            summary: event.summary.clone(),
+                        });
+                    }
 
                     buffer.push(event);
                 }
@@ -1446,6 +1450,7 @@ mod tests {
         assert!(events[2].tool_name.is_none());
 
         // Verify EventBus received ExecutionProgress events.
+        // Only tool_call events are emitted — tool_result and turn_complete are suppressed.
         let mut progress_count = 0;
         while let Ok(ev) = rx_events.try_recv() {
             if let OrchestratorEvent::ExecutionProgress { execution_id, .. } = ev {
@@ -1453,7 +1458,66 @@ mod tests {
                 progress_count += 1;
             }
         }
-        assert_eq!(progress_count, 3);
+        assert_eq!(
+            progress_count, 2,
+            "only tool_call events should be emitted to EventBus"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_consume_telemetry_suppresses_noisy_events_from_bus() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let mut rx_events = event_bus.subscribe();
+
+        let (tx, rx) = std::sync::mpsc::sync_channel::<String>(128);
+
+        // tool_call → emitted to bus
+        tx.send(r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}"#.to_string()).unwrap();
+        // tool_result → stored in DB but NOT emitted to bus
+        tx.send(r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_99","content":"ok"}]}}"#.to_string()).unwrap();
+        // turn_complete → stored in DB but NOT emitted to bus
+        tx.send(
+            r#"{"type":"result","subtype":"success","result":"Done.","session_id":"s2"}"#
+                .to_string(),
+        )
+        .unwrap();
+
+        drop(tx);
+
+        consume_telemetry(
+            rx,
+            &store,
+            &event_bus,
+            "exec-sup",
+            "thread-sup",
+            "agent-sup",
+            "claude",
+        )
+        .await;
+
+        // All 3 events stored in DB.
+        let events = store
+            .get_execution_events("exec-sup", None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(events.len(), 3, "all events should be stored in DB");
+        assert_eq!(events[0].event_type, "tool_call");
+        assert_eq!(events[1].event_type, "tool_result");
+        assert_eq!(events[2].event_type, "turn_complete");
+
+        // Only tool_call emitted to EventBus — tool_result and turn_complete suppressed.
+        let mut progress_count = 0;
+        while let Ok(ev) = rx_events.try_recv() {
+            if let OrchestratorEvent::ExecutionProgress { execution_id, .. } = ev {
+                assert_eq!(execution_id, "exec-sup");
+                progress_count += 1;
+            }
+        }
+        assert_eq!(
+            progress_count, 1,
+            "only tool_call should be emitted; tool_result and turn_complete suppressed"
+        );
     }
 
     #[test]
