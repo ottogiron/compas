@@ -138,6 +138,7 @@ fn test_config() -> OrchestratorConfig {
         database: DatabaseConfig::default(),
         notifications: Default::default(),
         backend_definitions: None,
+        hooks: None,
     }
 }
 
@@ -3088,6 +3089,7 @@ mod handoff_chain_tests {
             database: DatabaseConfig::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         }
     }
 
@@ -4280,6 +4282,7 @@ mod fanout_tests {
             database: DatabaseConfig::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         }
     }
 
@@ -4715,6 +4718,7 @@ mod read_log_tests {
             database: DatabaseConfig::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         }
     }
 
@@ -5142,6 +5146,7 @@ mod session_resume_tests {
             database: DatabaseConfig::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         };
 
         let config_handle = ConfigHandle::new(config.clone());

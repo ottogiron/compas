@@ -36,6 +36,9 @@ pub struct OrchestratorConfig {
     /// Each entry defines a CLI-based backend that can be referenced by agent `backend:` fields.
     #[serde(default)]
     pub backend_definitions: Option<Vec<BackendDefinition>>,
+    /// Lifecycle hook commands fired at named execution events.
+    #[serde(default)]
+    pub hooks: Option<HooksConfig>,
 }
 
 impl OrchestratorConfig {
@@ -100,6 +103,49 @@ pub struct NotificationConfig {
     /// Enable macOS desktop notifications for execution completion/failure.
     #[serde(default)]
     pub desktop: bool,
+}
+
+/// A single hook command to execute at a lifecycle event.
+///
+/// The subprocess receives event JSON on stdin and is killed after `timeout_secs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookEntry {
+    /// Command to invoke (must be on PATH or an absolute path).
+    pub command: String,
+    /// Optional positional arguments passed after the command.
+    #[serde(default)]
+    pub args: Option<Vec<String>>,
+    /// Maximum seconds to wait before killing the hook process (default 10).
+    #[serde(default = "default_hook_timeout_secs")]
+    pub timeout_secs: u64,
+    /// Additional environment variables injected into the hook process.
+    #[serde(default)]
+    pub env: Option<HashMap<String, String>>,
+}
+
+fn default_hook_timeout_secs() -> u64 {
+    10
+}
+
+/// Named hook points for execution lifecycle events.
+///
+/// Each hook point accepts a list of `HookEntry` values. Hooks within a point
+/// run sequentially in declaration order. An empty vec (the default) means no
+/// hooks are registered for that event.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HooksConfig {
+    /// Fired when an execution starts (agent process is spawned).
+    #[serde(default)]
+    pub on_execution_started: Vec<HookEntry>,
+    /// Fired when an execution completes successfully.
+    #[serde(default)]
+    pub on_execution_completed: Vec<HookEntry>,
+    /// Fired when a thread is closed (completed or manually closed).
+    #[serde(default)]
+    pub on_thread_closed: Vec<HookEntry>,
+    /// Fired when a thread transitions to a failed state.
+    #[serde(default)]
+    pub on_thread_failed: Vec<HookEntry>,
 }
 
 fn default_db_max_connections() -> u32 {

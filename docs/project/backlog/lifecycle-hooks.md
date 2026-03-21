@@ -35,7 +35,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for HookRunner with stub scripts
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket HOOKS-2 — EventBus integration
 
@@ -104,3 +104,14 @@ Created: 2026-03-21
 - Prior art: Buildkite agent hooks (config-defined CLI commands, JSON on stdin, fire-and-forget).
 - GBE and HOOKS backlogs are fully independent — can be developed in parallel.
 - Phase 2 extensions (deferred): `on_thread_abandoned`, `on_execution_retrying`, blocking hooks, per-hook `workdir` override.
+
+## Execution Metrics
+
+- Ticket: HOOKS-1
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 15:07 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)

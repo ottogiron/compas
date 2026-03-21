@@ -370,6 +370,7 @@ mod tests {
             database: Default::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         }
     }
 

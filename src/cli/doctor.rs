@@ -1000,6 +1000,7 @@ mod tests {
             database: Default::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         };
 
         let result = check_worker(&config).await;
@@ -1198,6 +1199,7 @@ mod tests {
             database: Default::default(),
             notifications: Default::default(),
             backend_definitions: None,
+            hooks: None,
         };
 
         let backends = unique_backends(&config);
