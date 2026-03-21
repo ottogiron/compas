@@ -258,12 +258,15 @@ impl Backend for GenericBackend {
                 let success = out.status.success();
 
                 // Store the real session ID for future resume if extracted.
+                // Keyed by agent alias so start_session() can look it up.
                 if let Some(ref sid) = real_session_id {
-                    self.tracker.set_real_session_id(&session.id, sid);
+                    self.tracker.set_real_session_id(&agent.alias, sid);
                 }
 
+                let stderr_text = String::from_utf8_lossy(&out.stderr);
+                let error_text = format!("{}\n{}", raw_output, stderr_text);
                 let error_category = if !success {
-                    Some(classify_error(false, has_result_output, &result_text))
+                    Some(classify_error(false, has_result_output, &error_text))
                 } else {
                     None
                 };
@@ -418,6 +421,44 @@ mod tests {
         let session = backend.start_session(&agent).await.unwrap();
         // No prior session stored, so resume_session_id is None.
         assert!(session.resume_session_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_generic_resume_round_trip() {
+        // Backend emits JSON with a session ID → trigger stores it →
+        // next start_session picks it up as resume_session_id.
+        let def = BackendDefinition {
+            name: "resumable".into(),
+            command: "echo".into(),
+            args: vec![r#"{"result":"ok","sid":"real-sess-42"}"#.into()],
+            resume: Some(ResumeConfig {
+                flag: "--resume".into(),
+                session_id_arg: "{{session_id}}".into(),
+            }),
+            output: OutputConfig {
+                format: OutputFormat::Json,
+                result_field: Some("result".into()),
+                session_id_field: Some("sid".into()),
+            },
+            ping: None,
+            env_remove: None,
+        };
+        let backend = GenericBackend::new(def);
+        let agent = test_agent();
+
+        // First trigger: no resume yet.
+        let session1 = backend.start_session(&agent).await.unwrap();
+        assert!(session1.resume_session_id.is_none());
+        let output = backend
+            .trigger(&agent, &session1, Some("first"))
+            .await
+            .unwrap();
+        assert!(output.success);
+        assert_eq!(output.session_id, Some("real-sess-42".to_string()));
+
+        // Second start_session: should pick up the stored session ID.
+        let session2 = backend.start_session(&agent).await.unwrap();
+        assert_eq!(session2.resume_session_id, Some("real-sess-42".to_string()));
     }
 
     // ── substitute_args() ──
