@@ -216,6 +216,14 @@ pub struct ExecutionRow {
     pub eligible_reason: Option<String>,
 }
 
+/// An execution row paired with the thread's summary.
+/// Returned by `get_scheduled_executions` so callers don't need a second query.
+#[derive(Debug, Clone)]
+pub struct ScheduledExecution {
+    pub execution: ExecutionRow,
+    pub summary: Option<String>,
+}
+
 /// A stored execution event row (real-time telemetry).
 #[derive(Debug, Clone)]
 pub struct ExecutionEventRow {
@@ -683,6 +691,17 @@ impl Store {
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_merge_ops_thread
              ON merge_operations(thread_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // CRON-2: schedule_runs table for durable last-fire tracking
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schedule_runs (
+                schedule_name  TEXT PRIMARY KEY,
+                last_fired_at  INTEGER NOT NULL,
+                run_count      INTEGER NOT NULL DEFAULT 0
+            )",
         )
         .execute(&self.pool)
         .await?;
@@ -1770,7 +1789,7 @@ impl Store {
         &self,
         agent: Option<&str>,
         limit: i64,
-    ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+    ) -> Result<Vec<ScheduledExecution>, sqlx::Error> {
         let mut sql = String::from(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
@@ -1778,7 +1797,8 @@ impl Store {
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
                     e.pid,
-                    e.eligible_at, e.eligible_reason
+                    e.eligible_at, e.eligible_reason,
+                    t.summary
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.status = 'queued'
@@ -1790,14 +1810,14 @@ impl Store {
         }
         sql.push_str(" ORDER BY e.eligible_at ASC LIMIT ?");
 
-        let mut query = sqlx::query_as::<_, ExecutionRowDb>(&sql);
+        let mut query = sqlx::query_as::<_, ScheduledExecutionDb>(&sql);
         if let Some(a) = agent {
             query = query.bind(a);
         }
         query = query.bind(limit);
 
         let rows = query.fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(row_to_execution).collect())
+        Ok(rows.into_iter().map(row_to_scheduled).collect())
     }
 
     /// Get the most recent executions for a specific agent, newest first.
@@ -2863,6 +2883,59 @@ impl Store {
         .map_err(|e| format!("count_queued_merge_ops failed: {}", e))?;
         Ok(row.0)
     }
+
+    // ── Schedule runs (CRON-2) ──────────────────────────────────────────
+
+    /// Get the last-fired timestamp and run count for a schedule.
+    pub async fn get_schedule_run(
+        &self,
+        schedule_name: &str,
+    ) -> Result<Option<(i64, u64)>, String> {
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT last_fired_at, run_count FROM schedule_runs WHERE schedule_name = ?",
+        )
+        .bind(schedule_name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("get_schedule_run failed: {}", e))?;
+        Ok(row.map(|(ts, cnt)| (ts, cnt as u64)))
+    }
+
+    /// Record a schedule fire: upsert last-fire timestamp and increment run count.
+    pub async fn record_schedule_fire(
+        &self,
+        schedule_name: &str,
+        fired_at: i64,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO schedule_runs (schedule_name, last_fired_at, run_count)
+             VALUES (?, ?, 1)
+             ON CONFLICT(schedule_name) DO UPDATE SET
+               last_fired_at = excluded.last_fired_at,
+               run_count = schedule_runs.run_count + 1",
+        )
+        .bind(schedule_name)
+        .bind(fired_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("record_schedule_fire failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Get all schedule runs (for startup cache population).
+    pub async fn get_all_schedule_runs(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (i64, u64)>, String> {
+        let rows: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT schedule_name, last_fired_at, run_count FROM schedule_runs")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("get_all_schedule_runs failed: {}", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, ts, cnt)| (name, (ts, cnt as u64)))
+            .collect())
+    }
 }
 
 /// Combined thread + execution view.
@@ -3021,6 +3094,67 @@ fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
         pid: r.pid,
         eligible_at: r.eligible_at,
         eligible_reason: r.eligible_reason,
+    }
+}
+
+/// Internal DB row for `get_scheduled_executions` — adds `summary` from the
+/// threads table so the caller doesn't need a second round-trip.
+#[derive(sqlx::FromRow)]
+struct ScheduledExecutionDb {
+    id: String,
+    thread_id: String,
+    batch_id: Option<String>,
+    agent_alias: String,
+    dispatch_message_id: Option<i64>,
+    status: String,
+    queued_at: i64,
+    picked_up_at: Option<i64>,
+    started_at: Option<i64>,
+    finished_at: Option<i64>,
+    duration_ms: Option<i64>,
+    exit_code: Option<i32>,
+    output_preview: Option<String>,
+    error_detail: Option<String>,
+    parsed_intent: Option<String>,
+    prompt_hash: Option<String>,
+    attempt_number: i32,
+    retry_after: Option<i64>,
+    error_category: Option<String>,
+    original_dispatch_message_id: Option<i64>,
+    pid: Option<i64>,
+    eligible_at: Option<i64>,
+    eligible_reason: Option<String>,
+    summary: Option<String>,
+}
+
+fn row_to_scheduled(r: ScheduledExecutionDb) -> ScheduledExecution {
+    ScheduledExecution {
+        summary: r.summary,
+        execution: ExecutionRow {
+            id: r.id,
+            thread_id: r.thread_id,
+            batch_id: r.batch_id,
+            agent_alias: r.agent_alias,
+            dispatch_message_id: r.dispatch_message_id,
+            status: r.status,
+            queued_at: r.queued_at,
+            picked_up_at: r.picked_up_at,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            duration_ms: r.duration_ms,
+            exit_code: r.exit_code,
+            output_preview: r.output_preview,
+            error_detail: r.error_detail,
+            parsed_intent: r.parsed_intent,
+            prompt_hash: r.prompt_hash,
+            attempt_number: r.attempt_number,
+            retry_after: r.retry_after,
+            error_category: r.error_category,
+            original_dispatch_message_id: r.original_dispatch_message_id,
+            pid: r.pid,
+            eligible_at: r.eligible_at,
+            eligible_reason: r.eligible_reason,
+        },
     }
 }
 
@@ -4851,5 +4985,68 @@ mod tests {
         assert!(fetched.started_at.is_some());
         assert!(fetched.finished_at.is_none());
         assert!(fetched.duration_ms.is_none());
+    }
+
+    // ── Schedule runs tests (CRON-2) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_schedule_run_initial_state_empty() {
+        let store = test_store().await;
+        let run = store.get_schedule_run("nonexistent").await.unwrap();
+        assert!(run.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_record_and_retrieve() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("ci-check", 1700000000)
+            .await
+            .unwrap();
+        let run = store.get_schedule_run("ci-check").await.unwrap().unwrap();
+        assert_eq!(run.0, 1700000000); // last_fired_at
+        assert_eq!(run.1, 1); // run_count
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_increments_count() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("ci-check", 1700000000)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("ci-check", 1700000060)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("ci-check", 1700000120)
+            .await
+            .unwrap();
+        let run = store.get_schedule_run("ci-check").await.unwrap().unwrap();
+        assert_eq!(run.0, 1700000120); // latest last_fired_at
+        assert_eq!(run.1, 3); // 3 fires
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_get_all() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("sched-a", 1700000000)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("sched-b", 1700000060)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("sched-a", 1700000120)
+            .await
+            .unwrap();
+
+        let all = store.get_all_schedule_runs().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all["sched-a"], (1700000120, 2));
+        assert_eq!(all["sched-b"], (1700000060, 1));
     }
 }

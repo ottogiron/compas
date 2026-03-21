@@ -1,0 +1,3 @@
+kind: Fixed
+body: Dashboard schedule view now shows correct run count instead of Unix timestamp
+time: 2026-03-22T00:43:22.67393+01:00

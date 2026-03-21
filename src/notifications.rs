@@ -39,14 +39,18 @@ fn should_notify(event: &OrchestratorEvent) -> Option<(String, String)> {
             agent_alias,
             success,
             duration_ms,
+            thread_summary,
             ..
         } => {
             let status = if *success { "completed" } else { "failed" };
             let duration = format_duration_ms(*duration_ms);
-            Some((
-                format!("compas: {} {}", agent_alias, status),
-                format!("Execution {} in {}", status, duration),
-            ))
+            let body = match thread_summary {
+                Some(summary) if !summary.is_empty() => {
+                    format!("\"{}\" — {} in {}", summary, status, duration)
+                }
+                _ => format!("Execution {} in {}", status, duration),
+            };
+            Some((format!("compas: {} {}", agent_alias, status), body))
         }
         _ => None,
     }
@@ -149,6 +153,7 @@ mod tests {
             agent_alias: "worker-a".to_string(),
             success: true,
             duration_ms: 125_000,
+            thread_summary: None,
         };
         let result = should_notify(&event);
         assert!(result.is_some());
@@ -165,12 +170,66 @@ mod tests {
             agent_alias: "worker-b".to_string(),
             success: false,
             duration_ms: 5_000,
+            thread_summary: None,
         };
         let result = should_notify(&event);
         assert!(result.is_some());
         let (title, body) = result.unwrap();
         assert_eq!(title, "compas: worker-b failed");
         assert_eq!(body, "Execution failed in 5s");
+    }
+
+    #[test]
+    fn test_should_notify_execution_completed_with_summary() {
+        let event = OrchestratorEvent::ExecutionCompleted {
+            execution_id: "exec-3".to_string(),
+            thread_id: "thread-3".to_string(),
+            agent_alias: "worker-c".to_string(),
+            success: true,
+            duration_ms: 90_000,
+            thread_summary: Some("Add retry logic to payment service".to_string()),
+        };
+        let result = should_notify(&event);
+        assert!(result.is_some());
+        let (title, body) = result.unwrap();
+        assert_eq!(title, "compas: worker-c completed");
+        assert_eq!(
+            body,
+            "\"Add retry logic to payment service\" — completed in 1m 30s"
+        );
+    }
+
+    #[test]
+    fn test_should_notify_execution_failed_with_summary() {
+        let event = OrchestratorEvent::ExecutionCompleted {
+            execution_id: "exec-4".to_string(),
+            thread_id: "thread-4".to_string(),
+            agent_alias: "worker-d".to_string(),
+            success: false,
+            duration_ms: 3_000,
+            thread_summary: Some("Fix auth middleware".to_string()),
+        };
+        let result = should_notify(&event);
+        assert!(result.is_some());
+        let (title, body) = result.unwrap();
+        assert_eq!(title, "compas: worker-d failed");
+        assert_eq!(body, "\"Fix auth middleware\" — failed in 3s");
+    }
+
+    #[test]
+    fn test_should_notify_empty_summary_falls_back() {
+        let event = OrchestratorEvent::ExecutionCompleted {
+            execution_id: "exec-5".to_string(),
+            thread_id: "thread-5".to_string(),
+            agent_alias: "worker-e".to_string(),
+            success: true,
+            duration_ms: 10_000,
+            thread_summary: Some("".to_string()),
+        };
+        let result = should_notify(&event);
+        assert!(result.is_some());
+        let (_title, body) = result.unwrap();
+        assert_eq!(body, "Execution completed in 10s");
     }
 
     #[test]

@@ -177,6 +177,10 @@ pub struct App {
     progress_summaries: HashMap<String, String>,
     /// Tracks when each execution's displayed summary last changed (for debounce).
     progress_last_changed: HashMap<String, Instant>,
+    /// Cached schedule run counts: `schedule_name → (last_fired_at, run_count)`.
+    schedule_run_counts: Option<HashMap<String, (i64, u64)>>,
+    /// Timestamp of the last schedule data refresh attempt.
+    last_schedule_attempt: Option<Instant>,
 }
 
 impl App {
@@ -242,6 +246,8 @@ impl App {
             event_rx,
             progress_summaries: HashMap::new(),
             progress_last_changed: HashMap::new(),
+            schedule_run_counts: None,
+            last_schedule_attempt: None,
         }
     }
 
@@ -266,6 +272,7 @@ impl App {
         } else {
             self.last_executions_attempt = None;
         }
+        self.last_schedule_attempt = None;
     }
 
     /// Advance to the next tab, wrapping around.
@@ -566,6 +573,27 @@ impl App {
                 if let Some(ref mut d) = self.executions_data {
                     d.fetched_at = Instant::now();
                 }
+            }
+        }
+    }
+
+    /// Fetch schedule run counts from SQLite.
+    ///
+    /// Lightweight query cached on the same staleness cadence as other tabs.
+    pub fn refresh_schedules(&mut self) {
+        let store = &self.store;
+        let handle = &self.handle;
+
+        let result = handle.block_on(async {
+            tokio::time::timeout(REFRESH_TIMEOUT, store.get_all_schedule_runs()).await
+        });
+
+        match result {
+            Ok(Ok(counts)) => {
+                self.schedule_run_counts = Some(counts);
+            }
+            _ => {
+                // On error/timeout, retain previous data.
             }
         }
     }
@@ -1164,6 +1192,15 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             }
         }
 
+        // Schedule run counts refresh when Settings tab is active.
+        if app.active_tab == 3 {
+            let is_stale = is_data_stale(None, app.last_schedule_attempt, interval);
+            if is_stale {
+                app.last_schedule_attempt = Some(Instant::now());
+                app.refresh_schedules();
+            }
+        }
+
         terminal.draw(|frame| {
             if let Some(ref mut conversation) = app.viewing_conversation {
                 render_conversation(frame, conversation, frame.area());
@@ -1536,7 +1573,7 @@ impl App {
         let poll_secs = self.poll_interval.as_secs();
         let cfg = self.config.load();
 
-        let lines = vec![
+        let mut lines = vec![
             Line::from(vec![
                 Span::raw("  "),
                 label("Config:       "),
@@ -1563,6 +1600,88 @@ impl App {
                 value(format!(" {}", self.log_dir.display())),
             ]),
         ];
+
+        // ── Schedules section ────────────────────────────────────────────────
+        let schedules = cfg.schedules.as_deref().unwrap_or(&[]);
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            label("Schedules:    "),
+            value(format!(" {}", schedules.len())),
+        ]));
+
+        if !schedules.is_empty() {
+            lines.push(Line::from(""));
+            // Header row
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                format!(
+                    "{:<16} {:<12} {:<18} {:<16} {:<12} {}",
+                    "Name", "Agent", "Cron", "Next Fire", "Runs/Max", "Status"
+                )
+                .fg(theme::TEXT_MUTED)
+                .bold(),
+            ]));
+
+            let now = chrono::Utc::now();
+            let empty_counts = std::collections::HashMap::new();
+            let run_counts = self.schedule_run_counts.as_ref().unwrap_or(&empty_counts);
+
+            for sched in schedules {
+                let (_, run_count) = run_counts.get(&sched.name).copied().unwrap_or((0, 0));
+
+                // Compute next fire time from cron expression.
+                let next_fire = if sched.enabled {
+                    sched
+                        .cron
+                        .parse::<croner::Cron>()
+                        .ok()
+                        .and_then(|cron| cron.find_next_occurrence(&now, false).ok())
+                        .map(|next| {
+                            let diff = next.signed_duration_since(now);
+                            let secs = diff.num_seconds().max(0);
+                            crate::dashboard::views::format_duration_secs(secs)
+                        })
+                        .unwrap_or_else(|| "—".to_string())
+                } else {
+                    "—".to_string()
+                };
+
+                let runs_label = format!("{}/{}", run_count, sched.max_runs);
+                let status_label = if sched.enabled { "enabled" } else { "disabled" };
+                let status_color = if sched.enabled {
+                    theme::SUCCESS
+                } else {
+                    theme::TEXT_DIM
+                };
+                let name_color = if sched.enabled {
+                    theme::TEXT_BRIGHT
+                } else {
+                    theme::TEXT_DIM
+                };
+
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    format!("{:<16}", crate::dashboard::views::truncate(&sched.name, 15))
+                        .fg(name_color),
+                    Span::raw(" "),
+                    format!(
+                        "{:<12}",
+                        crate::dashboard::views::truncate(&sched.agent, 11)
+                    )
+                    .fg(theme::TEXT_NORMAL),
+                    Span::raw(" "),
+                    format!("{:<18}", crate::dashboard::views::truncate(&sched.cron, 17))
+                        .fg(theme::TEXT_MUTED),
+                    Span::raw(" "),
+                    format!("{:<16}", next_fire).fg(theme::ACCENT),
+                    Span::raw(" "),
+                    format!("{:<12}", runs_label).fg(theme::TEXT_NORMAL),
+                    Span::raw(" "),
+                    status_label.to_string().fg(status_color),
+                ]));
+            }
+        }
 
         Paragraph::new(lines)
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))

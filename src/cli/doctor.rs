@@ -265,6 +265,10 @@ pub async fn run(config_path: PathBuf, fix: bool) -> DoctorReport {
     let hook_checks = check_hook_commands(&config);
     results.extend(hook_checks);
 
+    // ── 10. Schedule validation ─────────────────────────────────────────
+    let schedule_checks = check_schedules(&config);
+    results.extend(schedule_checks);
+
     // ── --fix: auto-register missing MCP servers ─────────────────────────
     if fix && !unregistered_tools.is_empty() {
         for tool in &unregistered_tools {
@@ -615,6 +619,57 @@ fn check_hook_commands(config: &OrchestratorConfig) -> Vec<CheckResult> {
                 "ensure the script exists and is executable, or check the path in hooks config",
             ));
         }
+    }
+
+    results
+}
+
+/// Check 10: validate configured schedules.
+///
+/// Verifies that each schedule's agent alias exists in the configured agents
+/// and that the cron expression parses correctly. Issues are reported as
+/// warnings (not failures) since a schedule may be disabled intentionally.
+fn check_schedules(config: &OrchestratorConfig) -> Vec<CheckResult> {
+    let schedules = match &config.schedules {
+        Some(s) if !s.is_empty() => s,
+        _ => return vec![],
+    };
+
+    let known_aliases: HashSet<String> = config.agents.iter().map(|a| a.alias.clone()).collect();
+    let mut results = Vec::new();
+
+    for sched in schedules {
+        let label = format!("Schedule: {}", sched.name);
+
+        // Validate agent alias exists.
+        if !known_aliases.contains(&sched.agent) {
+            results.push(CheckResult::warn(
+                &label,
+                &format!("references unknown agent '{}'", sched.agent),
+                &format!(
+                    "add agent '{}' to the agents list or fix the schedule's agent field",
+                    sched.agent
+                ),
+            ));
+            continue;
+        }
+
+        // Validate cron expression parses.
+        if let Err(e) = sched.cron.parse::<croner::Cron>() {
+            results.push(CheckResult::warn(
+                &label,
+                &format!("invalid cron expression '{}': {}", sched.cron, e),
+                "fix the cron expression syntax",
+            ));
+            continue;
+        }
+
+        // All checks passed for this schedule.
+        let status = if sched.enabled { "enabled" } else { "disabled" };
+        results.push(CheckResult::pass(
+            &label,
+            &format!("agent '{}', {} ({})", sched.agent, status, sched.cron),
+        ));
     }
 
     results
@@ -1405,5 +1460,206 @@ mod tests {
         let results = check_hook_commands(&config);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].severity, Severity::Pass);
+    }
+
+    // ── Schedule checks ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_doctor_check_schedules_none() {
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: None,
+        };
+
+        let results = check_schedules(&config);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_doctor_check_schedules_valid() {
+        use crate::config::types::{AgentConfig, ScheduleConfig};
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "dev".to_string(),
+                backend: "claude".to_string(),
+                role: Default::default(),
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: Some(vec![ScheduleConfig {
+                name: "ci-check".to_string(),
+                agent: "dev".to_string(),
+                cron: "*/5 * * * *".to_string(),
+                body: "Check CI".to_string(),
+                batch: None,
+                max_runs: 100,
+                enabled: true,
+            }]),
+        };
+
+        let results = check_schedules(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Pass);
+        assert!(results[0].detail.contains("dev"));
+        assert!(results[0].detail.contains("enabled"));
+    }
+
+    #[test]
+    fn test_doctor_check_schedules_unknown_agent() {
+        use crate::config::types::ScheduleConfig;
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: Some(vec![ScheduleConfig {
+                name: "ci-check".to_string(),
+                agent: "nonexistent".to_string(),
+                cron: "*/5 * * * *".to_string(),
+                body: "Check CI".to_string(),
+                batch: None,
+                max_runs: 100,
+                enabled: true,
+            }]),
+        };
+
+        let results = check_schedules(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Warn);
+        assert!(results[0].detail.contains("unknown agent"));
+    }
+
+    #[test]
+    fn test_doctor_check_schedules_invalid_cron() {
+        use crate::config::types::{AgentConfig, ScheduleConfig};
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "dev".to_string(),
+                backend: "claude".to_string(),
+                role: Default::default(),
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: Some(vec![ScheduleConfig {
+                name: "bad-sched".to_string(),
+                agent: "dev".to_string(),
+                cron: "not a cron expression".to_string(),
+                body: "Check CI".to_string(),
+                batch: None,
+                max_runs: 100,
+                enabled: true,
+            }]),
+        };
+
+        let results = check_schedules(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Warn);
+        assert!(results[0].detail.contains("invalid cron"));
+    }
+
+    #[test]
+    fn test_doctor_check_schedules_disabled_passes() {
+        use crate::config::types::{AgentConfig, ScheduleConfig};
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "dev".to_string(),
+                backend: "claude".to_string(),
+                role: Default::default(),
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: Some(vec![ScheduleConfig {
+                name: "paused".to_string(),
+                agent: "dev".to_string(),
+                cron: "0 0 * * *".to_string(),
+                body: "Nightly check".to_string(),
+                batch: None,
+                max_runs: 100,
+                enabled: false,
+            }]),
+        };
+
+        let results = check_schedules(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Pass);
+        assert!(results[0].detail.contains("disabled"));
     }
 }

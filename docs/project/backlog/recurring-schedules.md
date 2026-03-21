@@ -32,7 +32,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for deserialization and validation
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket CRON-2 — Worker schedule evaluation loop
 
@@ -60,7 +60,18 @@ Created: 2026-03-21
 - Verification:
   - Integration test: configure schedule with short cron interval, verify dispatch message created
   - `make verify`
-- Status: Todo
+- Status: Done
+
+## Ticket CRON-2 Execution Metrics
+
+- Ticket: CRON-2
+- Owner: compas-dev
+- Complexity: Medium
+- Risk: Medium (cron evaluation, double-fire prevention)
+- Start: 2026-03-21 19:32 UTC
+- End: 2026-03-22 00:00 UTC
+- Duration: ~4.5h
+- Notes: Implemented worker schedule evaluation loop with SQLite-backed run tracking
 
 ## Ticket CRON-3 — Dashboard and documentation
 
@@ -81,7 +92,7 @@ Created: 2026-03-21
 - Verification:
   - Manual: configure a schedule, verify dashboard shows it, verify dispatches fire
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -98,13 +109,24 @@ Created: 2026-03-21
 - Prior art: GitHub Actions cron schedules, Buildkite scheduled builds, Airflow DAG schedules.
 - Not in scope: agent-initiated recurring tasks (agents don't manage scheduling — ADR-015).
 
-## Execution Metrics
+## CRON-1 Execution Metrics
 
 - Ticket: CRON-1
-- Owner: (pending)
-- Complexity: (pending)
-- Risk: (pending)
+- Owner: compas-dev
+- Complexity: Low
+- Risk: Low (schema + validation only)
 - Start: 2026-03-21 19:32 UTC
-- End: (pending)
-- Duration: (pending)
-- Notes: (pending)
+- End: 2026-03-21 20:30 UTC
+- Duration: ~1h
+- Notes: Config schema, validation, cron parsing, tests
+
+## CRON-3 Execution Metrics
+
+- Ticket: CRON-3
+- Owner: compas-dev
+- Complexity: Medium
+- Risk: Low (display-only + documentation)
+- Start: 2026-03-22 00:00 UTC
+- End: 2026-03-22
+- Duration: ~1h
+- Notes: Dashboard schedules section in Settings tab, README documentation, compas doctor validation

@@ -1,0 +1,3 @@
+kind: Fixed
+body: orch_tasks filter=scheduled now returns thread summary instead of null
+time: 2026-03-21T23:48:40.427504+01:00

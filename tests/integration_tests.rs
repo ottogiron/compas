@@ -1425,6 +1425,54 @@ mod scheduled_visibility_tests {
     }
 
     #[tokio::test]
+    async fn test_orch_tasks_filter_scheduled_returns_summary() {
+        let server = test_server().await;
+
+        // Create a thread with a summary, then a scheduled execution for it.
+        let future_ts = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+            + 3600) as i64;
+        server
+            .store
+            .ensure_thread("t-sched-sum", None, Some("build the widget"))
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution_scheduled(
+                "t-sched-sum",
+                "focused",
+                None,
+                None,
+                Some(future_ts),
+                Some("scheduled"),
+            )
+            .await
+            .unwrap();
+
+        // Query with filter=scheduled and verify summary is returned.
+        let result = server
+            .tasks_impl(TasksParams {
+                alias: None,
+                batch_id: None,
+                limit: None,
+                filter: Some("scheduled".to_string()),
+            })
+            .await
+            .unwrap();
+        let json = extract_json(&result);
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 1, "should return exactly 1 scheduled task");
+        assert_eq!(arr[0]["thread_id"], "t-sched-sum");
+        assert_eq!(
+            arr[0]["summary"], "build the widget",
+            "scheduled filter should return thread summary"
+        );
+    }
+
+    #[tokio::test]
     async fn test_orch_status_includes_scheduled_count() {
         let server = test_server().await;
 

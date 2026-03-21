@@ -399,7 +399,51 @@ agents:
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
 
-**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `default_workdir`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
+**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `schedules`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `default_workdir`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
+
+### Recurring Schedules
+
+Define cron-based recurring dispatches that the worker evaluates automatically. Useful for CI monitoring, periodic health checks, or any recurring task.
+
+```yaml
+schedules:
+  - name: ci-monitor              # Unique schedule name
+    agent: reviewer                # Target agent alias (must exist in agents)
+    cron: "*/5 * * * *"            # Standard cron expression (every 5 minutes)
+    body: "Check CI status for open PRs and report any failures."
+    batch: ci-monitoring           # Optional batch ID for grouping dispatches
+    max_runs: 50                   # Safety cap (default: 100) — stops after this many fires
+    enabled: true                  # Active flag (default: true)
+
+  - name: nightly-health
+    agent: dev
+    cron: "0 2 * * *"              # Daily at 2:00 AM UTC
+    body: "Run full health check: verify all services are responsive, check disk usage, review error logs from the past 24 hours."
+    max_runs: 365
+```
+
+**Schedule fields:**
+
+| Field | Required | Default | Description |
+| --- | --- | --- | --- |
+| `name` | yes | — | Unique identifier for the schedule |
+| `agent` | yes | — | Target agent alias (must exist in `agents`) |
+| `cron` | yes | — | Standard cron expression (5 fields: minute, hour, day, month, weekday) |
+| `body` | yes | — | Dispatch message body sent to the agent |
+| `batch` | no | `null` | Batch/ticket ID attached to each dispatch |
+| `max_runs` | no | `100` | Safety cap — schedule stops firing after this many runs |
+| `enabled` | no | `true` | Set to `false` to pause without removing the config |
+
+**How it works:**
+
+1. The worker evaluates all enabled schedules every 60 seconds
+2. When a cron expression is due, the worker creates a dispatch message targeting the configured agent
+3. Run counts are persisted in SQLite — the worker tracks last-fire time per schedule to prevent double-fires on restart
+4. When `max_runs` is reached, the schedule stops firing (bump the value or reset the schedule to continue)
+
+**Dashboard visibility:** The Settings tab shows all configured schedules with their agent, cron expression, next fire time, run count, and enabled status.
+
+**Doctor validation:** `compas doctor` validates that schedule agent aliases exist and cron expressions parse correctly, reporting issues as warnings.
 
 ### Per-Agent Working Directory
 
@@ -541,6 +585,7 @@ hooks:
   "agent_alias": "dev",
   "success": true,
   "duration_ms": 12345,
+  "thread_summary": "Fix login timeout bug",
   "timestamp": "2026-03-21T17:00:00Z"
 }
 ```

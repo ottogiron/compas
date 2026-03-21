@@ -720,7 +720,8 @@ impl OrchestratorMcpServer {
 
             let entries: Vec<TaskEntry> = execs
                 .into_iter()
-                .map(|e| {
+                .map(|se| {
+                    let e = se.execution;
                     let eligible_at_iso = e.eligible_at.map(|ts| {
                         DateTime::from_timestamp(ts, 0)
                             .map(|dt| dt.to_rfc3339())
@@ -729,7 +730,7 @@ impl OrchestratorMcpServer {
                     TaskEntry {
                         thread_id: e.thread_id,
                         batch_id: e.batch_id,
-                        summary: None,
+                        summary: se.summary,
                         agent: Some(e.agent_alias),
                         execution_status: Some(e.status),
                         started_at: e.started_at,
