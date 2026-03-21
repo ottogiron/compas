@@ -589,6 +589,8 @@ mod tests {
             error_category: None,
             original_dispatch_message_id: None,
             pid: None,
+            eligible_at: None,
+            eligible_reason: None,
         }
     }
 

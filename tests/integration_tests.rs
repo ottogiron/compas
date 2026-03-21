@@ -988,6 +988,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-dispatch-1".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1040,6 +1041,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-summary".to_string()),
                 summary: Some("Add JWT authentication".to_string()),
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1072,6 +1074,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: None,
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1105,6 +1108,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: None,
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1124,6 +1128,7 @@ mod dispatch_tests {
                 intent: "status-update".to_string(), // not a trigger intent
                 thread_id: Some("t-info".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1147,6 +1152,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-batch".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1171,6 +1177,7 @@ mod dispatch_tests {
                 intent: "handoff".to_string(),
                 thread_id: Some("t-handoff".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1195,6 +1202,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-continue".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1209,6 +1217,7 @@ mod dispatch_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-continue".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1223,6 +1232,112 @@ mod dispatch_tests {
             .await
             .unwrap();
         assert_eq!(msgs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_with_scheduled_for_creates_deferred_execution() {
+        let server = test_server().await;
+
+        // Schedule 60 seconds in the future.
+        let future_ts = (chrono::Utc::now() + chrono::Duration::seconds(60))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Scheduled work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-sched-1".to_string()),
+                summary: None,
+                scheduled_for: Some(future_ts.clone()),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["thread_id"], "t-sched-1");
+        assert_eq!(json["scheduled_for"], future_ts);
+        assert!(json["execution_id"].as_str().is_some());
+
+        // The execution should exist but NOT be claimable (eligible_at is in the future).
+        let claimed = server.store.claim_next_execution(2).await.unwrap();
+        assert!(
+            claimed.is_none(),
+            "scheduled execution should not be claimed before eligible_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_with_past_scheduled_for_rejected() {
+        let server = test_server().await;
+
+        // A timestamp in the past.
+        let past_ts = "2020-01-01T00:00:00Z".to_string();
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Should fail".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-sched-past".to_string()),
+                summary: None,
+                scheduled_for: Some(past_ts),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "past timestamp should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_with_invalid_scheduled_for_rejected() {
+        let server = test_server().await;
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Should fail".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-sched-bad".to_string()),
+                summary: None,
+                scheduled_for: Some("not-a-timestamp".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "invalid timestamp should be rejected");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_without_scheduled_for_unchanged() {
+        let server = test_server().await;
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Immediate work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-sched-none".to_string()),
+                summary: None,
+                scheduled_for: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        // No scheduled_for or execution_id in the response.
+        assert!(json.get("scheduled_for").is_none());
+        assert!(json.get("execution_id").is_none());
     }
 }
 
@@ -1244,6 +1359,7 @@ mod lifecycle_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some(thread_id.to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1433,6 +1549,7 @@ mod lifecycle_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-full-lifecycle".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1511,6 +1628,7 @@ mod lifecycle_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-close-failed-cycle".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1570,6 +1688,7 @@ mod query_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-q-1".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1583,6 +1702,7 @@ mod query_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-q-2".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1886,6 +2006,7 @@ mod poll_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-poll-auto".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -1918,6 +2039,7 @@ mod poll_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-poll-resp".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -2507,6 +2629,7 @@ mod diagnose_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-diag-q".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();
@@ -2556,6 +2679,7 @@ mod diagnose_tests {
                 intent: "dispatch".to_string(),
                 thread_id: Some("t-diag-hb".to_string()),
                 summary: None,
+                scheduled_for: None,
             })
             .await
             .unwrap();

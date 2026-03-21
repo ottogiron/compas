@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Delayed dispatch via `scheduled_for` parameter on `orch_dispatch` (SCHED-2): operators can schedule executions for a future time using an ISO 8601 timestamp. The worker defers pickup until the scheduled time via the new `eligible_at` / `eligible_reason` columns on the executions table.
 - Worker: merge queue polling, crash recovery, and stale merge detection (MERGE-3)
 - Dashboard cost/token visibility (OBS-04): Ops footer appends `│ Cost: $X.XX  Tok: NK/NK` when cost or token data exists; Agents tab cards show a per-agent cost/token row between the active count and recent executions. Format helpers `format_tokens` and `format_cost_usd` added to `dashboard::views`.
 - CLI: `compas wait-merge --op-id <id>` blocking wait for merge completion (MERGE-6)

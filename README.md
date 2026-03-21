@@ -300,7 +300,7 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 
 | Tool | What it does |
 | --- | --- |
-| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` (~80 chars) to label the thread |
+| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` (~80 chars) to label the thread and `scheduled_for` (ISO 8601 timestamp) for delayed execution |
 | `orch_close` | Close a thread as `completed` or `failed` |
 | `orch_abandon` | Cancel a thread and its active executions |
 | `orch_reopen` | Reopen a closed/failed/abandoned thread |
