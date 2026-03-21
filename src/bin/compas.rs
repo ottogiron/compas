@@ -58,6 +58,19 @@ enum Commands {
         #[arg(long, hide = true, conflicts_with = "standalone")]
         with_worker: bool,
     },
+    /// Register compas as an MCP server in coding tools
+    #[command(name = "setup-mcp")]
+    SetupMcp {
+        /// Target specific tool (claude, codex, opencode, gemini). Default: auto-detect all.
+        #[arg(long)]
+        tool: Option<String>,
+        /// Unregister compas from tools
+        #[arg(long)]
+        remove: bool,
+        /// Show what would be done without executing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Create a new compas configuration file
     Init {
         /// Overwrite existing config file
@@ -135,6 +148,16 @@ async fn main() -> ExitCode {
             if let Err(e) = run_mcp_server(config).await {
                 eprintln!("error: {}", e);
                 return ExitCode::from(2);
+            }
+        }
+        Commands::SetupMcp {
+            tool,
+            remove,
+            dry_run,
+        } => {
+            if let Err(e) = compas::cli::setup_mcp::run(tool.as_deref(), remove, dry_run) {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
             }
         }
         Commands::Init {
@@ -1054,6 +1077,94 @@ mod tests {
             assert!(!await_chain);
         } else {
             panic!("expected Wait command");
+        }
+    }
+
+    // ── SetupMcp subcommand tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_setup_mcp_parses_minimal() {
+        let parsed = Cli::try_parse_from(["compas", "setup-mcp"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::SetupMcp {
+                tool,
+                remove,
+                dry_run,
+            } = cli.command
+            {
+                assert!(tool.is_none());
+                assert!(!remove);
+                assert!(!dry_run);
+            } else {
+                panic!("expected SetupMcp command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_setup_mcp_parses_tool_flag() {
+        let parsed = Cli::try_parse_from(["compas", "setup-mcp", "--tool", "claude"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::SetupMcp { tool, .. } = cli.command {
+                assert_eq!(tool, Some("claude".to_string()));
+            } else {
+                panic!("expected SetupMcp command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_setup_mcp_parses_remove_flag() {
+        let parsed = Cli::try_parse_from(["compas", "setup-mcp", "--remove"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::SetupMcp { remove, .. } = cli.command {
+                assert!(remove);
+            } else {
+                panic!("expected SetupMcp command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_setup_mcp_parses_dry_run_flag() {
+        let parsed = Cli::try_parse_from(["compas", "setup-mcp", "--dry-run"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::SetupMcp { dry_run, .. } = cli.command {
+                assert!(dry_run);
+            } else {
+                panic!("expected SetupMcp command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_setup_mcp_parses_all_flags() {
+        let parsed = Cli::try_parse_from([
+            "compas",
+            "setup-mcp",
+            "--tool",
+            "opencode",
+            "--remove",
+            "--dry-run",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::SetupMcp {
+                tool,
+                remove,
+                dry_run,
+            } = cli.command
+            {
+                assert_eq!(tool, Some("opencode".to_string()));
+                assert!(remove);
+                assert!(dry_run);
+            } else {
+                panic!("expected SetupMcp command");
+            }
         }
     }
 

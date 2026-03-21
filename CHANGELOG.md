@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `compas setup-mcp` command: auto-register compas as an MCP server in coding tools (Claude Code, Codex, OpenCode, Gemini) with `--tool` filter, `--remove` for unregistration, `--dry-run` preview, and idempotent behavior. Includes shared `detection` module for tool discovery reusable by future CLI commands.
 - `compas init` command: interactive and non-interactive config scaffolding with backend detection, overwrite protection, and commented/minimal YAML output
 - Improved config error messages: `load_config` now reports the missing file path and suggests `compas init` instead of a bare OS error
 - Session resume after crash (ADR-017): backend session IDs are now persisted mid-stream within milliseconds of first output line, enabling agents to resume their CLI session after a crashed execution instead of starting fresh. `get_last_backend_session_id` returns session IDs from any execution status, not just completed.
