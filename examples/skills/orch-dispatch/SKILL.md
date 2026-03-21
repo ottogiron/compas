@@ -36,7 +36,9 @@ Agents with `workspace: worktree` run in isolated git worktrees. Each thread get
 
 When reviewing work from a worktree agent, the changes are on the worktree branch — not on main. The operator merges or cherry-picks the work after approval.
 
-**WARNING:** Worktrees are automatically cleaned up (deleted) by the worker when threads reach terminal state (`Completed` or `Abandoned`). `Failed` threads retain their worktrees for inspection. **You must merge or cherry-pick worktree changes before closing the thread, or the work will be permanently lost.** See Step 8 for the merge-then-close procedure.
+**Worktree cleanup:** Worktrees are automatically cleaned up (deleted) by the worker when threads reach terminal state (`Completed` or `Abandoned`). `Failed` threads retain their worktrees for inspection. The merge queue (`orch_merge`) blocks cleanup while a merge is pending — close the thread first, then queue the merge. See Step 8.
+
+**Manual merge fallback:** If you bypass the merge queue and merge manually (`git merge compas/<thread-id>`), you **must** merge before closing the thread, or the work will be permanently lost.
 
 ## Automatic Retry
 
@@ -172,16 +174,7 @@ compas wait \
 
 Based on reviewer response:
 
-- **No blocking findings → merge work, then close threads:**
-
-  **Worktree agents:** The worktree is cleaned up when the thread reaches terminal state. You **must** merge or cherry-pick the worktree changes into the target branch **before** closing the thread, or the work will be lost.
-
-  ```bash
-  # From the main repo — merge the worktree branch
-  git merge compas/<thread-id>
-  # Or cherry-pick specific commits
-  git cherry-pick <commit-hash>
-  ```
+- **No blocking findings → close threads, then merge via merge queue:**
 
   If the agent left uncommitted changes in the worktree, commit them first:
 
@@ -189,11 +182,33 @@ Based on reviewer response:
   git -C <worktree-path> add -A && git -C <worktree-path> commit -m "<description>"
   ```
 
-  Then close both threads:
+  Close both threads:
 
   ```text
   orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Review passed")
-  orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review — changes merged")
+  orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review")
+  ```
+
+  Queue the merge (thread must be Completed or Failed). The merge queue blocks worktree cleanup while the merge is pending:
+
+  ```text
+  orch_merge(thread_id="<worker-thread-id>", target_branch="main", from="operator")
+  ```
+
+  Wait for merge completion:
+
+  ```bash
+  compas wait-merge --op-id <op_id> --timeout 120
+  ```
+
+  On merge conflict: `orch_merge_status(op_id="<op_id>")` shows `conflict_files`. Resolve conflicts in the source branch, then re-queue with `orch_merge`.
+
+  **Manual fallback** (if merge queue is unsuitable):
+
+  ```bash
+  # Merge BEFORE closing the thread — worktree cleanup deletes the branch
+  git merge compas/<thread-id>
+  # Then close threads
   ```
 
 - **Blocking findings → request changes from worker:**

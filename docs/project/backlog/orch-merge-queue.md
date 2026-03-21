@@ -1,6 +1,6 @@
 # Merge Queue for Worktree Branch Integration
 
-Status: Active
+Status: Complete
 Owner: operator
 Created: 2026-03-21
 
@@ -38,7 +38,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-2 — MergeExecutor with temporary worktree isolation
 
@@ -68,7 +68,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-3 — Worker integration for merge queue polling
 
@@ -95,7 +95,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-4 — MCP tools for merge operations
 
@@ -124,7 +124,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-5 — EventBus events and dashboard merge queue view
 
@@ -147,7 +147,7 @@ Created: 2026-03-21
 - Verification:
   - `make verify`
   - Visual verification of dashboard merge queue section
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-6 — CLI wait-merge subcommand
 
@@ -169,7 +169,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket MERGE-7 — ADR-019 and config additions
 
@@ -188,7 +188,7 @@ Created: 2026-03-21
   - `make verify` passes
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 

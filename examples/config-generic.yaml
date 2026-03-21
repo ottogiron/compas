@@ -16,6 +16,8 @@ orchestration:
   max_triggers_per_agent: 1
   ping_timeout_secs: 30
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
+  # merge_timeout_secs: 30         # Timeout for merge operations (default: 30)
+  # default_merge_strategy: merge  # Merge strategy: "merge", "rebase", or "squash"
 
 models:
   - id: claude-sonnet-4-6

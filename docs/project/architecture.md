@@ -8,7 +8,7 @@ Operator (MCP client)
     ▼
 ┌─────────────────────────────────────┐
 │  MCP Server  (stdio transport)      │
-│  17 tools: dispatch, status, poll,  │
+│  22 tools: dispatch, status, poll,  │
 │  close, abandon, reopen, ...        │
 │                                     │
 │  ┌───────────┐   ┌───────────────┐  │
@@ -57,7 +57,7 @@ This separation allows one shared orchestrator binary/config model to work acros
 
 ## Database Schema
 
-Five tables in a single SQLite file with WAL mode:
+Six tables in a single SQLite file with WAL mode:
 
 | Table | Purpose |
 |-------|---------|
@@ -66,6 +66,7 @@ Five tables in a single SQLite file with WAL mode:
 | `executions` | Job queue AND execution lifecycle tracker (queued → picked_up → executing → completed/failed/timed_out/crashed/cancelled) |
 | `worker_heartbeats` | Worker liveness tracking |
 | `execution_events` | Structured telemetry events extracted from backend output |
+| `merge_operations` | Merge queue: FIFO queue for worktree branch integration, serialized per target branch |
 
 The `executions` table is the single source of truth for both queuing and execution state — no separate job queue system.
 
@@ -88,12 +89,13 @@ When `orch_dispatch` is called:
 
 On startup:
 
-1. **Crash recovery** — marks orphaned executions (`picked_up`/`executing`) as `crashed`
+1. **Crash recovery** — marks orphaned executions (`picked_up`/`executing`) as `crashed`, marks orphaned merge operations as `failed`, cleans up orphaned merge worktrees
 2. **Initial heartbeat** — writes to `worker_heartbeats` table
 
 Main loop (concurrent via `tokio::select!`):
 
 - **Poll interval** — claims queued executions, enforces per-agent concurrency via SQL, spawns execution tasks with global semaphore
+- **Merge poll interval** — claims queued merge operations, executes in temporary worktrees via `spawn_blocking`, per-target-branch serialization
 - **Heartbeat interval** (10s) — writes liveness record for `orch_health` to check
 
 ## Execution Status Lifecycle
@@ -120,11 +122,12 @@ queued → picked_up → executing → completed
 - **Crash recovery on startup** — worker marks orphaned `picked_up`/`executing` rows as `crashed` on startup, preventing lost work from going unnoticed.
 - **WAL mode mandatory** — SQLite WAL mode enables the two-process model (MCP server + worker) to read/write concurrently without SQLITE_BUSY errors.
 - **200ms DB polling for wait** — `wait_for_message()` polls at 200ms intervals. Exposed via `compas wait` CLI subcommand. Removed from MCP surface (stdio transport timeouts made it unreliable).
-- **Five tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker), `worker_heartbeats` (liveness), `execution_events` (telemetry).
+- **Six tables** — `threads` (lifecycle), `messages` (conversation ledger), `executions` (job queue + execution tracker), `worker_heartbeats` (liveness), `execution_events` (telemetry), `merge_operations` (merge queue).
 - **Retry via store re-enqueue** — failed executions with transient errors are retried by inserting a new queued execution with a `retry_after` timestamp. The poll loop claims retries only when the backoff expires. No synchronous sleep.
 - **Execution telemetry via line-level channel** — backend stdout lines flow through a `sync_channel(128)` from the reader thread to a tokio consumer that parses JSONL and batch-inserts events.
 - **Auto-handoff chains** — config-driven agent-to-agent routing via `on_response`. All agent replies get `response` intent automatically (no agent-side intent parsing). Chain depth is tracked by counting `handoff`-intent messages on the thread. Depth check and handoff insert run in a single SQL transaction to prevent TOCTOU races. Forced operator escalation at `max_chain_depth` (default: 3).
 - **Fan-out via batch-linked threads** — when `on_response` is a list, each target agent gets its own thread, all sharing a batch ID. Operator is the join point; `orch_batch_status` aggregates results. Parallel execution, not same-thread concurrency (ADR-014).
+- **Merge queue with per-target-branch serialization** — merge operations are queued in SQLite, executed in temporary worktrees (never the operator's checkout), serialized per target branch. See ADR-019.
 
 ## Module Structure
 
@@ -145,7 +148,7 @@ src/
 │   ├── mod.rs           #   Config loading + normalization
 │   ├── types.rs         #   Config structs, AgentRole, OrchestrationConfig
 │   └── validation.rs    #   Config validation
-├── mcp/                 # MCP server (17 tools)
+├── mcp/                 # MCP server (22 tools)
 │   ├── mod.rs           #   Module declarations
 │   ├── server.rs        #   OrchestratorMcpServer, #[tool] stubs, ServerHandler
 │   ├── params.rs        #   All parameter structs
@@ -154,10 +157,13 @@ src/
 │   ├── lifecycle.rs     #   orch_close, abandon, reopen
 │   ├── wait.rs          #   wait logic (200ms DB poll, used by CLI wait)
 │   ├── session.rs       #   orch_session_info, orch_list_agents
-│   └── health.rs        #   orch_health, orch_diagnose
+│   ├── health.rs        #   orch_health, orch_diagnose
+│   └── merge.rs         #   orch_merge, orch_merge_status, orch_merge_cancel
 ├── store/               # SQLite store (threads + messages + executions + heartbeats)
 │   └── mod.rs           #   Store with WAL setup, typed enums, all CRUD, claim logic
 ├── worktree.rs          # Git worktree creation, cleanup, and path resolution
+├── merge.rs             # Merge executor, temporary worktree merge, conflict detection
+├── wait_merge.rs        # Blocking poll for merge op terminal status
 ├── events.rs            # EventBus and execution telemetry pipeline
 ├── worker/              # Custom poll-loop worker
 │   ├── mod.rs           #   Re-exports
@@ -181,5 +187,5 @@ src/
 | Circuit breaker (3 failures, 60s cooldown) | Not implemented (planned) |
 | AgentRuntime state machine | Stateless worker (execution-per-trigger) |
 | Session namespace scoping | Scoping by DB file |
-| 24 MCP tools | 17 MCP tools (wait moved to CLI-only) |
+| 24 MCP tools | 22 MCP tools (wait moved to CLI-only) |
 | `daemon run` subcommand | `worker` + `mcp-server` subcommands only |

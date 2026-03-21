@@ -33,7 +33,7 @@ Created: 2026-03-21
 - Verification:
   - Retry integration tests pass with new column name
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket SCHED-2 — Delayed dispatch via orch_dispatch
 
@@ -60,7 +60,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: dispatch with `scheduled_for` 5 seconds in future, verify execution not claimed immediately, verify claimed after delay
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Ticket SCHED-3 — Dashboard and MCP visibility
 
@@ -103,11 +103,19 @@ Created: 2026-03-21
 
 ## Execution Metrics
 
+- Ticket: SCHED-2
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 20:02 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
 - Ticket: SCHED-1
 - Owner: (pending)
 - Complexity: (pending)
 - Risk: (pending)
 - Start: 2026-03-21 19:32 UTC
-- End: (pending)
-- Duration: (pending)
+- End: 2026-03-21 19:36 UTC
+- Duration: 00:04:30
 - Notes: (pending)

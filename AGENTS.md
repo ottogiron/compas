@@ -23,8 +23,9 @@ This is a standalone repository (`ottogiron/compas`).
 - `src/config/*` — orchestrator configuration schema and validation
 - `src/dashboard/*` — TUI dashboard (ratatui)
 - `src/worktree.rs` — git worktree creation, cleanup, and path resolution
+- `src/merge.rs` — merge executor, temporary worktree merge, conflict detection
 - `src/events.rs` — EventBus and execution telemetry pipeline
-- `src/bin/compas.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`)
+- `src/bin/compas.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`, `wait-merge`)
 - `tests/integration_tests.rs` — orchestrator integration tests
 
 ## Build Commands
@@ -109,6 +110,7 @@ If you change a layer, update/review the paired artifacts in the same commit set
 - Backends (`src/backend/*`): backend-specific tests, `README.md`, `CHANGELOG.md`
 - Config (`src/config/*`): validation tests, `README.md`, `CHANGELOG.md`
 - Store/DB (`src/store/*`): migration handling, integration tests, `CHANGELOG.md`
+- Merge executor (`src/merge.rs`): integration tests, `docs/project/DECISIONS.md`, `CHANGELOG.md`
 - ADRs or known-issues updates (`docs/project/DECISIONS.md`, `docs/project/known-issues.md`): `CHANGELOG.md`
 
 ## Development Workflow
@@ -136,7 +138,9 @@ Standard git workflow. Commit, push, PR. See [CONTRIBUTING.md](CONTRIBUTING.md) 
 ## Failure and Recovery Guidance
 
 - Diagnose stuck threads: `orch_diagnose`, `orch_tasks`, `orch_health`
+- Diagnose stuck merges: `orch_merge_status` to check operation state, `orch_merge_cancel` to cancel queued ops
 - Stale state reset: stop processes → remove `<state_dir>/jobs.sqlite*` → restart
+- Stale/orphaned merge ops are auto-marked failed on worker restart (no manual intervention needed)
 
 ## Design Bias
 
