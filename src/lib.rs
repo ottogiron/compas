@@ -11,5 +11,6 @@ pub mod model;
 pub mod notifications;
 pub mod store;
 pub mod wait;
+pub mod wait_merge;
 pub mod worker;
 pub mod worktree;

@@ -12,6 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- CLI: `compas wait-merge --op-id <id>` blocking wait for merge completion (MERGE-6)
 - ADR-019: Merge queue for worktree branch integration — documents FIFO queue model, temporary worktree isolation, per-target-branch serialization, merge timeout (30s), eligible thread statuses, no-push-in-v1 decision, and worktree cleanup guard
 - Config: Added `merge_timeout_secs` (default 30) and `default_merge_strategy` (default "merge") to orchestration config
 - Store: Added `merge_operations` table and store methods for merge queue (MERGE-1)

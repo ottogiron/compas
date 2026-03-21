@@ -264,6 +264,18 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 
 **Exit codes:** `0` = matching message found, `1` = timeout (no match within deadline), `2` = error.
 
+**`compas wait-merge` flags:**
+
+Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_merge`.
+
+| Flag | Description |
+| --- | --- |
+| `--op-id <id>` | Merge operation ID (ULID) to wait on (required) |
+| `--timeout <secs>` | Timeout in seconds (default: 120) |
+| `--config <path>` | Config file path (default: `~/.compas/config.yaml`) |
+
+**Exit codes:** `0` = completed, `1` = failed/cancelled/timeout, `2` = error (including unknown op ID).
+
 ### Core
 
 | Tool | What it does |

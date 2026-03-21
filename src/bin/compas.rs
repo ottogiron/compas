@@ -12,6 +12,7 @@ use compas::backend::opencode::OpenCodeBackend;
 use compas::backend::registry::BackendRegistry;
 use compas::mcp::server::OrchestratorMcpServer;
 use compas::wait::{self, WaitOutcome, WaitRequest};
+use compas::wait_merge::{self, WaitMergeOutcome, WaitMergeRequest};
 use compas::worker::{self, WorkerRunner};
 use rmcp::ServiceExt;
 use std::path::{Path, PathBuf};
@@ -135,6 +136,22 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         await_chain: bool,
     },
+    /// Wait for a merge operation to reach terminal status (reads SQLite directly, no MCP required).
+    ///
+    /// Exits 0 on completed, 1 on failure/cancelled/timeout, 2 on error.
+    /// Output is key=value lines on stdout for easy bash parsing.
+    #[command(name = "wait-merge")]
+    WaitMerge {
+        /// Path to config YAML (default: ~/.compas/config.yaml)
+        #[arg(long)]
+        config: Option<PathBuf>,
+        /// Merge operation ID (ULID) returned by orch_merge
+        #[arg(long)]
+        op_id: String,
+        /// Timeout in seconds (default 120)
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+    },
 }
 
 #[tokio::main]
@@ -243,6 +260,15 @@ async fn main() -> ExitCode {
                 await_chain,
             )
             .await;
+        }
+        Commands::WaitMerge {
+            config,
+            op_id,
+            timeout,
+        } => {
+            let config = effective_config_path(config);
+            // wait-merge outputs key=value to stdout — no tracing there
+            return run_wait_merge(config, op_id, timeout).await;
         }
     }
 
@@ -738,6 +764,82 @@ async fn run_wait(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wait-merge mode
+// ---------------------------------------------------------------------------
+
+async fn run_wait_merge(config_path: PathBuf, op_id: String, timeout: u64) -> ExitCode {
+    let config = match compas::config::load_config(&config_path) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("error: failed to load config: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let db_path = resolve_db_path(&config);
+    let pool = match connect_db(&db_path, &config).await {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error: failed to connect to database: {}", e);
+            return ExitCode::from(2);
+        }
+    };
+    let store = compas::store::Store::new(pool);
+
+    let req = WaitMergeRequest {
+        op_id,
+        timeout: Duration::from_secs(timeout),
+    };
+
+    match wait_merge::wait_for_merge_op(&store, &req).await {
+        Ok(WaitMergeOutcome::Found(op)) => {
+            println!("found=true");
+            println!("op_id={}", op.id);
+            println!("thread_id={}", op.thread_id);
+            println!("status={}", op.status);
+            println!("source_branch={}", op.source_branch);
+            println!("target_branch={}", op.target_branch);
+            if let Some(ms) = op.duration_ms {
+                println!("duration_ms={}", ms);
+            }
+            if let Some(ref files) = op.conflict_files {
+                println!("conflict_files={}", files);
+            }
+            // Body last — may be multiline. Delimited for easy parsing.
+            println!("---BODY---");
+            if op.status == "completed" {
+                if let Some(ref summary) = op.result_summary {
+                    println!("{}", summary);
+                }
+            } else if let Some(ref detail) = op.error_detail {
+                println!("{}", detail);
+            }
+            if op.status == "completed" {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Ok(WaitMergeOutcome::Timeout {
+            op_id,
+            timeout_secs,
+            last_status,
+        }) => {
+            println!("found=false");
+            println!("op_id={}", op_id);
+            println!("timeout_secs={}", timeout_secs);
+            if let Some(status) = last_status {
+                println!("last_status={}", status);
+            }
+            ExitCode::from(1)
+        }
+        Err(e) => {
+            eprintln!("error: {}", e);
+            ExitCode::from(2)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -964,6 +1066,31 @@ mod tests {
                 assert_eq!(config, Some(PathBuf::from("foo.yaml")));
             } else {
                 panic!("expected Wait command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_wait_merge_parses_with_op_id() {
+        let parsed = Cli::try_parse_from([
+            "compas",
+            "wait-merge",
+            "--op-id",
+            "01ABC000000000000000000000",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::WaitMerge {
+                op_id,
+                timeout,
+                config,
+            } = cli.command
+            {
+                assert_eq!(op_id, "01ABC000000000000000000000");
+                assert_eq!(timeout, 120); // default
+                assert!(config.is_none());
+            } else {
+                panic!("expected WaitMerge command");
             }
         }
     }
