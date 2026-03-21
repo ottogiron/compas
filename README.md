@@ -6,7 +6,7 @@ Multi-agent orchestrator for AI-assisted software development. Dispatch tasks to
 
 Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — point it at any repository.
 
-> **Pre-v1 — expect breaking changes.** Configuration format, MCP tool contracts, and CLI flags may change between minor versions. Pin to a specific version if stability matters to you.
+> **Pre-v1 — expect breaking changes.** Configuration format, MCP tool contracts, and CLI flags may change between minor versions. Always install from a [tagged release](https://github.com/ottogiron/compas/tags).
 
 ![Compas dashboard showing active threads and executions](docs/images/dashboard-ops.png)
 
@@ -35,16 +35,36 @@ Then run
 
 ```bash
 # you will be asked for github authentication in this step
-cargo install --git https://github.com/ottogiron/compas
+cargo install --git https://github.com/ottogiron/compas --tag v0.2.0
 ```
 
-This puts `compas` on your PATH. Or build from source:
+This installs a stable release and puts `compas` on your PATH.
+
+> **Pinning:** Always install from a tagged release. The `main` branch is under active development and may contain incomplete features. Check the [CHANGELOG](CHANGELOG.md) for the latest version.
+
+Or build from source:
 
 ```bash
 git clone git@github.com:ottogiron/compas.git
 cd compas
+git checkout v0.2.0   # or the latest tag
 cargo build --release
 # Binary at target/release/compas — add to PATH or use the full path below
+```
+
+### Upgrading
+
+```bash
+cargo install --git https://github.com/ottogiron/compas --tag <new-version> --force
+```
+
+After upgrading, run `compas doctor` to verify your setup is compatible with the new version. Check the [CHANGELOG](CHANGELOG.md) for breaking changes between versions.
+
+### Uninstalling
+
+```bash
+cargo uninstall compas
+rm -rf ~/.compas          # remove config and state
 ```
 
 ## Quick Start

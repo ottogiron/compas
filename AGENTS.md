@@ -90,6 +90,15 @@ The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only
 3. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test` + `lint-md`). **Do not push if this fails.**
 4. Push to remote after verification passes
 
+## Release Checklist
+
+When tagging a new release:
+
+1. Update the version in `Cargo.toml`
+2. Move `[Unreleased]` entries in `CHANGELOG.md` under the new version heading
+3. Update the install tag in `README.md` (`--tag vX.Y.Z` in both the install and build-from-source commands)
+4. Commit, tag (`git tag vX.Y.Z`), push with tags (`git push origin main --tags`)
+
 ## Impact Update Matrix
 
 If you change a layer, update/review the paired artifacts in the same commit set.
