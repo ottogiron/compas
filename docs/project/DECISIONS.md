@@ -386,7 +386,7 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **Decision:** The worker evaluates `schedules` from config on a 60-second interval. Each schedule defines a `name`, `agent`, `cron` expression, `body`, optional `batch`, `max_runs` safety cap, and `enabled` flag. When a schedule is due (its cron expression indicates a fire since the last recorded fire), the worker inserts a dispatch message (`from: 'scheduler'`, `intent: 'dispatch'`) targeting the configured agent. The existing trigger loop picks up the message and creates an execution as normal — no new execution path is introduced.
 
-**Dedup / durability:** A `schedule_runs` SQLite table (`schedule_name TEXT PRIMARY KEY, last_fired_at INTEGER, run_count INTEGER`) tracks last-fire times durably. On worker startup, the cache is populated from this table to avoid double-fires after restarts. In-memory and DB state are updated atomically after each successful dispatch insertion.
+**Dedup / durability:** A `schedule_runs` SQLite table (`schedule_name TEXT PRIMARY KEY, last_fired_at INTEGER, run_count INTEGER`) tracks last-fire times durably. On worker startup, the cache is populated from this table to avoid double-fires after restarts. After a successful dispatch message insertion, the DB is updated first, then the in-memory cache. If the DB write fails, the cache is still updated (to prevent in-process duplicate fires) but a warning is logged that a restart would cause a double-fire. The two writes are not atomic — this is an acceptable trade-off since schedule dispatch is idempotent at the agent level.
 
 **Key choices:**
 
