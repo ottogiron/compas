@@ -23,7 +23,9 @@ use ratatui::{
 use crate::config::types::{AgentConfig, AgentRole};
 use crate::dashboard::app::App;
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
+use crate::dashboard::views::{
+    format_cost_usd, format_duration_ms, format_tokens, humanize_exec_status,
+};
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -130,6 +132,13 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
     };
     let model_label = agent.model.as_deref().unwrap_or("-");
 
+    // ── Cost/token lookup for this agent ─────────────────────────────────────
+    let agent_cost = app.agents_data.as_ref().and_then(|d| {
+        d.cost_by_agent
+            .iter()
+            .find(|c| c.agent_alias == agent.alias)
+    });
+
     // ── Assemble card lines ───────────────────────────────────────────────────
     let mut lines: Vec<Line> = vec![
         // Row 1: config summary
@@ -153,7 +162,27 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         ]),
     ];
 
-    // Rows 3+: recent execution summaries (up to 3)
+    // Row 3 (optional): cost / token summary
+    if let Some(cost) = agent_cost {
+        let has_cost = cost.total_cost_usd > 0.0;
+        let has_tokens = cost.total_tokens_in > 0 || cost.total_tokens_out > 0;
+        if has_cost || has_tokens {
+            let mut cost_spans: Vec<Span<'static>> = vec![Span::from("  ")];
+            if has_cost {
+                cost_spans.push(format_cost_usd(cost.total_cost_usd).fg(TEXT_BRIGHT).bold());
+                cost_spans.push("  │  ".fg(BORDER_DIM));
+            }
+            if has_tokens {
+                cost_spans.push(format_tokens(cost.total_tokens_in).fg(TEXT_BRIGHT));
+                cost_spans.push(" in  │  ".fg(BORDER_DIM));
+                cost_spans.push(format_tokens(cost.total_tokens_out).fg(TEXT_BRIGHT));
+                cost_spans.push(" out".fg(TEXT_DIM));
+            }
+            lines.push(Line::from(cost_spans));
+        }
+    }
+
+    // Rows 4+: recent execution summaries (up to 3)
     lines.extend(recent_lines);
 
     ListItem::new(lines)

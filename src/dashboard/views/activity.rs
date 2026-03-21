@@ -19,7 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::dashboard::app::{ActivityData, App};
 use crate::dashboard::theme;
 use crate::dashboard::views::{
-    format_duration_ms, format_duration_secs, humanize_exec_status, humanize_thread_status,
+    format_cost_usd, format_duration_ms, format_duration_secs, format_tokens, humanize_exec_status,
+    humanize_thread_status,
 };
 use crate::store::ThreadStatusView;
 
@@ -323,7 +324,7 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
         Span::styled(format!("{}  ", n), Style::new().fg(theme::TEXT_BRIGHT))
     };
 
-    Line::from(vec![
+    let mut spans: Vec<Span<'static>> = vec![
         Span::raw(" "),
         label("Active: ", theme::ACCENT),
         val(active),
@@ -338,7 +339,36 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
             format!("{}", data.queue_depth),
             Style::new().fg(theme::TEXT_BRIGHT),
         ),
-    ])
+    ];
+
+    if let Some(cost) = &data.cost_summary {
+        if cost.total_cost_usd > 0.0 || cost.total_tokens_in > 0 {
+            spans.push(Span::styled(
+                "  │  ".to_string(),
+                Style::new().fg(theme::BORDER_DIM),
+            ));
+            spans.push(label("Cost: ", theme::TEXT_MUTED));
+            spans.push(Span::styled(
+                format_cost_usd(cost.total_cost_usd),
+                Style::new().fg(theme::TEXT_BRIGHT),
+            ));
+            spans.push(Span::styled(
+                "  ".to_string(),
+                Style::new().fg(theme::TEXT_BRIGHT),
+            ));
+            spans.push(label("Tok: ", theme::TEXT_MUTED));
+            spans.push(Span::styled(
+                format!(
+                    "{}/{}",
+                    format_tokens(cost.total_tokens_in),
+                    format_tokens(cost.total_tokens_out)
+                ),
+                Style::new().fg(theme::TEXT_BRIGHT),
+            ));
+        }
+    }
+
+    Line::from(spans)
 }
 
 pub fn render_activity(f: &mut Frame, app: &App, area: Rect) {
@@ -1267,6 +1297,7 @@ mod tests {
             queue_depth: 0,
             heartbeat: None,
             fetched_at: std::time::Instant::now(),
+            cost_summary: None,
         };
 
         let (active, failed, completed, stale) = footer_counts(&data, 1000, 300);

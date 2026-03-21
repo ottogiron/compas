@@ -40,7 +40,7 @@ use crate::dashboard::views::conversation::{render_conversation, ConversationVie
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::events::{EventBus, OrchestratorEvent};
-use crate::store::{ExecutionRow, Store, ThreadStatusView};
+use crate::store::{AgentCostSummary, CostSummary, ExecutionRow, Store, ThreadStatusView};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -72,6 +72,8 @@ pub struct ActivityData {
     pub heartbeat: Option<(String, i64, i64, Option<String>)>,
     /// When this snapshot was fetched (used for staleness checks).
     pub fetched_at: Instant,
+    /// Aggregated cost and token totals from all executions.
+    pub cost_summary: Option<CostSummary>,
 }
 
 // ── Agents data ───────────────────────────────────────────────────────────────
@@ -92,6 +94,8 @@ pub struct AgentsData {
     pub heartbeat_age_secs: Option<u64>,
     /// When this snapshot was fetched (used for staleness checks).
     pub fetched_at: Instant,
+    /// Per-agent cost and token breakdown.
+    pub cost_by_agent: Vec<AgentCostSummary>,
 }
 
 // ── Executions data ───────────────────────────────────────────────────────────
@@ -292,6 +296,7 @@ impl App {
                 let thread_counts = store.thread_counts().await?;
                 let queue_depth = store.queue_depth().await.unwrap_or(0);
                 let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
+                let cost = store.cost_summary(None).await.ok();
 
                 Ok::<_, sqlx::Error>(ActivityData {
                     rows,
@@ -299,6 +304,7 @@ impl App {
                     queue_depth,
                     heartbeat,
                     fetched_at: Instant::now(),
+                    cost_summary: cost,
                 })
             })
             .await
@@ -464,11 +470,14 @@ impl App {
                     executions_by_agent.push((alias.clone(), summaries));
                 }
 
+                let cost_by_agent = store.cost_by_agent().await.unwrap_or_default();
+
                 Ok::<_, sqlx::Error>(AgentsData {
                     executions_by_agent,
                     active_counts,
                     heartbeat_age_secs,
                     fetched_at: Instant::now(),
+                    cost_by_agent,
                 })
             })
             .await
