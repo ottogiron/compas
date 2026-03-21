@@ -179,6 +179,14 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         ));
     }
 
+    const VALID_MERGE_STRATEGIES: &[&str] = &["merge", "rebase", "squash"];
+    if !VALID_MERGE_STRATEGIES.contains(&config.orchestration.default_merge_strategy.as_str()) {
+        return Err(OrchestratorError::Config(format!(
+            "orchestration.default_merge_strategy must be \"merge\", \"rebase\", or \"squash\", got \"{}\"",
+            config.orchestration.default_merge_strategy
+        )));
+    }
+
     // ORCHV3-15: ensure state_dir is writable (create if needed)
     if !config.state_dir.exists() {
         std::fs::create_dir_all(&config.state_dir).map_err(|e| {
@@ -1461,5 +1469,49 @@ backend_definitions:
         );
         assert!(defs[0].output.result_field.is_none());
         assert!(defs[0].output.session_id_field.is_none());
+    }
+
+    // ── Merge config validation tests (MERGE-7) ──
+
+    #[test]
+    fn test_config_merge_fields_default_when_absent() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.orchestration.merge_timeout_secs, 30);
+        assert_eq!(config.orchestration.default_merge_strategy, "merge");
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_config_merge_fields_explicit_values_round_trip() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+orchestration:
+  merge_timeout_secs: 60
+  default_merge_strategy: rebase
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.orchestration.merge_timeout_secs, 60);
+        assert_eq!(config.orchestration.default_merge_strategy, "rebase");
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_config_merge_strategy_invalid_rejected() {
+        let mut config = minimal_config();
+        config.orchestration.default_merge_strategy = "bogus".into();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("default_merge_strategy must be"));
+        assert!(err.to_string().contains("bogus"));
     }
 }

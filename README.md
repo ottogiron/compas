@@ -322,6 +322,8 @@ orchestration:
   ping_timeout_secs: 15                # Backend health check timeout
   ping_cache_ttl_secs: 60              # TTL for cached ping results (default: 60)
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
+  # merge_timeout_secs: 30         # Timeout for merge operations (default: 30)
+  # default_merge_strategy: merge  # Merge strategy: "merge", "rebase", or "squash"
 
 database:                              # SQLite connection pool (requires restart to change)
   max_connections: 32
