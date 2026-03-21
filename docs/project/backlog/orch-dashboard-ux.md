@@ -44,6 +44,7 @@ Created: 2026-03-21
 - Implementation by compas-dev, reviewed by compas-reviewer
 
 ## Execution Metrics
+
 - Ticket: DASH-UX-1
 - Owner: (pending)
 - Complexity: (pending)
@@ -52,5 +53,3 @@ Created: 2026-03-21
 - End: 2026-03-21 18:05 UTC
 - Duration: 00:01:06
 - Notes: (pending)
-
-

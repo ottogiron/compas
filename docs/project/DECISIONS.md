@@ -328,7 +328,6 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **Phase 2 deferred:** `on_thread_abandoned`, `on_execution_retrying`, blocking/interceptor hooks, per-hook `workdir` override.
 
-
 ## ADR-021: Filter noisy telemetry events from progress display
 
 **Date:** 2026-03
