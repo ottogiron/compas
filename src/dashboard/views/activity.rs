@@ -477,10 +477,18 @@ fn render_ops_list(
                 if is_running_now(row) {
                     if let Some(exec_id) = &row.execution_id {
                         if let Some(summary) = app.get_progress_summary(exec_id) {
-                            let truncated = super::truncate(summary, 50);
+                            let avail = list_width
+                                .saturating_sub(DETAIL_PREFIX_LEN)
+                                .saturating_sub(HINT_SUFFIX_LEN);
+                            let truncated = super::truncate(summary, avail);
+                            let padded = if is_selected {
+                                format!("{:<width$}", truncated, width = avail)
+                            } else {
+                                truncated.to_string()
+                            };
                             let mut spans = vec![
                                 Span::raw("     └ "),
-                                Span::styled(truncated, Style::default().fg(theme::TEXT_DIM)),
+                                Span::styled(padded, Style::default().fg(theme::TEXT_DIM)),
                             ];
                             if is_selected {
                                 spans.push(Span::styled(
@@ -495,13 +503,13 @@ fn render_ops_list(
                             }
                             lines.push(Line::from(spans));
                         } else if is_selected {
-                            lines.push(make_thread_detail_line(row));
+                            lines.push(make_thread_detail_line(row, list_width));
                         }
                     } else if is_selected {
-                        lines.push(make_thread_detail_line(row));
+                        lines.push(make_thread_detail_line(row, list_width));
                     }
                 } else if is_selected {
-                    lines.push(make_thread_detail_line(row));
+                    lines.push(make_thread_detail_line(row, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -557,7 +565,7 @@ fn render_ops_list(
                 sel_to_row.push(items.len());
                 let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
                 if is_selected {
-                    lines.push(make_thread_detail_line(row));
+                    lines.push(make_thread_detail_line(row, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -584,7 +592,7 @@ fn render_ops_list(
                 sel_to_row.push(items.len());
                 let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
                 if is_selected {
-                    lines.push(make_thread_detail_line(row));
+                    lines.push(make_thread_detail_line(row, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -610,7 +618,7 @@ fn render_ops_list(
             sel_to_row.push(items.len());
             let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
             if is_selected {
-                lines.push(make_thread_detail_line(row));
+                lines.push(make_thread_detail_line(row, list_width));
             }
             items.push(ListItem::new(lines));
             selectable_slot += 1;
@@ -681,14 +689,23 @@ fn render_ops_list(
     );
 }
 
-fn make_thread_detail_line(row: &ThreadStatusView) -> Line<'static> {
+/// The `[c] conversation` hint occupies a fixed-width suffix so it stays
+/// visually stable as the selection moves across rows with varying text.
+const DETAIL_PREFIX_LEN: usize = 7; // "     └─ "
+const HINT_SUFFIX_LEN: usize = 20; // " │ [c] conversation"
+
+fn make_thread_detail_line(row: &ThreadStatusView, list_width: usize) -> Line<'static> {
     let detail = row
         .summary
         .as_deref()
         .unwrap_or_else(|| row.parsed_intent.as_deref().unwrap_or("-"));
+    let avail = list_width
+        .saturating_sub(DETAIL_PREFIX_LEN)
+        .saturating_sub(HINT_SUFFIX_LEN);
+    let padded = format!("{:<width$}", super::truncate(detail, avail), width = avail);
     Line::from(vec![
         Span::raw("     \u{2514}\u{2500} "),
-        Span::styled(detail.to_string(), Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(padded, Style::default().fg(theme::TEXT_DIM)),
         Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
         Span::styled("[c]", Style::default().fg(theme::ACCENT)),
         Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),

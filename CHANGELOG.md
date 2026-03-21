@@ -9,10 +9,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - Worktree handoff bug: non-worktree agents on the same thread now inherit the thread's worktree path when targeting the same repo, so reviewers see the dev agent's changes instead of the unchanged main repo. `workspace: shared` explicitly opts out of inheritance.
+- Conversation view: code block closing brace no longer merges with the next content element
+- Conversation view: ordered (numbered) lists now render as `1. 2. 3.` instead of bullets
 
 ### Changed
 
 - Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored). Operators with existing worktrees at the old location should run `git worktree prune`.
+- Conversation view: code blocks now have 2-space indent and subtle card background for visual distinction
+- Conversation view: heading levels have distinct visual weight (H1 accent, H2 bright, H3+ normal)
+- `[c]` conversation shortcut now works from History tab and batch drill views, not just Ops
 - Shortened thread IDs in Ops view (show last 8 chars wide / 6 narrow instead of first 16)
 - Added column separators between agent, summary, and batch columns
 - Progress summary now shows tool names instead of raw API IDs

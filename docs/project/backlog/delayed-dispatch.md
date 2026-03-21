@@ -102,6 +102,7 @@ Created: 2026-03-21
 - Phase 3 (agent-initiated scheduling) explicitly deferred per architect recommendation.
 
 ## Execution Metrics
+
 - Ticket: SCHED-1
 - Owner: (pending)
 - Complexity: (pending)
@@ -110,5 +111,3 @@ Created: 2026-03-21
 - End: (pending)
 - Duration: (pending)
 - Notes: (pending)
-
-
