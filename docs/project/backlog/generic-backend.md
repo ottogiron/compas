@@ -94,7 +94,7 @@ Created: 2026-03-21
   - Integration test: config with generic backend + stub command
   - Manual: define a generic backend, dispatch work to it
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -111,6 +111,15 @@ Created: 2026-03-21
 - GBE and HOOKS backlogs are fully independent — can be developed in parallel.
 
 ## Execution Metrics
+
+- Ticket: GBE-3
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 17:11 UTC
+- End: 2026-03-21 17:14 UTC
+- Duration: 00:03:38
+- Notes: (pending)
 
 - Ticket: GBE-2
 - Owner: (pending)

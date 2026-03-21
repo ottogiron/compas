@@ -88,7 +88,7 @@ Created: 2026-03-21
 - Verification:
   - Manual: configure a hook, trigger an execution, verify hook fires
   - `make verify`
-- Status: Todo
+- Status: In Progress
 
 ## Execution Order
 
@@ -106,6 +106,15 @@ Created: 2026-03-21
 - Phase 2 extensions (deferred): `on_thread_abandoned`, `on_execution_retrying`, blocking hooks, per-hook `workdir` override.
 
 ## Execution Metrics
+
+- Ticket: HOOKS-3
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-21 17:11 UTC
+- End: (pending)
+- Duration: (pending)
+- Notes: (pending)
 
 - Ticket: HOOKS-2
 - Owner: (pending)
