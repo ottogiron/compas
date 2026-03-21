@@ -203,6 +203,35 @@ pub struct ReplyAndFanoutParams<'a> {
     pub handoff_body: &'a str,
 }
 
+/// Per-tool call statistics aggregated from execution_events.
+#[derive(Debug, Clone)]
+pub struct ToolCallStat {
+    pub tool_name: String,
+    pub call_count: i64,
+    pub error_count: i64,
+    pub error_rate: f64,
+}
+
+/// Summary of execution costs and token usage.
+#[derive(Debug, Clone)]
+pub struct CostSummary {
+    pub total_cost_usd: f64,
+    pub avg_cost_usd: f64,
+    pub total_tokens_in: i64,
+    pub total_tokens_out: i64,
+    pub execution_count: i64,
+}
+
+/// Per-agent cost and token breakdown.
+#[derive(Debug, Clone)]
+pub struct AgentCostSummary {
+    pub agent_alias: String,
+    pub total_cost_usd: f64,
+    pub total_tokens_in: i64,
+    pub total_tokens_out: i64,
+    pub execution_count: i64,
+}
+
 // ── Store ────────────────────────────────────────────────────────────────────
 
 /// Store wraps the shared SQLite pool.
@@ -1936,6 +1965,232 @@ impl Store {
         .await?;
         Ok(result.rows_affected())
     }
+
+    // ── Observability aggregates ──────────────────────────────────────────
+
+    /// Count tool_call events grouped by tool_name.
+    /// Optional agent_alias filter via join to executions.
+    ///
+    /// Note: `error_count` and `error_rate` in returned `ToolCallStat` are always 0.
+    /// Use [`Store::tool_error_rates`] to get per-tool error rates.
+    pub async fn tool_call_counts(
+        &self,
+        agent_alias: Option<&str>,
+    ) -> Result<Vec<ToolCallStat>, sqlx::Error> {
+        let rows: Vec<(String, i64)> = if let Some(alias) = agent_alias {
+            sqlx::query_as(
+                "SELECT ee.tool_name, COUNT(*) as call_count
+                 FROM execution_events ee
+                 JOIN executions e ON ee.execution_id = e.id
+                 WHERE ee.event_type = 'tool_call' AND ee.tool_name IS NOT NULL
+                   AND e.agent_alias = ?
+                 GROUP BY ee.tool_name
+                 ORDER BY call_count DESC",
+            )
+            .bind(alias)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT tool_name, COUNT(*) as call_count
+                 FROM execution_events
+                 WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+                 GROUP BY tool_name
+                 ORDER BY call_count DESC",
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|(tool_name, call_count)| ToolCallStat {
+                tool_name,
+                call_count,
+                error_count: 0,
+                error_rate: 0.0,
+            })
+            .collect())
+    }
+
+    /// Per-tool error rate from tool_result events.
+    /// Degrades gracefully to zero error counts when tool_result events have no tool_name.
+    pub async fn tool_error_rates(
+        &self,
+        agent_alias: Option<&str>,
+    ) -> Result<Vec<ToolCallStat>, sqlx::Error> {
+        let rows: Vec<(String, i64, i64)> = if let Some(alias) = agent_alias {
+            sqlx::query_as(
+                "SELECT
+                    tc.tool_name,
+                    tc.call_count,
+                    COALESCE(tr.error_count, 0) as error_count
+                 FROM (
+                     SELECT ee.tool_name, COUNT(*) as call_count
+                     FROM execution_events ee
+                     JOIN executions e ON ee.execution_id = e.id
+                     WHERE ee.event_type = 'tool_call' AND ee.tool_name IS NOT NULL
+                       AND e.agent_alias = ?
+                     GROUP BY ee.tool_name
+                 ) tc
+                 LEFT JOIN (
+                     SELECT ee.tool_name, COUNT(*) as error_count
+                     FROM execution_events ee
+                     JOIN executions e ON ee.execution_id = e.id
+                     WHERE ee.event_type = 'tool_result' AND ee.tool_name IS NOT NULL
+                       AND e.agent_alias = ?
+                       AND (lower(ee.summary) LIKE '%error%' OR lower(ee.summary) LIKE '%fail%')
+                     GROUP BY ee.tool_name
+                 ) tr ON tc.tool_name = tr.tool_name
+                 ORDER BY tc.call_count DESC",
+            )
+            .bind(alias)
+            .bind(alias)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query_as(
+                "SELECT
+                    tc.tool_name,
+                    tc.call_count,
+                    COALESCE(tr.error_count, 0) as error_count
+                 FROM (
+                     SELECT tool_name, COUNT(*) as call_count
+                     FROM execution_events
+                     WHERE event_type = 'tool_call' AND tool_name IS NOT NULL
+                     GROUP BY tool_name
+                 ) tc
+                 LEFT JOIN (
+                     SELECT tool_name, COUNT(*) as error_count
+                     FROM execution_events
+                     WHERE event_type = 'tool_result' AND tool_name IS NOT NULL
+                       AND (lower(summary) LIKE '%error%' OR lower(summary) LIKE '%fail%')
+                     GROUP BY tool_name
+                 ) tr ON tc.tool_name = tr.tool_name
+                 ORDER BY tc.call_count DESC",
+            )
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        Ok(rows
+            .into_iter()
+            .map(|(tool_name, call_count, error_count)| ToolCallStat {
+                error_rate: if call_count > 0 {
+                    error_count as f64 / call_count as f64
+                } else {
+                    0.0
+                },
+                tool_name,
+                call_count,
+                error_count,
+            })
+            .collect())
+    }
+
+    /// Tool usage breakdown by agent: (agent_alias, tool_name, count).
+    pub async fn tool_usage_by_agent(&self) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT e.agent_alias, ee.tool_name, COUNT(*) as count
+             FROM execution_events ee
+             JOIN executions e ON ee.execution_id = e.id
+             WHERE ee.event_type = 'tool_call' AND ee.tool_name IS NOT NULL
+             GROUP BY e.agent_alias, ee.tool_name
+             ORDER BY e.agent_alias ASC, count DESC",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
+    /// Aggregate cost and token summary across executions.
+    /// NULL cost_usd (Codex/Gemini) is treated as 0 for sum; excluded from avg.
+    ///
+    /// `execution_count` includes all lifecycle states (queued, executing, completed,
+    /// failed, etc.) — not just completed executions. Consumers should not use it as
+    /// a "successful run count".
+    pub async fn cost_summary(
+        &self,
+        agent_alias: Option<&str>,
+    ) -> Result<CostSummary, sqlx::Error> {
+        let row: (Option<f64>, Option<f64>, Option<i64>, Option<i64>, i64) =
+            if let Some(alias) = agent_alias {
+                sqlx::query_as(
+                    "SELECT
+                        SUM(cost_usd),
+                        AVG(cost_usd),
+                        SUM(tokens_in),
+                        SUM(tokens_out),
+                        COUNT(*)
+                     FROM executions
+                     WHERE agent_alias = ?",
+                )
+                .bind(alias)
+                .fetch_one(&self.pool)
+                .await?
+            } else {
+                sqlx::query_as(
+                    "SELECT
+                        SUM(cost_usd),
+                        AVG(cost_usd),
+                        SUM(tokens_in),
+                        SUM(tokens_out),
+                        COUNT(*)
+                     FROM executions",
+                )
+                .fetch_one(&self.pool)
+                .await?
+            };
+
+        Ok(CostSummary {
+            total_cost_usd: row.0.unwrap_or(0.0),
+            avg_cost_usd: row.1.unwrap_or(0.0),
+            total_tokens_in: row.2.unwrap_or(0),
+            total_tokens_out: row.3.unwrap_or(0),
+            execution_count: row.4,
+        })
+    }
+
+    /// Cost and token breakdown per agent.
+    ///
+    /// `execution_count` includes all lifecycle states, not just completed executions.
+    /// Ordered by `SUM(cost_usd) DESC`; agents with NULL cost (Codex/Gemini) sort last
+    /// because SQLite treats NULL as less than any non-NULL value in DESC ordering.
+    pub async fn cost_by_agent(&self) -> Result<Vec<AgentCostSummary>, sqlx::Error> {
+        let rows: Vec<(String, Option<f64>, Option<i64>, Option<i64>, i64)> = sqlx::query_as(
+            "SELECT
+                agent_alias,
+                SUM(cost_usd),
+                SUM(tokens_in),
+                SUM(tokens_out),
+                COUNT(*)
+             FROM executions
+             GROUP BY agent_alias
+             ORDER BY SUM(cost_usd) DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    agent_alias,
+                    total_cost_usd,
+                    total_tokens_in,
+                    total_tokens_out,
+                    execution_count,
+                )| {
+                    AgentCostSummary {
+                        agent_alias,
+                        total_cost_usd: total_cost_usd.unwrap_or(0.0),
+                        total_tokens_in: total_tokens_in.unwrap_or(0),
+                        total_tokens_out: total_tokens_out.unwrap_or(0),
+                        execution_count,
+                    }
+                },
+            )
+            .collect())
+    }
 }
 
 /// Combined thread + execution view.
@@ -2752,5 +3007,620 @@ mod tests {
             .expect("should have a latest event");
         assert_eq!(latest.event_type, "turn_complete");
         assert!(latest.tool_name.is_none());
+    }
+
+    // ── OBS-02: observability aggregate tests ────────────────────────────
+
+    #[tokio::test]
+    async fn test_tool_call_counts_empty() {
+        let store = test_store().await;
+        let stats = store.tool_call_counts(None).await.unwrap();
+        assert!(stats.is_empty(), "empty table should return empty vec");
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_counts_basic() {
+        let store = test_store().await;
+        store.ensure_thread("t-tc-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-tc-1", "focused").await.unwrap();
+
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write file".to_string(),
+                detail: None,
+                timestamp_ms: 1000,
+                event_index: 0,
+                tool_name: Some("Write".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Read file".to_string(),
+                detail: None,
+                timestamp_ms: 1001,
+                event_index: 1,
+                tool_name: Some("Read".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write file again".to_string(),
+                detail: None,
+                timestamp_ms: 1002,
+                event_index: 2,
+                tool_name: Some("Write".to_string()),
+            },
+        ];
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        let stats = store.tool_call_counts(None).await.unwrap();
+        assert_eq!(stats.len(), 2);
+
+        // Write has 2 calls, Read has 1; ordered by count DESC
+        let write_stat = stats.iter().find(|s| s.tool_name == "Write").unwrap();
+        assert_eq!(write_stat.call_count, 2);
+        assert_eq!(write_stat.error_count, 0);
+        assert_eq!(write_stat.error_rate, 0.0);
+
+        let read_stat = stats.iter().find(|s| s.tool_name == "Read").unwrap();
+        assert_eq!(read_stat.call_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_tool_call_counts_agent_filter() {
+        let store = test_store().await;
+        store.ensure_thread("t-tc-2", None).await.unwrap();
+        store.ensure_thread("t-tc-3", None).await.unwrap();
+
+        let exec_focused = store.insert_execution("t-tc-2", "focused").await.unwrap();
+        let exec_spark = store.insert_execution("t-tc-3", "spark").await.unwrap();
+
+        let events_focused = vec![crate::backend::ExecutionEvent {
+            event_type: "tool_call".to_string(),
+            summary: "Grep".to_string(),
+            detail: None,
+            timestamp_ms: 2000,
+            event_index: 0,
+            tool_name: Some("Grep".to_string()),
+        }];
+        let events_spark = vec![crate::backend::ExecutionEvent {
+            event_type: "tool_call".to_string(),
+            summary: "Read".to_string(),
+            detail: None,
+            timestamp_ms: 2001,
+            event_index: 0,
+            tool_name: Some("Read".to_string()),
+        }];
+
+        store
+            .insert_execution_events(&exec_focused, &events_focused)
+            .await
+            .unwrap();
+        store
+            .insert_execution_events(&exec_spark, &events_spark)
+            .await
+            .unwrap();
+
+        // Filter for "focused" only
+        let stats = store.tool_call_counts(Some("focused")).await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].tool_name, "Grep");
+
+        // Filter for "spark" only
+        let stats = store.tool_call_counts(Some("spark")).await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].tool_name, "Read");
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_rates_empty() {
+        let store = test_store().await;
+        let stats = store.tool_error_rates(None).await.unwrap();
+        assert!(stats.is_empty(), "empty table should return empty vec");
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_rates_no_tool_result_name() {
+        // When tool_result events have NULL tool_name (Claude behavior),
+        // error_count should degrade gracefully to 0.
+        let store = test_store().await;
+        store.ensure_thread("t-er-1", None).await.unwrap();
+        let exec_id = store.insert_execution("t-er-1", "focused").await.unwrap();
+
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write file".to_string(),
+                detail: None,
+                timestamp_ms: 3000,
+                event_index: 0,
+                tool_name: Some("Write".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "error: permission denied".to_string(),
+                detail: None,
+                timestamp_ms: 3001,
+                event_index: 1,
+                tool_name: None, // Claude doesn't populate tool_name on tool_result
+            },
+        ];
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        let stats = store.tool_error_rates(None).await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].tool_name, "Write");
+        assert_eq!(stats[0].call_count, 1);
+        // error_count is 0 because tool_result has NULL tool_name
+        assert_eq!(stats[0].error_count, 0);
+        assert_eq!(stats[0].error_rate, 0.0);
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_rates_with_tool_name_on_result() {
+        // When tool_result events DO have tool_name and contain error keywords,
+        // error_count is populated and error_rate is computed.
+        let store = test_store().await;
+        store.ensure_thread("t-er-2", None).await.unwrap();
+        let exec_id = store.insert_execution("t-er-2", "focused").await.unwrap();
+
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Bash cmd".to_string(),
+                detail: None,
+                timestamp_ms: 4000,
+                event_index: 0,
+                tool_name: Some("Bash".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Bash cmd 2".to_string(),
+                detail: None,
+                timestamp_ms: 4001,
+                event_index: 1,
+                tool_name: Some("Bash".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "error: command not found".to_string(),
+                detail: None,
+                timestamp_ms: 4002,
+                event_index: 2,
+                tool_name: Some("Bash".to_string()),
+            },
+        ];
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        let stats = store.tool_error_rates(None).await.unwrap();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].tool_name, "Bash");
+        assert_eq!(stats[0].call_count, 2);
+        assert_eq!(stats[0].error_count, 1);
+        // 1 error out of 2 calls = 0.5
+        assert!((stats[0].error_rate - 0.5).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn test_tool_usage_by_agent_empty() {
+        let store = test_store().await;
+        let rows = store.tool_usage_by_agent().await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tool_usage_by_agent_basic() {
+        let store = test_store().await;
+        store.ensure_thread("t-ua-1", None).await.unwrap();
+        store.ensure_thread("t-ua-2", None).await.unwrap();
+
+        let exec_focused = store.insert_execution("t-ua-1", "focused").await.unwrap();
+        let exec_spark = store.insert_execution("t-ua-2", "spark").await.unwrap();
+
+        let events_focused = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write".to_string(),
+                detail: None,
+                timestamp_ms: 5000,
+                event_index: 0,
+                tool_name: Some("Write".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write again".to_string(),
+                detail: None,
+                timestamp_ms: 5001,
+                event_index: 1,
+                tool_name: Some("Write".to_string()),
+            },
+        ];
+        let events_spark = vec![crate::backend::ExecutionEvent {
+            event_type: "tool_call".to_string(),
+            summary: "Read".to_string(),
+            detail: None,
+            timestamp_ms: 5002,
+            event_index: 0,
+            tool_name: Some("Read".to_string()),
+        }];
+
+        store
+            .insert_execution_events(&exec_focused, &events_focused)
+            .await
+            .unwrap();
+        store
+            .insert_execution_events(&exec_spark, &events_spark)
+            .await
+            .unwrap();
+
+        let rows = store.tool_usage_by_agent().await.unwrap();
+        assert_eq!(rows.len(), 2);
+
+        // focused/Write: 2 calls
+        let focused_row = rows
+            .iter()
+            .find(|r| r.0 == "focused" && r.1 == "Write")
+            .unwrap();
+        assert_eq!(focused_row.2, 2);
+
+        // spark/Read: 1 call
+        let spark_row = rows
+            .iter()
+            .find(|r| r.0 == "spark" && r.1 == "Read")
+            .unwrap();
+        assert_eq!(spark_row.2, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cost_summary_empty() {
+        let store = test_store().await;
+        let summary = store.cost_summary(None).await.unwrap();
+        assert_eq!(summary.total_cost_usd, 0.0);
+        assert_eq!(summary.avg_cost_usd, 0.0);
+        assert_eq!(summary.total_tokens_in, 0);
+        assert_eq!(summary.total_tokens_out, 0);
+        assert_eq!(summary.execution_count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_cost_summary_basic() {
+        let store = test_store().await;
+        store.ensure_thread("t-cs-1", None).await.unwrap();
+        store.ensure_thread("t-cs-2", None).await.unwrap();
+
+        // Execution 1: focused, cost=0.10, tokens_in=1000, tokens_out=500
+        let exec1 = store.insert_execution("t-cs-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec1).await.unwrap();
+        store
+            .complete_execution(
+                &exec1,
+                Some(0),
+                None,
+                None,
+                1000,
+                Some(0.10),
+                Some(1000),
+                Some(500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Execution 2: focused, cost=0.20, tokens_in=2000, tokens_out=1000
+        let exec2 = store.insert_execution("t-cs-2", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec2).await.unwrap();
+        store
+            .complete_execution(
+                &exec2,
+                Some(0),
+                None,
+                None,
+                2000,
+                Some(0.20),
+                Some(2000),
+                Some(1000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let summary = store.cost_summary(None).await.unwrap();
+        assert_eq!(summary.execution_count, 2);
+        assert!((summary.total_cost_usd - 0.30).abs() < 1e-9);
+        assert!((summary.avg_cost_usd - 0.15).abs() < 1e-9);
+        assert_eq!(summary.total_tokens_in, 3000);
+        assert_eq!(summary.total_tokens_out, 1500);
+    }
+
+    #[tokio::test]
+    async fn test_cost_summary_null_cost_excluded_from_avg() {
+        // Codex/Gemini executions have NULL cost_usd; SUM ignores NULL,
+        // AVG also ignores NULL rows — only non-NULL costs are averaged.
+        let store = test_store().await;
+        store.ensure_thread("t-cs-null-1", None).await.unwrap();
+        store.ensure_thread("t-cs-null-2", None).await.unwrap();
+
+        // Execution 1: has cost
+        let exec1 = store
+            .insert_execution("t-cs-null-1", "focused")
+            .await
+            .unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec1).await.unwrap();
+        store
+            .complete_execution(
+                &exec1,
+                Some(0),
+                None,
+                None,
+                1000,
+                Some(0.10),
+                Some(500),
+                Some(200),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Execution 2: NULL cost (Codex-style)
+        let exec2 = store
+            .insert_execution("t-cs-null-2", "spark")
+            .await
+            .unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec2).await.unwrap();
+        store
+            .complete_execution(
+                &exec2,
+                Some(0),
+                None,
+                None,
+                500,
+                None,
+                Some(300),
+                Some(100),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let summary = store.cost_summary(None).await.unwrap();
+        assert_eq!(summary.execution_count, 2);
+        // total_cost_usd: SUM ignores NULL → 0.10
+        assert!((summary.total_cost_usd - 0.10).abs() < 1e-9);
+        // avg_cost_usd: only 1 non-NULL row → 0.10
+        assert!((summary.avg_cost_usd - 0.10).abs() < 1e-9);
+        // tokens sum across all (both rows have token data)
+        assert_eq!(summary.total_tokens_in, 800);
+        assert_eq!(summary.total_tokens_out, 300);
+    }
+
+    #[tokio::test]
+    async fn test_cost_summary_agent_filter() {
+        let store = test_store().await;
+        store.ensure_thread("t-cs-f-1", None).await.unwrap();
+        store.ensure_thread("t-cs-f-2", None).await.unwrap();
+
+        let exec1 = store.insert_execution("t-cs-f-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec1).await.unwrap();
+        store
+            .complete_execution(
+                &exec1,
+                Some(0),
+                None,
+                None,
+                1000,
+                Some(0.50),
+                Some(5000),
+                Some(2000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let exec2 = store.insert_execution("t-cs-f-2", "spark").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec2).await.unwrap();
+        store
+            .complete_execution(
+                &exec2,
+                Some(0),
+                None,
+                None,
+                1000,
+                Some(0.10),
+                Some(1000),
+                Some(500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Only focused agent
+        let summary = store.cost_summary(Some("focused")).await.unwrap();
+        assert_eq!(summary.execution_count, 1);
+        assert!((summary.total_cost_usd - 0.50).abs() < 1e-9);
+        assert_eq!(summary.total_tokens_in, 5000);
+
+        // Only spark agent
+        let summary = store.cost_summary(Some("spark")).await.unwrap();
+        assert_eq!(summary.execution_count, 1);
+        assert!((summary.total_cost_usd - 0.10).abs() < 1e-9);
+    }
+
+    #[tokio::test]
+    async fn test_cost_by_agent_empty() {
+        let store = test_store().await;
+        let rows = store.cost_by_agent().await.unwrap();
+        assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_cost_by_agent_basic() {
+        let store = test_store().await;
+        store.ensure_thread("t-cba-1", None).await.unwrap();
+        store.ensure_thread("t-cba-2", None).await.unwrap();
+        store.ensure_thread("t-cba-3", None).await.unwrap();
+
+        // focused: 2 executions
+        let exec1 = store.insert_execution("t-cba-1", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec1).await.unwrap();
+        store
+            .complete_execution(
+                &exec1,
+                Some(0),
+                None,
+                None,
+                1000,
+                Some(0.10),
+                Some(1000),
+                Some(500),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let exec2 = store.insert_execution("t-cba-2", "focused").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec2).await.unwrap();
+        store
+            .complete_execution(
+                &exec2,
+                Some(0),
+                None,
+                None,
+                2000,
+                Some(0.20),
+                Some(2000),
+                Some(1000),
+                None,
+            )
+            .await
+            .unwrap();
+
+        // spark: 1 execution with NULL cost
+        let exec3 = store.insert_execution("t-cba-3", "spark").await.unwrap();
+        let _ = store.claim_next_execution(10).await.unwrap();
+        store.mark_execution_executing(&exec3).await.unwrap();
+        store
+            .complete_execution(
+                &exec3,
+                Some(0),
+                None,
+                None,
+                500,
+                None,
+                Some(300),
+                Some(150),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rows = store.cost_by_agent().await.unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let focused = rows.iter().find(|r| r.agent_alias == "focused").unwrap();
+        assert_eq!(focused.execution_count, 2);
+        assert!((focused.total_cost_usd - 0.30).abs() < 1e-9);
+        assert_eq!(focused.total_tokens_in, 3000);
+        assert_eq!(focused.total_tokens_out, 1500);
+
+        let spark = rows.iter().find(|r| r.agent_alias == "spark").unwrap();
+        assert_eq!(spark.execution_count, 1);
+        assert_eq!(spark.total_cost_usd, 0.0); // NULL cost → 0.0
+        assert_eq!(spark.total_tokens_in, 300);
+        assert_eq!(spark.total_tokens_out, 150);
+    }
+
+    #[tokio::test]
+    async fn test_tool_error_rates_agent_filter() {
+        let store = test_store().await;
+        store.ensure_thread("t-er-af-1", None).await.unwrap();
+        store.ensure_thread("t-er-af-2", None).await.unwrap();
+
+        let exec_a = store
+            .insert_execution("t-er-af-1", "agent_a")
+            .await
+            .unwrap();
+        let exec_b = store
+            .insert_execution("t-er-af-2", "agent_b")
+            .await
+            .unwrap();
+
+        // agent_a: 2 Bash calls, 1 error result (tool_name populated)
+        let events_a = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "run cmd 1".to_string(),
+                detail: None,
+                timestamp_ms: 6000,
+                event_index: 0,
+                tool_name: Some("Bash".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "run cmd 2".to_string(),
+                detail: None,
+                timestamp_ms: 6001,
+                event_index: 1,
+                tool_name: Some("Bash".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "error: exit 1".to_string(),
+                detail: None,
+                timestamp_ms: 6002,
+                event_index: 2,
+                tool_name: Some("Bash".to_string()),
+            },
+        ];
+
+        // agent_b: 1 Write call, no errors
+        let events_b = vec![crate::backend::ExecutionEvent {
+            event_type: "tool_call".to_string(),
+            summary: "write file".to_string(),
+            detail: None,
+            timestamp_ms: 6003,
+            event_index: 0,
+            tool_name: Some("Write".to_string()),
+        }];
+
+        store
+            .insert_execution_events(&exec_a, &events_a)
+            .await
+            .unwrap();
+        store
+            .insert_execution_events(&exec_b, &events_b)
+            .await
+            .unwrap();
+
+        // Filter to agent_a only: should see Bash with 2 calls and 1 error
+        let stats = store.tool_error_rates(Some("agent_a")).await.unwrap();
+        assert_eq!(stats.len(), 1, "only agent_a's tools should appear");
+        assert_eq!(stats[0].tool_name, "Bash");
+        assert_eq!(stats[0].call_count, 2);
+        assert_eq!(stats[0].error_count, 1);
+        assert!((stats[0].error_rate - 0.5).abs() < 1e-9);
+
+        // Filter to agent_b only: should see Write with 0 errors
+        let stats = store.tool_error_rates(Some("agent_b")).await.unwrap();
+        assert_eq!(stats.len(), 1, "only agent_b's tools should appear");
+        assert_eq!(stats[0].tool_name, "Write");
+        assert_eq!(stats[0].call_count, 1);
+        assert_eq!(stats[0].error_count, 0);
+        assert_eq!(stats[0].error_rate, 0.0);
     }
 }
