@@ -51,7 +51,48 @@ cargo build --release
 
 ### 1. Create a config
 
-Create `~/.compas/config.yaml` (the default location):
+```bash
+compas init
+```
+
+This interactively creates `~/.compas/config.yaml` — detects installed backends, prompts for your repo path and agent settings. Use `--non-interactive` for scripted setups:
+
+```bash
+compas init --non-interactive --repo /path/to/project --backend claude
+```
+
+### 2. Connect your coding CLI
+
+```bash
+compas setup-mcp
+```
+
+Auto-detects installed coding tools (Claude Code, Codex, OpenCode, Gemini CLI) and registers compas as an MCP server in all of them. Target a specific tool with `--tool claude`. See `compas setup-mcp --help` for all flags.
+
+### 3. Verify setup
+
+```bash
+compas doctor
+```
+
+Validates config, backends, worker status, and MCP registration. Reports issues with actionable fix suggestions. Use `--fix` to auto-remediate what it can (e.g., missing MCP registrations).
+
+### 4. Start the dashboard
+
+```bash
+compas dashboard
+```
+
+The dashboard includes an embedded worker by default. Use `compas dashboard --standalone` for monitoring only (when running the worker separately), or `compas worker` to run the worker as a standalone process.
+
+`--config <path>` is optional on all commands if using the default location (`~/.compas/config.yaml`).
+
+> **Note:** The Gemini backend is stateless — it does not support session resume on follow-up dispatches to the same thread.
+
+<details>
+<summary><b>Manual configuration</b> (alternative to <code>compas init</code> + <code>compas setup-mcp</code>)</summary>
+
+Create `~/.compas/config.yaml` manually:
 
 ```yaml
 target_repo_root: /path/to/your/project
@@ -65,28 +106,20 @@ agents:
       You are a development agent. Follow the project's AGENTS.md.
 ```
 
-Supported backends: `claude`, `codex`, `gemini`, `opencode`. See the [Configuration Reference](#configuration-reference) for all available fields (concurrency, trigger intents, timeouts, handoff chains, etc.).
+Supported backends: `claude`, `codex`, `gemini`, `opencode`. See the [Configuration Reference](#configuration-reference) for all fields.
 
-> **Note:** The Gemini backend is stateless — it does not support session resume on follow-up dispatches to the same thread. Each execution starts a fresh session.
-
-### 2. Connect your coding CLI
-
-Add the MCP server to your preferred tool. If you used `cargo install`, you can use `compas` directly. For source builds, use the full path to `target/release/compas`.
+Register the MCP server manually per tool:
 
 **Claude Code:**
 
 ```bash
-# --config is optional if using the default location (~/.compas/config.yaml)
-claude mcp add --scope user --transport stdio compas -- \
-  compas mcp-server
+claude mcp add --scope user --transport stdio compas -- compas mcp-server
 ```
 
 **Codex:**
 
 ```bash
-# --config is optional if using the default location (~/.compas/config.yaml)
-codex mcp add compas -- \
-  compas mcp-server
+codex mcp add compas -- compas mcp-server
 ```
 
 **OpenCode** — add to `opencode.json` (project root) or `~/.config/opencode/opencode.json` (global):
@@ -102,8 +135,6 @@ codex mcp add compas -- \
 }
 ```
 
-`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
-
 **Gemini CLI** — add to `.gemini/settings.json`:
 
 ```json
@@ -117,24 +148,7 @@ codex mcp add compas -- \
 }
 ```
 
-`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
-
-### 3. Start the worker
-
-The worker is the background process that picks up dispatched tasks and runs your agents. The dashboard includes an embedded worker by default.
-
-```bash
-# Dashboard + embedded worker (recommended)
-compas dashboard
-
-# Dashboard only (monitoring, no execution) — use when running worker separately
-compas dashboard --standalone
-
-# Or run the worker as a standalone process
-compas worker
-```
-
-`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
+</details>
 
 Only one worker can run at a time. If a worker is already running, the dashboard detects it and skips spawning a second one. Running `compas worker` when another worker is alive fails with an actionable error showing the existing worker's PID.
 
@@ -285,7 +299,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 
 ## Configuration Reference
 
-The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override it for any subcommand (`worker`, `mcp-server`, `dashboard`, `wait`).
+The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override it for any subcommand. See [`examples/config-generic.yaml`](examples/config-generic.yaml) for a fully commented example.
 
 ```yaml
 target_repo_root: /path/to/repo        # Where agents work (required)
