@@ -158,13 +158,22 @@ impl OrchestratorMcpServer {
             )));
         }
 
-        // Run preflight check
-        let repo_root = &config.default_workdir;
+        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
+        // falling back to config.default_workdir for shared-workspace or legacy threads.
+        let repo_root = match self.store.get_thread_worktree_info(&params.thread_id).await {
+            Ok(Some((_, root))) => root,
+            Ok(None) => config.default_workdir.clone(),
+            Err(e) => {
+                tracing::warn!(thread_id = %params.thread_id, error = %e,
+                    "get_thread_worktree_info failed, falling back to default_workdir");
+                config.default_workdir.clone()
+            }
+        };
         let preflight = match MergeExecutor::preflight_check(
             &self.store,
             &params.thread_id,
             &target_branch,
-            repo_root,
+            &repo_root,
         )
         .await
         {

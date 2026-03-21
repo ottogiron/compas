@@ -561,7 +561,17 @@ impl WorkerRunner {
 
         // Spawn a detached task so the merge does not block the select! loop.
         let store = self.store.clone();
-        let repo_root = self.config.load().default_workdir.clone();
+        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
+        // falling back to config.default_workdir for shared-workspace or legacy threads.
+        let repo_root = match self.store.get_thread_worktree_info(&op.thread_id).await {
+            Ok(Some((_, root))) => root,
+            Ok(None) => self.config.load().default_workdir.clone(),
+            Err(e) => {
+                tracing::warn!(op_id = %op.id, thread_id = %op.thread_id, error = %e,
+                    "get_thread_worktree_info failed, falling back to default_workdir");
+                self.config.load().default_workdir.clone()
+            }
+        };
 
         tokio::spawn(async move {
             // MergeExecutor::execute runs blocking git subprocesses — must use spawn_blocking.

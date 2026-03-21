@@ -6674,6 +6674,96 @@ mod merge_worker_tests {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
+
+    #[tokio::test]
+    async fn test_worker_merge_uses_thread_worktree_repo_root() {
+        // Create two repos: "wrong" (default_workdir) and "right" (agent's per-workdir repo).
+        // The branch only exists in the "right" repo.
+        let wrong_repo = init_test_repo();
+        let right_repo = init_test_repo();
+        let target = default_branch(right_repo.path());
+        create_source_branch(right_repo.path(), "compas/merge-repo-root");
+
+        let store = test_store().await;
+        // Config default_workdir points to wrong_repo — branch won't be found there.
+        let config = merge_test_config(wrong_repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Ensure thread exists and set worktree_repo_root to the right repo.
+        store
+            .ensure_thread("merge-repo-root", None, None)
+            .await
+            .unwrap();
+        store
+            .set_thread_worktree_path(
+                "merge-repo-root",
+                &right_repo.path().join(".compas-worktrees/merge-repo-root"),
+                right_repo.path(),
+            )
+            .await
+            .unwrap();
+
+        let op = MergeOperation {
+            id: "merge-repo-root-1".to_string(),
+            thread_id: "merge-repo-root".to_string(),
+            source_branch: "compas/merge-repo-root".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        runner.poll_merge_ops().await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store
+                .get_merge_op("merge-repo-root-1")
+                .await
+                .unwrap()
+                .unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Completed,
+                    "merge should succeed using worktree_repo_root, not default_workdir. error: {:?}",
+                    fetched.error_detail
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not complete within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

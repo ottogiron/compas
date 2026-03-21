@@ -20,17 +20,31 @@ impl OrchestratorMcpServer {
             super::params::CloseStatus::Failed => crate::lifecycle::CloseStatus::Failed,
         };
 
-        let merge_intent = params.merge.map(|m| {
+        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
+        // falling back to config.default_workdir for shared-workspace or legacy threads.
+        let merge_intent = if let Some(m) = params.merge {
+            let thread_repo_root =
+                match self.store.get_thread_worktree_info(&params.thread_id).await {
+                    Ok(Some((_, root))) => root,
+                    Ok(None) => config.default_workdir.clone(),
+                    Err(e) => {
+                        tracing::warn!(thread_id = %params.thread_id, error = %e,
+                            "get_thread_worktree_info failed, falling back to default_workdir");
+                        config.default_workdir.clone()
+                    }
+                };
             let target_branch = m.target_branch.unwrap_or_else(|| "main".to_string());
             let strategy = m
                 .strategy
                 .unwrap_or_else(|| config.orchestration.default_merge_strategy.clone());
-            MergeIntent {
+            Some(MergeIntent {
                 target_branch,
                 strategy,
-                repo_root: config.default_workdir.clone(),
-            }
-        });
+                repo_root: thread_repo_root,
+            })
+        } else {
+            None
+        };
 
         match self
             .lifecycle_service()

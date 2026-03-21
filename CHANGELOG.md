@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Worktree handoff bug: non-worktree agents on the same thread now inherit the thread's worktree path when targeting the same repo, so reviewers see the dev agent's changes instead of the unchanged main repo. `workspace: shared` explicitly opts out of inheritance.
 - Conversation view: code block closing brace no longer merges with the next content element
 - Conversation view: ordered (numbered) lists now render as `1. 2. 3.` instead of bullets
+- Merge queue now resolves `repo_root` from the thread's `worktree_repo_root` for agents with per-agent `workdir` overrides, fixing "source branch does not exist" failures when the agent repo differs from `default_workdir`
 
 ### Changed
 
