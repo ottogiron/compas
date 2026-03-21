@@ -216,6 +216,14 @@ pub struct ExecutionRow {
     pub eligible_reason: Option<String>,
 }
 
+/// An execution row paired with the thread's summary.
+/// Returned by `get_scheduled_executions` so callers don't need a second query.
+#[derive(Debug, Clone)]
+pub struct ScheduledExecution {
+    pub execution: ExecutionRow,
+    pub summary: Option<String>,
+}
+
 /// A stored execution event row (real-time telemetry).
 #[derive(Debug, Clone)]
 pub struct ExecutionEventRow {
@@ -1770,7 +1778,7 @@ impl Store {
         &self,
         agent: Option<&str>,
         limit: i64,
-    ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+    ) -> Result<Vec<ScheduledExecution>, sqlx::Error> {
         let mut sql = String::from(
             "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
                     picked_up_at, started_at, finished_at, duration_ms,
@@ -1778,7 +1786,8 @@ impl Store {
                     e.attempt_number, e.retry_after, e.error_category,
                     e.original_dispatch_message_id,
                     e.pid,
-                    e.eligible_at, e.eligible_reason
+                    e.eligible_at, e.eligible_reason,
+                    t.summary
              FROM executions e
              LEFT JOIN threads t ON t.thread_id = e.thread_id
              WHERE e.status = 'queued'
@@ -1790,14 +1799,14 @@ impl Store {
         }
         sql.push_str(" ORDER BY e.eligible_at ASC LIMIT ?");
 
-        let mut query = sqlx::query_as::<_, ExecutionRowDb>(&sql);
+        let mut query = sqlx::query_as::<_, ScheduledExecutionDb>(&sql);
         if let Some(a) = agent {
             query = query.bind(a);
         }
         query = query.bind(limit);
 
         let rows = query.fetch_all(&self.pool).await?;
-        Ok(rows.into_iter().map(row_to_execution).collect())
+        Ok(rows.into_iter().map(row_to_scheduled).collect())
     }
 
     /// Get the most recent executions for a specific agent, newest first.
@@ -3021,6 +3030,67 @@ fn row_to_execution(r: ExecutionRowDb) -> ExecutionRow {
         pid: r.pid,
         eligible_at: r.eligible_at,
         eligible_reason: r.eligible_reason,
+    }
+}
+
+/// Internal DB row for `get_scheduled_executions` — adds `summary` from the
+/// threads table so the caller doesn't need a second round-trip.
+#[derive(sqlx::FromRow)]
+struct ScheduledExecutionDb {
+    id: String,
+    thread_id: String,
+    batch_id: Option<String>,
+    agent_alias: String,
+    dispatch_message_id: Option<i64>,
+    status: String,
+    queued_at: i64,
+    picked_up_at: Option<i64>,
+    started_at: Option<i64>,
+    finished_at: Option<i64>,
+    duration_ms: Option<i64>,
+    exit_code: Option<i32>,
+    output_preview: Option<String>,
+    error_detail: Option<String>,
+    parsed_intent: Option<String>,
+    prompt_hash: Option<String>,
+    attempt_number: i32,
+    retry_after: Option<i64>,
+    error_category: Option<String>,
+    original_dispatch_message_id: Option<i64>,
+    pid: Option<i64>,
+    eligible_at: Option<i64>,
+    eligible_reason: Option<String>,
+    summary: Option<String>,
+}
+
+fn row_to_scheduled(r: ScheduledExecutionDb) -> ScheduledExecution {
+    ScheduledExecution {
+        summary: r.summary,
+        execution: ExecutionRow {
+            id: r.id,
+            thread_id: r.thread_id,
+            batch_id: r.batch_id,
+            agent_alias: r.agent_alias,
+            dispatch_message_id: r.dispatch_message_id,
+            status: r.status,
+            queued_at: r.queued_at,
+            picked_up_at: r.picked_up_at,
+            started_at: r.started_at,
+            finished_at: r.finished_at,
+            duration_ms: r.duration_ms,
+            exit_code: r.exit_code,
+            output_preview: r.output_preview,
+            error_detail: r.error_detail,
+            parsed_intent: r.parsed_intent,
+            prompt_hash: r.prompt_hash,
+            attempt_number: r.attempt_number,
+            retry_after: r.retry_after,
+            error_category: r.error_category,
+            original_dispatch_message_id: r.original_dispatch_message_id,
+            pid: r.pid,
+            eligible_at: r.eligible_at,
+            eligible_reason: r.eligible_reason,
+        },
     }
 }
 
