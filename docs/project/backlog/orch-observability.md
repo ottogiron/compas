@@ -15,19 +15,23 @@ Created: 2026-03-21
 Captured raw stream-json from all four backends. Key findings:
 
 **Claude** (`--output-format stream-json --verbose`):
+
 - Tool results are `"type":"user"` events with `content[].type: "tool_result"` — not a separate event type
 - `result` event has: `total_cost_usd`, `usage.input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `num_turns`, `duration_ms`, `modelUsage`
 
 **Codex** (`codex exec --json`):
+
 - Events: `thread.started`, `turn.started`, `item.started`, `item.completed`, `turn.completed`
 - Tool results: `item.completed` with `type: "command_execution"`, `exit_code`, `aggregated_output`
 - `turn.completed` has: `usage.input_tokens`, `output_tokens`, `cached_input_tokens`. No cost_usd.
 
 **Gemini** (`--output-format stream-json`):
+
 - Events: `init`, `message` (user/assistant), `result`
 - `result.stats` has: `total_tokens`, `input_tokens`, `output_tokens`, `cached`, `duration_ms`, `tool_calls`. No cost_usd.
 
 **OpenCode** (`--format json`):
+
 - Events: `{ type, timestamp, sessionID, ... }` format. Rate-limited during spike, incomplete capture.
 - Has `opencode stats` for usage data but unclear if inline token counts are emitted per-turn.
 
@@ -80,7 +84,7 @@ Captured raw stream-json from all four backends. Key findings:
   - Dispatch to Claude agent → verify cost/token columns populated
   - Dispatch to Codex agent → verify token columns populated, tool events captured
   - `orch_execution_events` shows tool_name on tool_call events for each backend
-- Status: Todo
+- Status: Done
 
 ## Ticket OBS-02 — Tool metrics aggregation queries
 
@@ -150,6 +154,8 @@ Captured raw stream-json from all four backends. Key findings:
 - Origin: claude-cookbooks review (2026-03-21) — architect recommended tool metrics + cost tracking as Phase 1.
 - Spike completed 2026-03-21: all four backends have parseable telemetry. Claude has cost_usd; Codex/Gemini have tokens only; OpenCode needs further investigation.
 - OpenCode parser is best-effort due to incomplete format documentation during spike (rate-limited).
+- Known limitation (OBS-01): Claude `tool_result` events have `tool_name: None` because the stream format only contains `tool_use_id`, not the tool name. Backfilling would require a stateful `tool_use_id → tool_name` map in `consume_telemetry`. Deferred — tool_name is populated on `tool_call` events which is the primary use case for tool metrics.
+- Known limitation (OBS-01): Gemini uses `--output-format json` (not stream-json), so per-turn tool events are not captured. Token counts are extracted from the final result stats block.
 
 ## Execution Metrics
 

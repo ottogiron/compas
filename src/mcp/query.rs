@@ -382,6 +382,8 @@ impl OrchestratorMcpServer {
                     detail: Option<String>,
                     timestamp_ms: i64,
                     event_index: i32,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    tool_name: Option<String>,
                 }
                 let entries: Vec<EventEntry> = events
                     .into_iter()
@@ -392,6 +394,7 @@ impl OrchestratorMcpServer {
                         detail: e.detail,
                         timestamp_ms: e.timestamp_ms,
                         event_index: e.event_index,
+                        tool_name: e.tool_name,
                     })
                     .collect();
                 Ok(json_text(&entries))

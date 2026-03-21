@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::process::{
     kill_process, parse_json_output, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{classify_error, Backend, BackendOutput, PingResult};
+use super::{classify_error, truncate_detail, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -188,6 +188,12 @@ impl Backend for GeminiBackend {
                     None
                 };
 
+                // Extract token counts from Gemini JSON output.
+                let (gemini_tokens_in, gemini_tokens_out) = match &json {
+                    Ok(val) => extract_gemini_token_counts(val),
+                    Err(_) => (None, None),
+                };
+
                 Ok(BackendOutput {
                     success,
                     result_text,
@@ -196,6 +202,10 @@ impl Backend for GeminiBackend {
                     raw_output,
                     error_category,
                     pid: Some(pid),
+                    cost_usd: None, // Gemini does not report cost
+                    tokens_in: gemini_tokens_in,
+                    tokens_out: gemini_tokens_out,
+                    num_turns: None,
                 })
             }
             Err(e) => Err(e),
@@ -252,6 +262,75 @@ impl Backend for GeminiBackend {
             self.tracker.untrack(&session.id);
         }
         Ok(())
+    }
+}
+
+/// Extract token counts from Gemini JSON output.
+///
+/// Gemini CLI can emit stats in a `result.stats` block (stream format) or as
+/// top-level `input_tokens`/`output_tokens` (simple JSON format). We check both.
+fn extract_gemini_token_counts(val: &serde_json::Value) -> (Option<i64>, Option<i64>) {
+    // Stream format: {"type":"result","stats":{"input_tokens":N,"output_tokens":N,...}}
+    if let Some(stats) = val.get("stats") {
+        let inp = stats.get("input_tokens").and_then(|v| v.as_i64());
+        let out = stats.get("output_tokens").and_then(|v| v.as_i64());
+        if inp.is_some() || out.is_some() {
+            return (inp, out);
+        }
+    }
+    // Simple format: top-level fields
+    let inp = val.get("input_tokens").and_then(|v| v.as_i64());
+    let out = val.get("output_tokens").and_then(|v| v.as_i64());
+    if inp.is_some() || out.is_some() {
+        return (inp, out);
+    }
+    (None, None)
+}
+
+/// Parse a single Gemini CLI JSONL line into an `ExecutionEvent`.
+///
+/// Schemas observed from Gemini CLI (--output-format json output).
+/// Returns `None` for unrecognized or irrelevant event lines.
+pub fn parse_gemini_stream_line(line: &str) -> Option<super::ExecutionEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let val: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+    let event_type_str = val.get("type")?.as_str()?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    match event_type_str {
+        "message" => {
+            let role = val.get("role").and_then(|r| r.as_str()).unwrap_or("");
+            if role == "assistant" {
+                let content = val.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                let truncated: String = content.chars().take(60).collect();
+                if truncated.is_empty() {
+                    return None;
+                }
+                Some(super::ExecutionEvent {
+                    event_type: "message".to_string(),
+                    summary: truncated,
+                    detail: Some(truncate_detail(trimmed)),
+                    timestamp_ms: now_ms,
+                    event_index: 0,
+                    tool_name: None,
+                })
+            } else {
+                None
+            }
+        }
+        "result" => Some(super::ExecutionEvent {
+            event_type: "turn_complete".to_string(),
+            summary: "completed".to_string(),
+            detail: Some(truncate_detail(trimmed)),
+            timestamp_ms: now_ms,
+            event_index: 0,
+            tool_name: None,
+        }),
+        _ => None,
     }
 }
 
@@ -366,5 +445,70 @@ mod tests {
             .and_then(|r| r.as_str())
             .unwrap();
         assert_eq!(text, "hello from gemini");
+    }
+
+    // -- extract_gemini_token_counts tests --
+
+    #[test]
+    fn test_extract_gemini_token_counts_stats_block() {
+        let val: serde_json::Value = serde_json::from_str(
+            r#"{"type":"result","status":"success","stats":{"total_tokens":7066,"input_tokens":6989,"output_tokens":9,"cached":0}}"#,
+        ).unwrap();
+        let (inp, out) = extract_gemini_token_counts(&val);
+        assert_eq!(inp, Some(6989));
+        assert_eq!(out, Some(9));
+    }
+
+    #[test]
+    fn test_extract_gemini_token_counts_no_stats() {
+        let val: serde_json::Value = serde_json::from_str(r#"{"response":"ok"}"#).unwrap();
+        let (inp, out) = extract_gemini_token_counts(&val);
+        assert!(inp.is_none());
+        assert!(out.is_none());
+    }
+
+    // -- parse_gemini_stream_line tests --
+
+    #[test]
+    fn test_parse_gemini_stream_assistant_message() {
+        let line =
+            r#"{"type":"message","role":"assistant","content":"Hello from Gemini","delta":true}"#;
+        let event = parse_gemini_stream_line(line).expect("should parse assistant message");
+        assert_eq!(event.event_type, "message");
+        assert!(event.summary.contains("Hello from Gemini"));
+        assert!(event.tool_name.is_none());
+    }
+
+    #[test]
+    fn test_parse_gemini_stream_result() {
+        let line = r#"{"type":"result","status":"success","stats":{"total_tokens":100,"input_tokens":80,"output_tokens":20}}"#;
+        let event = parse_gemini_stream_line(line).expect("should parse result");
+        assert_eq!(event.event_type, "turn_complete");
+        assert_eq!(event.summary, "completed");
+    }
+
+    #[test]
+    fn test_parse_gemini_stream_user_message_returns_none() {
+        let line = r#"{"type":"message","role":"user","content":"some prompt"}"#;
+        assert!(parse_gemini_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_gemini_stream_empty_content_returns_none() {
+        let line = r#"{"type":"message","role":"assistant","content":""}"#;
+        assert!(parse_gemini_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_gemini_stream_init_returns_none() {
+        let line = r#"{"type":"init","session_id":"abc","model":"gemini-3-pro"}"#;
+        assert!(parse_gemini_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_gemini_stream_empty_and_garbage() {
+        assert!(parse_gemini_stream_line("").is_none());
+        assert!(parse_gemini_stream_line("not json").is_none());
+        assert!(parse_gemini_stream_line(r#"{"no_type":true}"#).is_none());
     }
 }

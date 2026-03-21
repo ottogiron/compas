@@ -7,7 +7,7 @@ use uuid::Uuid;
 use super::process::{
     extract_output_text, kill_process, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{classify_error, Backend, BackendOutput, PingResult};
+use super::{classify_error, truncate_detail, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -234,6 +234,9 @@ impl Backend for CodexBackend {
                     None
                 };
 
+                // Extract token counts from JSONL turn.completed events.
+                let (codex_tokens_in, codex_tokens_out) = extract_codex_token_counts(&out.stdout);
+
                 Ok(BackendOutput {
                     success,
                     result_text,
@@ -242,6 +245,10 @@ impl Backend for CodexBackend {
                     raw_output,
                     error_category,
                     pid: Some(pid),
+                    cost_usd: None, // Codex does not report cost
+                    tokens_in: codex_tokens_in,
+                    tokens_out: codex_tokens_out,
+                    num_turns: None,
                 })
             }
             Err(e) => Err(e),
@@ -374,15 +381,42 @@ pub fn extract_session_id_from_line(line: &str) -> Option<String> {
     Some(tid.to_string())
 }
 
-/// Maximum length for the `detail` field (raw JSON) stored per event.
-const MAX_DETAIL_LEN: usize = 2048;
+/// Extract token counts from Codex JSONL output by scanning for `turn.completed` events.
+///
+/// Codex emits `{"type":"turn.completed","usage":{"input_tokens":N,"output_tokens":N,...}}`
+/// at the end of each turn. We sum across all turns (though typically there's just one).
+fn extract_codex_token_counts(stdout: &[u8]) -> (Option<i64>, Option<i64>) {
+    let text = String::from_utf8_lossy(stdout);
+    let mut total_in: i64 = 0;
+    let mut total_out: i64 = 0;
+    let mut found_in = false;
+    let mut found_out = false;
 
-fn truncate_detail(s: &str) -> String {
-    if s.len() <= MAX_DETAIL_LEN {
-        s.to_string()
-    } else {
-        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            if val.get("type").and_then(|t| t.as_str()) == Some("turn.completed") {
+                if let Some(usage) = val.get("usage") {
+                    if let Some(inp) = usage.get("input_tokens").and_then(|v| v.as_i64()) {
+                        total_in += inp;
+                        found_in = true;
+                    }
+                    if let Some(out) = usage.get("output_tokens").and_then(|v| v.as_i64()) {
+                        total_out += out;
+                        found_out = true;
+                    }
+                }
+            }
+        }
     }
+
+    (
+        if found_in { Some(total_in) } else { None },
+        if found_out { Some(total_out) } else { None },
+    )
 }
 
 /// Parse a single Codex CLI JSONL line into an `ExecutionEvent`.
@@ -400,6 +434,24 @@ pub fn parse_codex_stream_line(line: &str) -> Option<super::ExecutionEvent> {
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     match event_type_str {
+        "item.started" => {
+            let item = val.get("item")?;
+            let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
+            if item_type == "command_execution" {
+                let command = item.get("command").and_then(|c| c.as_str()).unwrap_or("?");
+                let truncated: String = command.chars().take(60).collect();
+                Some(super::ExecutionEvent {
+                    event_type: "tool_call".to_string(),
+                    summary: format!("shell: {}", truncated),
+                    detail: Some(truncate_detail(trimmed)),
+                    timestamp_ms: now_ms,
+                    event_index: 0,
+                    tool_name: Some("shell".to_string()),
+                })
+            } else {
+                None
+            }
+        }
         "item.completed" => {
             let item = val.get("item")?;
             let item_type = item.get("type").and_then(|t| t.as_str()).unwrap_or("");
@@ -415,6 +467,22 @@ pub fn parse_codex_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                         detail: Some(truncate_detail(trimmed)),
                         timestamp_ms: now_ms,
                         event_index: 0,
+                        tool_name: Some(name.to_string()),
+                    })
+                }
+                "command_execution" => {
+                    let exit_code = item
+                        .get("exit_code")
+                        .and_then(|v| v.as_i64())
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| "?".to_string());
+                    Some(super::ExecutionEvent {
+                        event_type: "tool_result".to_string(),
+                        summary: format!("shell: exit {}", exit_code),
+                        detail: Some(truncate_detail(trimmed)),
+                        timestamp_ms: now_ms,
+                        event_index: 0,
+                        tool_name: Some("shell".to_string()),
                     })
                 }
                 "agent_message" => {
@@ -426,6 +494,7 @@ pub fn parse_codex_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                         detail: Some(truncate_detail(trimmed)),
                         timestamp_ms: now_ms,
                         event_index: 0,
+                        tool_name: None,
                     })
                 }
                 _ => None,
@@ -437,6 +506,7 @@ pub fn parse_codex_stream_line(line: &str) -> Option<super::ExecutionEvent> {
             detail: Some(truncate_detail(trimmed)),
             timestamp_ms: now_ms,
             event_index: 0,
+            tool_name: None,
         }),
         _ => None,
     }
@@ -740,10 +810,28 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_codex_command_execution_returns_none() {
-        // command_execution item type is not function_call or agent_message
-        let line = r#"{"type":"item.completed","item":{"type":"command_execution","aggregated_output":"ok","exit_code":0}}"#;
-        assert!(parse_codex_stream_line(line).is_none());
+    fn test_parse_codex_command_execution_completed_is_tool_result() {
+        let line = r#"{"type":"item.completed","item":{"type":"command_execution","command":"ls","aggregated_output":"ok","exit_code":0}}"#;
+        let event = parse_codex_stream_line(line).expect("should parse command_execution");
+        assert_eq!(event.event_type, "tool_result");
+        assert_eq!(event.tool_name.as_deref(), Some("shell"));
+        assert!(event.summary.contains("exit 0"));
+    }
+
+    #[test]
+    fn test_parse_codex_item_started_command_execution_is_tool_call() {
+        let line = r#"{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"head -n 1 CHANGELOG.md","status":"in_progress"}}"#;
+        let event = parse_codex_stream_line(line).expect("should parse item.started");
+        assert_eq!(event.event_type, "tool_call");
+        assert_eq!(event.tool_name.as_deref(), Some("shell"));
+        assert!(event.summary.starts_with("shell: "));
+    }
+
+    #[test]
+    fn test_parse_codex_function_call_has_tool_name() {
+        let line = r#"{"type":"item.completed","item":{"id":"item_1","type":"function_call","name":"shell","arguments":"{\"command\":\"cargo test\"}"}}"#;
+        let event = parse_codex_stream_line(line).expect("should parse");
+        assert_eq!(event.tool_name.as_deref(), Some("shell"));
     }
 
     #[test]
@@ -751,6 +839,32 @@ mod tests {
         assert!(parse_codex_stream_line("").is_none());
         assert!(parse_codex_stream_line("not json").is_none());
         assert!(parse_codex_stream_line(r#"{"no_type":true}"#).is_none());
+    }
+
+    #[test]
+    fn test_extract_codex_token_counts_from_turn_completed() {
+        let stdout = r#"{"type":"thread.started","thread_id":"abc"}
+{"type":"turn.completed","usage":{"input_tokens":31604,"cached_input_tokens":22400,"output_tokens":45}}"#;
+        let (tokens_in, tokens_out) = extract_codex_token_counts(stdout.as_bytes());
+        assert_eq!(tokens_in, Some(31604));
+        assert_eq!(tokens_out, Some(45));
+    }
+
+    #[test]
+    fn test_extract_codex_token_counts_no_usage() {
+        let stdout = r#"{"type":"turn.completed"}"#;
+        let (tokens_in, tokens_out) = extract_codex_token_counts(stdout.as_bytes());
+        assert!(tokens_in.is_none());
+        assert!(tokens_out.is_none());
+    }
+
+    #[test]
+    fn test_extract_codex_token_counts_only_output_tokens() {
+        // When only output_tokens is present, tokens_in should be None (not Some(0))
+        let stdout = r#"{"type":"turn.completed","usage":{"output_tokens":42}}"#;
+        let (tokens_in, tokens_out) = extract_codex_token_counts(stdout.as_bytes());
+        assert!(tokens_in.is_none());
+        assert_eq!(tokens_out, Some(42));
     }
 
     // -- extract_session_id_from_line tests --

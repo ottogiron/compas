@@ -63,6 +63,10 @@ impl Backend for StubBackend {
             raw_output: result_text,
             error_category: None,
             pid: None,
+            cost_usd: None,
+            tokens_in: None,
+            tokens_out: None,
+            num_turns: None,
         })
     }
 
@@ -322,6 +326,10 @@ mod store_tests {
                 Some(124),
                 60000,
                 ExecutionStatus::TimedOut,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -349,6 +357,10 @@ mod store_tests {
                 Some(1),
                 5000,
                 ExecutionStatus::Failed,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -2485,6 +2497,10 @@ mod diagnose_tests {
                 Some(1),
                 5000,
                 ExecutionStatus::Failed,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -3699,7 +3715,7 @@ mod pending_chain_work_tests {
         store.claim_next_execution(10).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
         store
-            .complete_execution(&exec_id, Some(0), None, None, 100)
+            .complete_execution(&exec_id, Some(0), None, None, 100, None, None, None, None)
             .await
             .unwrap();
 
@@ -3823,7 +3839,7 @@ mod await_chain_wait_tests {
                 .await
                 .unwrap();
             store2
-                .complete_execution(&exec_id2, Some(0), None, None, 200)
+                .complete_execution(&exec_id2, Some(0), None, None, 200, None, None, None, None)
                 .await
                 .unwrap();
         });
@@ -3966,7 +3982,7 @@ mod await_chain_wait_tests {
                 .await
                 .unwrap();
             store2
-                .complete_execution(&exec_1, Some(0), None, None, 100)
+                .complete_execution(&exec_1, Some(0), None, None, 100, None, None, None, None)
                 .await
                 .unwrap();
 
@@ -3977,7 +3993,7 @@ mod await_chain_wait_tests {
                 .await
                 .unwrap();
             store2
-                .complete_execution(&exec_2, Some(0), None, None, 100)
+                .complete_execution(&exec_2, Some(0), None, None, 100, None, None, None, None)
                 .await
                 .unwrap();
         });
@@ -4650,7 +4666,7 @@ mod orphan_pid_tests {
         store.mark_execution_executing(&exec_id).await.unwrap();
         store.set_execution_pid(&exec_id, 99999).await.unwrap();
         store
-            .complete_execution(&exec_id, Some(0), None, None, 100)
+            .complete_execution(&exec_id, Some(0), None, None, 100, None, None, None, None)
             .await
             .unwrap();
 
@@ -4734,7 +4750,17 @@ mod read_log_tests {
         let exec_id = store.insert_execution("t-log-1", "focused").await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
         store
-            .complete_execution(&exec_id, Some(0), Some("line1\nline2\nline3"), None, 100)
+            .complete_execution(
+                &exec_id,
+                Some(0),
+                Some("line1\nline2\nline3"),
+                None,
+                100,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -5046,6 +5072,10 @@ mod session_resume_tests {
                 raw_output: result_text,
                 error_category: None,
                 pid: None,
+                cost_usd: None,
+                tokens_in: None,
+                tokens_out: None,
+                num_turns: None,
             })
         }
 
@@ -5293,6 +5323,10 @@ mod session_resume_tests {
                 None,
                 500,
                 ExecutionStatus::Crashed,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();

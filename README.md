@@ -285,7 +285,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 | `orch_tasks` | Execution history with timing and results |
 | `orch_metrics` | Aggregate stats (thread counts, queue depth) |
 | `orch_diagnose` | Thread diagnostics with suggested next actions |
-| `orch_execution_events` | Structured events from a running/completed execution (tool calls, file edits) |
+| `orch_execution_events` | Structured events from a running/completed execution (tool calls, file edits, tool names) |
 | `orch_read_log` | Paginated access to execution log files with offset/limit/tail support |
 
 ### System

@@ -606,6 +606,7 @@ async fn consume_telemetry(
 ) {
     use crate::backend::claude::parse_claude_stream_line;
     use crate::backend::codex::parse_codex_stream_line;
+    use crate::backend::gemini::parse_gemini_stream_line;
     use crate::backend::opencode::parse_opencode_stream_line;
     use crate::backend::ExecutionEvent;
     use std::time::{Duration, Instant};
@@ -617,15 +618,20 @@ async fn consume_telemetry(
     let parser: fn(&str) -> Option<ExecutionEvent> = match backend_name {
         "claude" => parse_claude_stream_line,
         "codex" => parse_codex_stream_line,
+        "gemini" => parse_gemini_stream_line,
         "opencode" => parse_opencode_stream_line,
-        _ => return, // No parser for this backend (e.g., gemini)
+        _ => return, // No parser for this backend
     };
 
+    // Gemini doesn't emit a session ID in stream lines — use a no-op extractor.
+    fn no_session_id(_line: &str) -> Option<String> {
+        None
+    }
     let session_id_extractor: fn(&str) -> Option<String> = match backend_name {
         "claude" => claude_extract,
         "codex" => codex_extract,
         "opencode" => opencode_extract,
-        _ => unreachable!("backend matched parser but not session extractor"),
+        _ => no_session_id,
     };
 
     let mut buffer: Vec<ExecutionEvent> = Vec::new();
@@ -1426,11 +1432,14 @@ mod tests {
         assert_eq!(events[0].event_type, "tool_call");
         assert_eq!(events[0].summary, "Write to src/main.rs");
         assert_eq!(events[0].event_index, 0);
+        assert_eq!(events[0].tool_name.as_deref(), Some("Write"));
         assert_eq!(events[1].event_type, "tool_call");
         assert!(events[1].summary.starts_with("Bash:"));
         assert_eq!(events[1].event_index, 1);
+        assert_eq!(events[1].tool_name.as_deref(), Some("Bash"));
         assert_eq!(events[2].event_type, "turn_complete");
         assert_eq!(events[2].event_index, 2);
+        assert!(events[2].tool_name.is_none());
 
         // Verify EventBus received ExecutionProgress events.
         let mut progress_count = 0;
@@ -1475,8 +1484,17 @@ mod tests {
         tx.send(r#"{"type":"result"}"#.to_string()).unwrap();
         drop(tx);
 
-        // "gemini" has no parser — should return immediately without storing anything.
-        consume_telemetry(rx, &store, &event_bus, "exec-2", "t-2", "agent-b", "gemini").await;
+        // "unknown-backend" has no parser — should return immediately without storing anything.
+        consume_telemetry(
+            rx,
+            &store,
+            &event_bus,
+            "exec-2",
+            "t-2",
+            "agent-b",
+            "unknown-backend",
+        )
+        .await;
 
         let events = store
             .get_execution_events("exec-2", None, None, None)
