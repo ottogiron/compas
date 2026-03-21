@@ -213,6 +213,36 @@ impl WorkerRunner {
                             for (thread_id, worktree_path, repo_root) in &stale {
                                 let repo_root = std::path::PathBuf::from(repo_root);
                                 let wt_path = std::path::PathBuf::from(worktree_path);
+
+                                // Safety check: refuse to delete worktrees with
+                                // uncommitted changes or unverifiable status to prevent data loss.
+                                match WorktreeManager::worktree_status(&wt_path) {
+                                    Ok(None) => {
+                                        // Clean — proceed with removal below.
+                                    }
+                                    Ok(Some(_)) => {
+                                        tracing::warn!(
+                                            thread_id = %thread_id,
+                                            path = %wt_path.display(),
+                                            branch = %format!("compas/{}", thread_id),
+                                            "skipping worktree cleanup — uncommitted changes detected, merge or commit before closing"
+                                        );
+                                        // Do not clear worktree_path in DB — retry next cycle.
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            thread_id = %thread_id,
+                                            path = %wt_path.display(),
+                                            branch = %format!("compas/{}", thread_id),
+                                            error = %e,
+                                            "skipping worktree cleanup — cannot verify worktree status"
+                                        );
+                                        // Do not clear worktree_path in DB — retry next cycle.
+                                        continue;
+                                    }
+                                }
+
                                 if let Err(e) = self.worktree_manager.remove_worktree_at_path(&repo_root, &wt_path, thread_id) {
                                     tracing::warn!(thread_id = %thread_id, error = %e, "worktree cleanup failed");
                                 }

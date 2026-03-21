@@ -238,6 +238,7 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 - **`spawn_worker_process()` keeps its pre-flight check** — avoids spawning a child process that would immediately exit due to the guard.
 - **`DaemonLockHeld` error enriched** with `worker_id`, PID, and heartbeat age for actionable diagnostics.
 
+
 ## ADR-017: Session resume after crash (early session ID persistence)
 
 **Date:** 2026-03
@@ -261,3 +262,28 @@ Backend session IDs were only persisted on successful completion (`executor.rs`,
 - **Safety net in executor** (unconditional write) ensures session ID is captured even if the telemetry consumer missed it (e.g., channel backpressure, backend emits session ID after the init line).
 - **No status filter in query** because a crashed execution's session ID is just as valid for resume as a completed one. The backend CLI maintains the same session state regardless of how the orchestrator exited.
 - **Gemini excluded** because it is stateless (no session ID concept).
+
+## ADR-018: Worktree cleanup safety guard
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** When `orch_close` marks a thread as `Completed`, the worker loop's stale-worktree cleanup cycle called `remove_worktree_at_path` with `--force`, deleting the worktree regardless of uncommitted changes. This caused data loss when an operator closed a thread before merging the worktree branch.
+
+**Decision:** Before removing a worktree, the cleanup loop calls `WorktreeManager::worktree_status()` and acts on a tri-state result:
+
+- `Ok(None)` — clean or path does not exist; proceed with removal
+- `Ok(Some(_))` — uncommitted changes detected; skip cleanup, emit warning, retry next cycle
+- `Err(msg)` — git command failed (permissions error, corrupted repo, CIFS mount); skip cleanup, emit warning with error, retry next cycle
+
+Git failures are treated as **unsafe** (same as dirty): when status cannot be verified, the conservative action is to preserve the worktree. The `worktree_path` is not cleared from the DB in skip cases, so the guard retries every cleanup interval (~60 s) until the worktree is either cleaned or confirmed safe.
+
+**Warning log fields:** `thread_id`, `path`, `branch` (`compas/{thread_id}`), and `error` (on git failure) — provides the operator enough context to locate and resolve the worktree manually.
+
+**Residual limitation:** There is no operator escape hatch to force-delete a dirty worktree through the MCP API. The only recourse is to commit, stash, or manually delete the worktree directory and restart the worker. Documented in `known-issues.md`.
+
+**Alternatives considered:**
+
+- Add a `force_cleanup: true` flag to `orch_close` — deferred; adds MCP API surface for an edge case.
+- Delete after N failed retries — rejected; unbounded retry is safer than silent deletion after a threshold.
+- Return `Ok(None)` on git failure (treat as clean) — rejected; this is the original bug. A permissions error or mount issue should not allow deletion.

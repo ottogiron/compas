@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Embedded wait guidance in `orch_dispatch` and `orch_poll` tool descriptions; dispatch response now includes `next_step` CLI command with templated thread/message IDs
 - CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md, and GitHub issue/PR templates
 
+### Fixed
+
+- Worktree cleanup safety guard (ADR-017) — worker loop checks `worktree_status` (tri-state: clean / dirty / git-error) before removing a worktree; dirty worktrees and git-failure cases are both skipped with a warning (thread ID, path, branch) and retried next cycle, preventing data loss when an operator closes a thread before merging the branch
+
 ### Changed
 
 - README: rewrite Quick Start to use `compas init` + `compas setup-mcp` + `compas doctor` (4-step flow), move manual config/MCP setup to collapsible details section, reference `examples/config-generic.yaml`

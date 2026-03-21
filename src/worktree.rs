@@ -42,19 +42,29 @@ impl WorktreeManager {
         Self
     }
 
-    /// Check for uncommitted changes in a worktree. Returns a formatted
-    /// status string, or None if the worktree is clean or git fails.
-    pub fn worktree_status(worktree_path: &Path) -> Option<String> {
+    /// Check for uncommitted changes in a worktree.
+    ///
+    /// Returns a tri-state:
+    /// - `Ok(None)` — clean or path does not exist on disk (safe to delete)
+    /// - `Ok(Some(status))` — dirty; status string describes the changes
+    /// - `Err(msg)` — git command failed; treat as unsafe (skip cleanup)
+    pub fn worktree_status(worktree_path: &Path) -> Result<Option<String>, String> {
+        // If the directory no longer exists, it's safe to proceed with cleanup.
+        if !worktree_path.exists() {
+            return Ok(None);
+        }
+
         let path_str = worktree_path.to_string_lossy();
 
         // Check for uncommitted changes via porcelain status
         let status_output = Command::new("git")
             .args(["-C", &path_str, "status", "--porcelain"])
             .output()
-            .ok()?;
+            .map_err(|e| format!("failed to run git status: {}", e))?;
 
         if !status_output.status.success() {
-            return None;
+            let stderr = String::from_utf8_lossy(&status_output.stderr);
+            return Err(format!("git status failed: {}", stderr.trim()));
         }
 
         let porcelain = String::from_utf8_lossy(&status_output.stdout);
@@ -62,7 +72,7 @@ impl WorktreeManager {
 
         // Clean worktree — nothing to report
         if porcelain.is_empty() {
-            return None;
+            return Ok(None);
         }
 
         // Get branch name (best-effort)
@@ -111,7 +121,7 @@ impl WorktreeManager {
             result.push('\n');
         }
 
-        Some(result)
+        Ok(Some(result))
     }
 
     /// Ensure a worktree exists for the given thread. Creates one if needed.
@@ -574,7 +584,10 @@ mod tests {
     #[test]
     fn test_worktree_status_nonexistent_path() {
         let result = WorktreeManager::worktree_status(Path::new("/nonexistent/path"));
-        assert!(result.is_none(), "nonexistent path should return None");
+        assert!(
+            matches!(result, Ok(None)),
+            "nonexistent path should return Ok(None)"
+        );
     }
 
     #[test]
@@ -605,7 +618,10 @@ mod tests {
             .unwrap();
 
         let result = WorktreeManager::worktree_status(dir.path());
-        assert!(result.is_none(), "clean repo should return None");
+        assert!(
+            matches!(result, Ok(None)),
+            "clean repo should return Ok(None)"
+        );
     }
 
     #[test]
@@ -639,9 +655,12 @@ mod tests {
         std::fs::write(dir.path().join("new_file.txt"), "hello").unwrap();
 
         let result = WorktreeManager::worktree_status(dir.path());
-        assert!(result.is_some(), "dirty repo should return Some");
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "dirty repo should return Ok(Some(_))"
+        );
 
-        let status = result.unwrap();
+        let status = result.unwrap().unwrap();
         assert!(
             status.contains("## Worktree Status"),
             "should contain header"
@@ -694,9 +713,12 @@ mod tests {
         std::fs::write(dir.path().join("tracked.txt"), "modified").unwrap();
 
         let result = WorktreeManager::worktree_status(dir.path());
-        assert!(result.is_some(), "modified tracked file should return Some");
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "modified tracked file should return Ok(Some(_))"
+        );
 
-        let status = result.unwrap();
+        let status = result.unwrap().unwrap();
         assert!(
             status.contains("tracked.txt"),
             "should list the modified file"

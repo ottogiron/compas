@@ -78,6 +78,21 @@ Notifications say "compas: focused completed / Execution completed in 2m 15s" bu
 - Notification consumer does a store lookup on each completion (adds coupling)
 - Include first N chars of the dispatch body in `ExecutionStarted` and carry forward
 
+## Dirty worktree cleanup retries forever with no operator escape hatch
+
+**Severity:** Low
+**Status:** Open
+
+When a thread is closed but its worktree has uncommitted changes, the worker cleanup loop skips deletion and retries every ~60 seconds indefinitely. There is no MCP tool flag to force-delete a dirty worktree — the only recourses are:
+
+1. Commit or stash the changes in the worktree branch (`compas/{thread_id}`)
+2. Manually delete the worktree directory and run `git worktree prune` in the repo root
+3. Stop the worker, delete the worktree manually, restart
+
+**Root cause:** ADR-017 intentionally treats dirty worktrees as unsafe to delete. An escape hatch (`force_cleanup` flag on `orch_close`) was deferred as out of scope for the initial fix.
+
+**Planned fix:** Add `force_cleanup: bool` to `orch_close` to allow operators to override the guard explicitly when they know the changes can be discarded.
+
 ## Dashboard: No mouse support
 
 **Severity:** Low

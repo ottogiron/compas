@@ -322,6 +322,7 @@ pub async fn execute_trigger(
                     tokio::task::spawn_blocking(move || WorktreeManager::worktree_status(&wt_path))
                         .await
                         .ok()
+                        .and_then(|r| r.ok())
                         .flatten()
                 } else {
                     None
