@@ -154,3 +154,9 @@ pub struct ReadLogParams {
     /// When true, return the last `limit` lines instead of starting from offset
     pub tail: Option<bool>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ToolStatsParams {
+    /// Filter to a specific agent alias (omit for all agents)
+    pub agent_alias: Option<String>,
+}

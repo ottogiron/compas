@@ -1,6 +1,8 @@
 //! orch_status, orch_transcript, orch_read, orch_batch_status,
 //! orch_tasks, orch_metrics, orch_poll implementations.
 
+use std::collections::HashMap;
+
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
@@ -198,11 +200,20 @@ impl OrchestratorMcpServer {
 
     pub async fn metrics_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         #[derive(Serialize)]
+        struct CostOverview {
+            total_cost_usd: f64,
+            total_tokens_in: i64,
+            total_tokens_out: i64,
+            executions_with_cost: i64,
+        }
+
+        #[derive(Serialize)]
         struct Metrics {
             thread_counts: Vec<(String, i64)>,
             total_messages: i64,
             queue_depth: i64,
             active_by_agent: Vec<(String, i64)>,
+            cost: CostOverview,
         }
 
         let thread_counts = match self.store.thread_counts().await {
@@ -221,12 +232,129 @@ impl OrchestratorMcpServer {
             Ok(v) => v,
             Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
         };
+        let cost_summary = match self.store.cost_summary(None).await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("metrics query failed: {}", e))),
+        };
 
         Ok(json_text(&Metrics {
             thread_counts,
             total_messages,
             queue_depth,
             active_by_agent,
+            cost: CostOverview {
+                total_cost_usd: cost_summary.total_cost_usd,
+                total_tokens_in: cost_summary.total_tokens_in,
+                total_tokens_out: cost_summary.total_tokens_out,
+                executions_with_cost: cost_summary.executions_with_cost,
+            },
+        }))
+    }
+
+    // ── orch_tool_stats ──────────────────────────────────────────────────────
+
+    pub async fn tool_stats_impl(
+        &self,
+        params: ToolStatsParams,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let alias = params.agent_alias.as_deref();
+
+        // Get error rates (includes call_count from the inner join)
+        let error_rates: HashMap<String, (i64, f64)> =
+            match self.store.tool_error_rates(alias).await {
+                Ok(v) => v
+                    .into_iter()
+                    .map(|s| (s.tool_name, (s.error_count, s.error_rate)))
+                    .collect(),
+                Err(e) => return Ok(err_text(format!("tool stats query failed: {}", e))),
+            };
+
+        // Call counts as the primary list (defines the set of tool names)
+        let call_counts = match self.store.tool_call_counts(alias).await {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("tool stats query failed: {}", e))),
+        };
+
+        #[derive(Serialize)]
+        struct ToolStat {
+            tool_name: String,
+            call_count: i64,
+            error_count: i64,
+            error_rate: f64,
+        }
+
+        // Merge call_counts with error_rates by tool_name
+        let tool_stats: Vec<ToolStat> = call_counts
+            .into_iter()
+            .map(|s| {
+                let (error_count, error_rate) =
+                    error_rates.get(&s.tool_name).copied().unwrap_or((0, 0.0));
+                ToolStat {
+                    tool_name: s.tool_name,
+                    call_count: s.call_count,
+                    error_count,
+                    error_rate,
+                }
+            })
+            .collect();
+
+        // Tool usage broken down by agent (filter in Rust if alias is set)
+        #[derive(Serialize)]
+        struct AgentToolUsage {
+            agent_alias: String,
+            tool_name: String,
+            call_count: i64,
+        }
+
+        let usage_by_agent: Vec<AgentToolUsage> = match self.store.tool_usage_by_agent().await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|(a, _, _)| alias.is_none_or(|f| a == f))
+                .map(|(agent_alias, tool_name, call_count)| AgentToolUsage {
+                    agent_alias,
+                    tool_name,
+                    call_count,
+                })
+                .collect(),
+            Err(e) => return Ok(err_text(format!("tool usage query failed: {}", e))),
+        };
+
+        // Cost per agent (filter in Rust if alias is set)
+        #[derive(Serialize)]
+        struct AgentCost {
+            agent_alias: String,
+            total_cost_usd: f64,
+            total_tokens_in: i64,
+            total_tokens_out: i64,
+            execution_count: i64,
+        }
+
+        let cost_by_agent: Vec<AgentCost> = match self.store.cost_by_agent().await {
+            Ok(rows) => rows
+                .into_iter()
+                .filter(|c| alias.is_none_or(|f| c.agent_alias == f))
+                .map(|c| AgentCost {
+                    agent_alias: c.agent_alias,
+                    total_cost_usd: c.total_cost_usd,
+                    total_tokens_in: c.total_tokens_in,
+                    total_tokens_out: c.total_tokens_out,
+                    execution_count: c.execution_count,
+                })
+                .collect(),
+            Err(e) => return Ok(err_text(format!("cost by agent query failed: {}", e))),
+        };
+
+        #[derive(Serialize)]
+        struct ToolStatsResponse {
+            tool_stats: Vec<ToolStat>,
+            tool_usage_by_agent: Vec<AgentToolUsage>,
+            cost_by_agent: Vec<AgentCost>,
+        }
+
+        Ok(json_text(&ToolStatsResponse {
+            tool_stats,
+            tool_usage_by_agent: usage_by_agent,
+            cost_by_agent,
         }))
     }
 
