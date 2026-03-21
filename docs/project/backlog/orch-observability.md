@@ -163,7 +163,7 @@ Captured raw stream-json from all four backends. Key findings:
 - Owner: TBD
 - Complexity: L
 - Risk: Medium
-- Start: TBD
+- Start: 2026-03-21 14:28 UTC
 - End: TBD
 - Duration: TBD
 - Notes: Four backend parsers to implement/extend. Claude is richest (cost + tokens + tool events). Codex/Gemini have tokens. OpenCode is best-effort. Stream-json formats are undocumented and may change.
