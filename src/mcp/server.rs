@@ -139,6 +139,17 @@ impl OrchestratorMcpServer {
         self.metrics_impl().await
     }
 
+    #[tool(
+        name = "orch_tool_stats",
+        description = "Per-tool call counts, error rates, and cost breakdown across executions. Use to understand agent tool usage patterns and identify problematic tools."
+    )]
+    async fn orch_tool_stats(
+        &self,
+        Parameters(params): Parameters<ToolStatsParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.tool_stats_impl(params).await
+    }
+
     // orch_wait removed from MCP surface — stdio transport timeouts make it
     // unreliable. Use `compas wait` CLI subcommand instead.
     // The wait_impl method is preserved for potential future use.

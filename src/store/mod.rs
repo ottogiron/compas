@@ -221,6 +221,8 @@ pub struct CostSummary {
     pub total_tokens_in: i64,
     pub total_tokens_out: i64,
     pub execution_count: i64,
+    /// Count of executions where cost_usd IS NOT NULL (i.e., cost was recorded).
+    pub executions_with_cost: i64,
 }
 
 /// Per-agent cost and token breakdown.
@@ -2146,7 +2148,7 @@ impl Store {
         &self,
         agent_alias: Option<&str>,
     ) -> Result<CostSummary, sqlx::Error> {
-        let row: (Option<f64>, Option<f64>, Option<i64>, Option<i64>, i64) =
+        let row: (Option<f64>, Option<f64>, Option<i64>, Option<i64>, i64, i64) =
             if let Some(alias) = agent_alias {
                 sqlx::query_as(
                     "SELECT
@@ -2154,7 +2156,8 @@ impl Store {
                         AVG(cost_usd),
                         SUM(tokens_in),
                         SUM(tokens_out),
-                        COUNT(*)
+                        COUNT(*),
+                        COUNT(cost_usd)
                      FROM executions
                      WHERE agent_alias = ?",
                 )
@@ -2168,7 +2171,8 @@ impl Store {
                         AVG(cost_usd),
                         SUM(tokens_in),
                         SUM(tokens_out),
-                        COUNT(*)
+                        COUNT(*),
+                        COUNT(cost_usd)
                      FROM executions",
                 )
                 .fetch_one(&self.pool)
@@ -2181,6 +2185,7 @@ impl Store {
             total_tokens_in: row.2.unwrap_or(0),
             total_tokens_out: row.3.unwrap_or(0),
             execution_count: row.4,
+            executions_with_cost: row.5,
         })
     }
 
