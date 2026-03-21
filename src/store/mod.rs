@@ -1,11 +1,12 @@
 //! Storage layer backed by SQLite with WAL mode.
 #![allow(clippy::type_complexity)]
 //!
-//! Three core tables:
-//! - `threads`    — unit of work lifecycle
-//! - `messages`   — conversation record between operator and agents
-//! - `executions` — job queue AND execution lifecycle (single source of truth)
+//! Five core tables:
+//! - `threads`           — unit of work lifecycle
+//! - `messages`          — conversation record between operator and agents
+//! - `executions`        — job queue AND execution lifecycle (single source of truth)
 //! - `worker_heartbeats` — worker liveness tracking
+//! - `merge_operations`  — merge queue for branch integration
 
 use sqlx::SqlitePool;
 
@@ -113,6 +114,55 @@ impl std::str::FromStr for ExecutionStatus {
             "crashed" => Ok(Self::Crashed),
             "cancelled" => Ok(Self::Cancelled),
             other => Err(format!("unknown execution status: '{}'", other)),
+        }
+    }
+}
+
+/// Merge operation status enum — stored as lowercase TEXT in SQLite.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MergeOperationStatus {
+    Queued,
+    Claimed,
+    Executing,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl MergeOperationStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Claimed => "claimed",
+            Self::Executing => "executing",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+impl std::fmt::Display for MergeOperationStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for MergeOperationStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "queued" => Ok(Self::Queued),
+            "claimed" => Ok(Self::Claimed),
+            "executing" => Ok(Self::Executing),
+            "completed" => Ok(Self::Completed),
+            "failed" => Ok(Self::Failed),
+            "cancelled" => Ok(Self::Cancelled),
+            other => Err(format!("unknown merge operation status: '{}'", other)),
         }
     }
 }
@@ -233,6 +283,27 @@ pub struct AgentCostSummary {
     pub total_tokens_in: i64,
     pub total_tokens_out: i64,
     pub execution_count: i64,
+}
+
+/// A stored merge operation row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MergeOperation {
+    pub id: String,
+    pub thread_id: String,
+    pub source_branch: String,
+    pub target_branch: String,
+    pub merge_strategy: String,
+    pub requested_by: String,
+    pub status: String,
+    pub push_requested: bool,
+    pub queued_at: i64,
+    pub claimed_at: Option<i64>,
+    pub started_at: Option<i64>,
+    pub finished_at: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub result_summary: Option<String>,
+    pub error_detail: Option<String>,
+    pub conflict_files: Option<String>,
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -558,6 +629,44 @@ impl Store {
             .execute(&self.pool)
             .await?;
 
+        // MERGE-1: merge operations table for merge queue
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS merge_operations (
+                id              TEXT PRIMARY KEY,
+                thread_id       TEXT NOT NULL,
+                source_branch   TEXT NOT NULL,
+                target_branch   TEXT NOT NULL,
+                merge_strategy  TEXT NOT NULL DEFAULT 'merge',
+                requested_by    TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'queued',
+                push_requested  INTEGER NOT NULL DEFAULT 0,
+                queued_at       INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                claimed_at      INTEGER,
+                started_at      INTEGER,
+                finished_at     INTEGER,
+                duration_ms     INTEGER,
+                result_summary  TEXT,
+                error_detail    TEXT,
+                conflict_files  TEXT
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_merge_ops_target_status
+             ON merge_operations(target_branch, status)",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_merge_ops_thread
+             ON merge_operations(thread_id)",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -767,7 +876,11 @@ impl Store {
             "SELECT thread_id, worktree_path, worktree_repo_root FROM threads
              WHERE worktree_path IS NOT NULL
              AND worktree_repo_root IS NOT NULL
-             AND status IN ('Completed', 'Abandoned')",
+             AND status IN ('Completed', 'Abandoned')
+             AND thread_id NOT IN (
+                 SELECT thread_id FROM merge_operations
+                 WHERE status IN ('queued', 'claimed', 'executing')
+             )",
         )
         .fetch_all(&self.pool)
         .await
@@ -2229,6 +2342,320 @@ impl Store {
                 },
             )
             .collect())
+    }
+
+    // ── Merge operation methods ─────────────────────────────────────────
+
+    /// Insert a new merge operation.
+    pub async fn insert_merge_op(&self, op: &MergeOperation) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO merge_operations
+             (id, thread_id, source_branch, target_branch, merge_strategy,
+              requested_by, status, push_requested, queued_at,
+              claimed_at, started_at, finished_at, duration_ms,
+              result_summary, error_detail, conflict_files)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&op.id)
+        .bind(&op.thread_id)
+        .bind(&op.source_branch)
+        .bind(&op.target_branch)
+        .bind(&op.merge_strategy)
+        .bind(&op.requested_by)
+        .bind(&op.status)
+        .bind(op.push_requested)
+        .bind(op.queued_at)
+        .bind(op.claimed_at)
+        .bind(op.started_at)
+        .bind(op.finished_at)
+        .bind(op.duration_ms)
+        .bind(&op.result_summary)
+        .bind(&op.error_detail)
+        .bind(&op.conflict_files)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("insert_merge_op failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Atomically claim the next queued merge operation, respecting per-target serialization.
+    ///
+    /// Only claims an op when no other op for the same `target_branch` is `claimed` or
+    /// `executing`. Returns the claimed op, or `None` if no work is available.
+    pub async fn claim_next_merge_op(&self) -> Result<Option<MergeOperation>, String> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| format!("claim_next_merge_op: begin tx failed: {}", e))?;
+
+        let candidate: Option<(String,)> = sqlx::query_as(
+            "SELECT id FROM merge_operations
+             WHERE status = 'queued'
+               AND target_branch NOT IN (
+                   SELECT target_branch FROM merge_operations
+                   WHERE status IN ('claimed', 'executing')
+               )
+             ORDER BY queued_at ASC
+             LIMIT 1",
+        )
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("claim_next_merge_op: select failed: {}", e))?;
+
+        let Some(candidate) = candidate else {
+            tx.commit()
+                .await
+                .map_err(|e| format!("claim_next_merge_op: commit failed: {}", e))?;
+            return Ok(None);
+        };
+        let op_id = candidate.0;
+
+        let result = sqlx::query(
+            "UPDATE merge_operations
+             SET status = 'claimed', claimed_at = strftime('%s','now')
+             WHERE id = ? AND status = 'queued'",
+        )
+        .bind(&op_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| format!("claim_next_merge_op: update failed: {}", e))?;
+
+        if result.rows_affected() == 0 {
+            tx.commit()
+                .await
+                .map_err(|e| format!("claim_next_merge_op: commit failed: {}", e))?;
+            return Ok(None);
+        }
+
+        let row: Option<MergeOperation> = sqlx::query_as(
+            "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
+                    requested_by, status, push_requested, queued_at,
+                    claimed_at, started_at, finished_at, duration_ms,
+                    result_summary, error_detail, conflict_files
+             FROM merge_operations
+             WHERE id = ?",
+        )
+        .bind(&op_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| format!("claim_next_merge_op: fetch claimed row failed: {}", e))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| format!("claim_next_merge_op: commit failed: {}", e))?;
+        Ok(row)
+    }
+
+    /// Update merge operation status and optional result fields.
+    ///
+    /// Sets `started_at` when transitioning to `Executing`, and `finished_at` +
+    /// `duration_ms` when transitioning to terminal states.
+    pub async fn update_merge_op_status(
+        &self,
+        id: &str,
+        status: MergeOperationStatus,
+        result_summary: Option<&str>,
+        error_detail: Option<&str>,
+        conflict_files: Option<&str>,
+    ) -> Result<(), String> {
+        let status_str = status.as_str();
+
+        match status {
+            MergeOperationStatus::Executing => {
+                sqlx::query(
+                    "UPDATE merge_operations
+                     SET status = ?, started_at = strftime('%s','now'),
+                         result_summary = COALESCE(?, result_summary),
+                         error_detail = COALESCE(?, error_detail),
+                         conflict_files = COALESCE(?, conflict_files)
+                     WHERE id = ?",
+                )
+                .bind(status_str)
+                .bind(result_summary)
+                .bind(error_detail)
+                .bind(conflict_files)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("update_merge_op_status failed: {}", e))?;
+            }
+            MergeOperationStatus::Completed
+            | MergeOperationStatus::Failed
+            | MergeOperationStatus::Cancelled => {
+                // Terminal states: set finished_at and compute duration_ms from started_at
+                // (or claimed_at/queued_at as fallback).
+                sqlx::query(
+                    "UPDATE merge_operations
+                     SET status = ?,
+                         finished_at = strftime('%s','now'),
+                         duration_ms = (strftime('%s','now') - COALESCE(started_at, claimed_at, queued_at)) * 1000,
+                         result_summary = COALESCE(?, result_summary),
+                         error_detail = COALESCE(?, error_detail),
+                         conflict_files = COALESCE(?, conflict_files)
+                     WHERE id = ?",
+                )
+                .bind(status_str)
+                .bind(result_summary)
+                .bind(error_detail)
+                .bind(conflict_files)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("update_merge_op_status failed: {}", e))?;
+            }
+            _ => {
+                sqlx::query(
+                    "UPDATE merge_operations
+                     SET status = ?,
+                         result_summary = COALESCE(?, result_summary),
+                         error_detail = COALESCE(?, error_detail),
+                         conflict_files = COALESCE(?, conflict_files)
+                     WHERE id = ?",
+                )
+                .bind(status_str)
+                .bind(result_summary)
+                .bind(error_detail)
+                .bind(conflict_files)
+                .bind(id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| format!("update_merge_op_status failed: {}", e))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Get a single merge operation by ID.
+    pub async fn get_merge_op(&self, id: &str) -> Result<Option<MergeOperation>, String> {
+        let row: Option<MergeOperation> = sqlx::query_as(
+            "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
+                    requested_by, status, push_requested, queued_at,
+                    claimed_at, started_at, finished_at, duration_ms,
+                    result_summary, error_detail, conflict_files
+             FROM merge_operations
+             WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("get_merge_op failed: {}", e))?;
+        Ok(row)
+    }
+
+    /// List merge operations with optional filters.
+    pub async fn list_merge_ops(
+        &self,
+        target_branch: Option<&str>,
+        status: Option<MergeOperationStatus>,
+        thread_id: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<MergeOperation>, String> {
+        let mut conditions = Vec::new();
+        if target_branch.is_some() {
+            conditions.push("target_branch = ?");
+        }
+        if status.is_some() {
+            conditions.push("status = ?");
+        }
+        if thread_id.is_some() {
+            conditions.push("thread_id = ?");
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
+                    requested_by, status, push_requested, queued_at,
+                    claimed_at, started_at, finished_at, duration_ms,
+                    result_summary, error_detail, conflict_files
+             FROM merge_operations
+             {}
+             ORDER BY queued_at DESC
+             LIMIT ?",
+            where_clause
+        );
+
+        let mut query = sqlx::query_as::<_, MergeOperation>(&sql);
+        if let Some(tb) = target_branch {
+            query = query.bind(tb);
+        }
+        if let Some(ref st) = status {
+            query = query.bind(st.as_str());
+        }
+        if let Some(tid) = thread_id {
+            query = query.bind(tid);
+        }
+        query = query.bind(limit);
+
+        query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("list_merge_ops failed: {}", e))
+    }
+
+    /// Mark merge operations in `claimed`/`executing` status older than `timeout_secs` as `failed`.
+    ///
+    /// Returns count of affected rows.
+    pub async fn mark_stale_merge_ops_failed(&self, timeout_secs: u64) -> Result<u64, String> {
+        let result = sqlx::query(
+            "UPDATE merge_operations
+             SET status = 'failed',
+                 finished_at = strftime('%s','now'),
+                 duration_ms = (strftime('%s','now') - COALESCE(started_at, claimed_at, queued_at)) * 1000,
+                 error_detail = 'merge operation timed out'
+             WHERE status IN ('claimed', 'executing')
+               AND COALESCE(started_at, claimed_at, queued_at)
+                   <= strftime('%s','now') - ?",
+        )
+        .bind(timeout_secs.min(i64::MAX as u64) as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("mark_stale_merge_ops_failed failed: {}", e))?;
+        Ok(result.rows_affected())
+    }
+
+    /// Cancel a merge operation. Only succeeds if status is `queued`.
+    ///
+    /// Returns `true` if cancelled, `false` if not found or wrong status.
+    pub async fn cancel_merge_op(&self, id: &str) -> Result<bool, String> {
+        let result = sqlx::query(
+            "UPDATE merge_operations
+             SET status = 'cancelled',
+                 finished_at = strftime('%s','now'),
+                 duration_ms = (strftime('%s','now') - queued_at) * 1000
+             WHERE id = ? AND status = 'queued'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("cancel_merge_op failed: {}", e))?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Check if there's an existing queued/claimed/executing merge for the given thread+target.
+    ///
+    /// Used for idempotency guard in preflight.
+    pub async fn has_pending_merge_for_thread(
+        &self,
+        thread_id: &str,
+        target_branch: &str,
+    ) -> Result<bool, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM merge_operations
+             WHERE thread_id = ? AND target_branch = ?
+               AND status IN ('queued', 'claimed', 'executing')",
+        )
+        .bind(thread_id)
+        .bind(target_branch)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("has_pending_merge_for_thread failed: {}", e))?;
+        Ok(row.0 > 0)
     }
 }
 
@@ -3708,5 +4135,343 @@ mod tests {
             .unwrap();
         let thread = store.get_thread("t-sum").await.unwrap().unwrap();
         assert_eq!(thread.summary.as_deref(), Some("Fix signup bug"));
+    }
+
+    // ── Merge operation tests ────────────────────────────────────────────
+
+    fn make_merge_op(id: &str, thread_id: &str, target: &str) -> MergeOperation {
+        MergeOperation {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            source_branch: format!("feature/{}", id),
+            target_branch: target.to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_insert_and_get() {
+        let store = test_store().await;
+        let op = make_merge_op("m-1", "t-1", "main");
+
+        store.insert_merge_op(&op).await.unwrap();
+
+        let fetched = store.get_merge_op("m-1").await.unwrap().unwrap();
+        assert_eq!(fetched.id, "m-1");
+        assert_eq!(fetched.thread_id, "t-1");
+        assert_eq!(fetched.source_branch, "feature/m-1");
+        assert_eq!(fetched.target_branch, "main");
+        assert_eq!(fetched.merge_strategy, "merge");
+        assert_eq!(fetched.requested_by, "operator");
+        assert_eq!(fetched.status, "queued");
+        assert!(!fetched.push_requested);
+        assert!(fetched.claimed_at.is_none());
+        assert!(fetched.result_summary.is_none());
+
+        // Verify not-found returns None
+        let missing = store.get_merge_op("nonexistent").await.unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_claim_serialization() {
+        let store = test_store().await;
+
+        // Insert two ops for the same target_branch
+        let op1 = make_merge_op("m-1", "t-1", "main");
+        let op2 = make_merge_op("m-2", "t-2", "main");
+        store.insert_merge_op(&op1).await.unwrap();
+        store.insert_merge_op(&op2).await.unwrap();
+
+        // First claim should succeed — gets the older one
+        let claimed = store.claim_next_merge_op().await.unwrap();
+        assert!(claimed.is_some());
+        let claimed = claimed.unwrap();
+        assert_eq!(claimed.id, "m-1");
+        assert_eq!(claimed.status, "claimed");
+        assert!(claimed.claimed_at.is_some());
+
+        // Second claim should return None — same target_branch is blocked
+        let second = store.claim_next_merge_op().await.unwrap();
+        assert!(second.is_none());
+
+        // After completing the first, the second should be claimable
+        store
+            .update_merge_op_status(
+                "m-1",
+                MergeOperationStatus::Completed,
+                Some("merged"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let third = store.claim_next_merge_op().await.unwrap();
+        assert!(third.is_some());
+        assert_eq!(third.unwrap().id, "m-2");
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_claim_different_targets() {
+        let store = test_store().await;
+
+        // Insert ops for different target branches
+        let op1 = make_merge_op("m-1", "t-1", "main");
+        let op2 = make_merge_op("m-2", "t-2", "develop");
+        store.insert_merge_op(&op1).await.unwrap();
+        store.insert_merge_op(&op2).await.unwrap();
+
+        // Both should be claimable since they target different branches
+        let first = store.claim_next_merge_op().await.unwrap();
+        assert!(first.is_some());
+
+        let second = store.claim_next_merge_op().await.unwrap();
+        assert!(second.is_some());
+
+        // Verify they are different ops
+        let ids: Vec<String> = vec![first.unwrap().id, second.unwrap().id];
+        assert!(ids.contains(&"m-1".to_string()));
+        assert!(ids.contains(&"m-2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_cancel_only_queued() {
+        let store = test_store().await;
+
+        let op = make_merge_op("m-1", "t-1", "main");
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Cancel queued op should succeed
+        let cancelled = store.cancel_merge_op("m-1").await.unwrap();
+        assert!(cancelled);
+
+        let fetched = store.get_merge_op("m-1").await.unwrap().unwrap();
+        assert_eq!(fetched.status, "cancelled");
+        assert!(fetched.finished_at.is_some());
+
+        // Cancel again should fail (already cancelled)
+        let again = store.cancel_merge_op("m-1").await.unwrap();
+        assert!(!again);
+
+        // Cancel a claimed op should fail
+        let op2 = make_merge_op("m-2", "t-2", "main");
+        store.insert_merge_op(&op2).await.unwrap();
+        let _ = store.claim_next_merge_op().await.unwrap();
+        let cancel_claimed = store.cancel_merge_op("m-2").await.unwrap();
+        assert!(!cancel_claimed);
+
+        // Cancel nonexistent should return false
+        let cancel_missing = store.cancel_merge_op("nonexistent").await.unwrap();
+        assert!(!cancel_missing);
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_stale_detection() {
+        let store = test_store().await;
+
+        // Insert an op with very old queued_at
+        let mut op = make_merge_op("m-1", "t-1", "main");
+        op.queued_at = 100; // very old timestamp
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Claim it (this sets claimed_at to now)
+        let claimed = store.claim_next_merge_op().await.unwrap().unwrap();
+        assert_eq!(claimed.status, "claimed");
+
+        // With timeout=0, any op claimed at or before "now" is stale — should catch it.
+        let count = store.mark_stale_merge_ops_failed(0).await.unwrap();
+        assert_eq!(count, 1);
+
+        let fetched = store.get_merge_op("m-1").await.unwrap().unwrap();
+        assert_eq!(fetched.status, "failed");
+        assert_eq!(
+            fetched.error_detail.as_deref(),
+            Some("merge operation timed out")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_has_pending() {
+        let store = test_store().await;
+
+        // No pending ops
+        let has = store
+            .has_pending_merge_for_thread("t-1", "main")
+            .await
+            .unwrap();
+        assert!(!has);
+
+        // Insert a queued op
+        let op = make_merge_op("m-1", "t-1", "main");
+        store.insert_merge_op(&op).await.unwrap();
+
+        let has = store
+            .has_pending_merge_for_thread("t-1", "main")
+            .await
+            .unwrap();
+        assert!(has);
+
+        // Different thread, same target — no pending
+        let has = store
+            .has_pending_merge_for_thread("t-2", "main")
+            .await
+            .unwrap();
+        assert!(!has);
+
+        // Same thread, different target — no pending
+        let has = store
+            .has_pending_merge_for_thread("t-1", "develop")
+            .await
+            .unwrap();
+        assert!(!has);
+
+        // Cancel the op — no longer pending
+        store.cancel_merge_op("m-1").await.unwrap();
+        let has = store
+            .has_pending_merge_for_thread("t-1", "main")
+            .await
+            .unwrap();
+        assert!(!has);
+    }
+
+    #[tokio::test]
+    async fn test_stale_worktrees_excludes_pending_merges() {
+        let store = test_store().await;
+
+        // Create a completed thread with a worktree
+        store.ensure_thread("t-1", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-1",
+                std::path::Path::new("/tmp/wt1"),
+                std::path::Path::new("/tmp/repo"),
+            )
+            .await
+            .unwrap();
+        store
+            .update_thread_status("t-1", ThreadStatus::Completed)
+            .await
+            .unwrap();
+
+        // Without a merge op, thread should appear in stale worktrees
+        let stale = store.threads_with_stale_worktrees().await.unwrap();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "t-1");
+
+        // Add a pending merge op for the thread
+        let op = make_merge_op("m-1", "t-1", "main");
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Now thread should be excluded from stale worktrees
+        let stale = store.threads_with_stale_worktrees().await.unwrap();
+        assert!(stale.is_empty());
+
+        // Complete the merge — thread should reappear
+        store
+            .update_merge_op_status(
+                "m-1",
+                MergeOperationStatus::Completed,
+                Some("merged"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let stale = store.threads_with_stale_worktrees().await.unwrap();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].0, "t-1");
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_list_ops() {
+        let store = test_store().await;
+
+        let op1 = make_merge_op("m-1", "t-1", "main");
+        let op2 = make_merge_op("m-2", "t-2", "develop");
+        let mut op3 = make_merge_op("m-3", "t-3", "main");
+        op3.queued_at = 2000; // newer
+        store.insert_merge_op(&op1).await.unwrap();
+        store.insert_merge_op(&op2).await.unwrap();
+        store.insert_merge_op(&op3).await.unwrap();
+
+        // No filters — all ops returned
+        let all = store.list_merge_ops(None, None, None, 100).await.unwrap();
+        assert_eq!(all.len(), 3);
+
+        // Filter by target_branch
+        let main_ops = store
+            .list_merge_ops(Some("main"), None, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(main_ops.len(), 2);
+        assert!(main_ops.iter().all(|op| op.target_branch == "main"));
+
+        let dev_ops = store
+            .list_merge_ops(Some("develop"), None, None, 100)
+            .await
+            .unwrap();
+        assert_eq!(dev_ops.len(), 1);
+        assert_eq!(dev_ops[0].id, "m-2");
+
+        // Filter by status — all are queued
+        let queued = store
+            .list_merge_ops(None, Some(MergeOperationStatus::Queued), None, 100)
+            .await
+            .unwrap();
+        assert_eq!(queued.len(), 3);
+
+        // Cancel one, then filter by cancelled
+        store.cancel_merge_op("m-1").await.unwrap();
+        let cancelled = store
+            .list_merge_ops(None, Some(MergeOperationStatus::Cancelled), None, 100)
+            .await
+            .unwrap();
+        assert_eq!(cancelled.len(), 1);
+        assert_eq!(cancelled[0].id, "m-1");
+
+        // Queued should now be 2
+        let queued = store
+            .list_merge_ops(None, Some(MergeOperationStatus::Queued), None, 100)
+            .await
+            .unwrap();
+        assert_eq!(queued.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_update_executing_sets_started_at() {
+        let store = test_store().await;
+
+        let op = make_merge_op("m-1", "t-1", "main");
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Claim it first
+        let claimed = store.claim_next_merge_op().await.unwrap().unwrap();
+        assert_eq!(claimed.status, "claimed");
+        assert!(claimed.started_at.is_none());
+
+        // Transition to executing
+        store
+            .update_merge_op_status("m-1", MergeOperationStatus::Executing, None, None, None)
+            .await
+            .unwrap();
+
+        let fetched = store.get_merge_op("m-1").await.unwrap().unwrap();
+        assert_eq!(fetched.status, "executing");
+        assert!(fetched.started_at.is_some());
+        assert!(fetched.finished_at.is_none());
+        assert!(fetched.duration_ms.is_none());
     }
 }
