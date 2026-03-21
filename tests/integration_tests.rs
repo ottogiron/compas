@@ -6168,3 +6168,381 @@ mod generic_backend_registry_tests {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Merge Queue Worker Integration Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod merge_worker_tests {
+    use super::*;
+    use compas::events::EventBus;
+    use compas::store::{MergeOperation, MergeOperationStatus};
+    use compas::worker::WorkerRunner;
+    use std::process::Command;
+
+    /// Create a temporary git repo with an initial commit.
+    fn init_test_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let dir_str = dir.path().to_string_lossy().to_string();
+
+        let init = Command::new("git")
+            .args(["init", &dir_str])
+            .output()
+            .unwrap();
+        assert!(init.status.success(), "git init failed");
+
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &dir_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial commit",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success(), "initial commit failed");
+
+        dir
+    }
+
+    /// Create a source branch with a committed file.
+    fn create_source_branch(repo_path: &std::path::Path, branch_name: &str) {
+        let path_str = repo_path.to_string_lossy().to_string();
+
+        let checkout = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-b", branch_name])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+
+        std::fs::write(repo_path.join("feature.txt"), "feature content").unwrap();
+
+        let add = Command::new("git")
+            .args(["-C", &path_str, "add", "feature.txt"])
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "add feature",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success());
+
+        let back = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+    }
+
+    /// Get the default branch name.
+    fn default_branch(repo_path: &std::path::Path) -> String {
+        let path_str = repo_path.to_string_lossy().to_string();
+        let output = Command::new("git")
+            .args(["-C", &path_str, "rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    fn merge_test_config(repo_root: PathBuf) -> OrchestratorConfig {
+        OrchestratorConfig {
+            default_workdir: repo_root,
+            state_dir: PathBuf::from("/tmp/compas-merge-test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "focused".to_string(),
+                backend: "stub".to_string(),
+                role: AgentRole::Worker,
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: Some(30),
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_merge_happy_path() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        create_source_branch(repo.path(), "compas/merge-happy");
+
+        let store = test_store().await;
+        let config = merge_test_config(repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Insert a queued merge operation
+        let op = MergeOperation {
+            id: "merge-happy-1".to_string(),
+            thread_id: "merge-happy".to_string(),
+            source_branch: "compas/merge-happy".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Drive the merge poll
+        runner.poll_merge_ops().await;
+
+        // The merge runs in a spawned task — wait for it to complete.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store.get_merge_op("merge-happy-1").await.unwrap().unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Completed,
+                    "merge op should complete successfully, error: {:?}",
+                    fetched.error_detail
+                );
+                assert!(
+                    fetched.result_summary.is_some(),
+                    "completed merge should have a result summary"
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not reach terminal status within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_merge_conflict_path() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        let path_str = repo.path().to_string_lossy().to_string();
+
+        // Create a base file on the default branch
+        std::fs::write(repo.path().join("shared.txt"), "base content").unwrap();
+        let add = Command::new("git")
+            .args(["-C", &path_str, "add", "shared.txt"])
+            .output()
+            .unwrap();
+        assert!(add.status.success());
+        let commit = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "add shared",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit.status.success());
+
+        // Create source branch modifying same file
+        let checkout = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-b", "compas/merge-conflict"])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        std::fs::write(repo.path().join("shared.txt"), "source content").unwrap();
+        let add2 = Command::new("git")
+            .args(["-C", &path_str, "add", "shared.txt"])
+            .output()
+            .unwrap();
+        assert!(add2.status.success());
+        let commit2 = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "source change",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit2.status.success());
+        let back = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+
+        // Modify same file on target to create conflict
+        std::fs::write(repo.path().join("shared.txt"), "target content").unwrap();
+        let add3 = Command::new("git")
+            .args(["-C", &path_str, "add", "shared.txt"])
+            .output()
+            .unwrap();
+        assert!(add3.status.success());
+        let commit3 = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "target change",
+            ])
+            .output()
+            .unwrap();
+        assert!(commit3.status.success());
+
+        let store = test_store().await;
+        let config = merge_test_config(repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let op = MergeOperation {
+            id: "merge-conflict-1".to_string(),
+            thread_id: "merge-conflict".to_string(),
+            source_branch: "compas/merge-conflict".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        // Drive the merge poll
+        runner.poll_merge_ops().await;
+
+        // Wait for the spawned task to complete.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store
+                .get_merge_op("merge-conflict-1")
+                .await
+                .unwrap()
+                .unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Failed,
+                    "merge op should fail due to conflict"
+                );
+                assert!(
+                    fetched.error_detail.is_some(),
+                    "failed merge should have error detail"
+                );
+                assert!(
+                    fetched
+                        .error_detail
+                        .as_ref()
+                        .unwrap()
+                        .to_lowercase()
+                        .contains("conflict"),
+                    "error should mention conflict, got: {}",
+                    fetched.error_detail.unwrap()
+                );
+                assert!(
+                    fetched.conflict_files.is_some(),
+                    "failed merge should have conflict_files"
+                );
+                // conflict_files is stored as a JSON array string
+                let files: Vec<String> =
+                    serde_json::from_str(fetched.conflict_files.as_ref().unwrap()).unwrap();
+                assert!(
+                    files.contains(&"shared.txt".to_string()),
+                    "conflict_files should include shared.txt, got: {:?}",
+                    files
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not reach terminal status within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+}

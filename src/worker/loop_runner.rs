@@ -23,7 +23,8 @@ use crate::backend::registry::BackendRegistry;
 use crate::config::types::{AgentConfig, AgentRole, HandoffTarget};
 use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
-use crate::store::Store;
+use crate::merge::MergeExecutor;
+use crate::store::{MergeOperationStatus, Store};
 use crate::worktree::WorktreeManager;
 
 use super::executor::{execute_trigger, TriggerOutput};
@@ -136,6 +137,38 @@ impl WorkerRunner {
             tracing::warn!(count = crashed, "marked orphaned executions as crashed");
         }
 
+        // Crash recovery: mark any claimed/executing merge operations as failed.
+        match self.store.mark_stale_merge_ops_failed(0).await {
+            Ok(count) if count > 0 => {
+                tracing::warn!(count, "marked orphaned merge operations as failed");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to mark orphaned merge ops");
+            }
+            _ => {}
+        }
+
+        // Crash recovery: clean up leftover merge worktrees from previous crash.
+        {
+            let repo_root = startup_config.default_workdir.clone();
+            match tokio::task::spawn_blocking(move || {
+                MergeExecutor::cleanup_orphaned_merge_worktrees(&repo_root, &[])
+            })
+            .await
+            {
+                Ok(Ok(count)) if count > 0 => {
+                    tracing::info!(count, "cleaned up orphaned merge worktrees");
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "failed to cleanup orphaned merge worktrees");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "spawn_blocking panicked during merge worktree cleanup");
+                }
+                _ => {}
+            }
+        }
+
         // Create log directory and prune old log files on startup.
         let log_dir = startup_config.log_dir();
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
@@ -169,6 +202,9 @@ impl WorkerRunner {
         let mut heartbeat_interval = tokio::time::interval(Duration::from_secs(10));
         let mut poll_interval =
             tokio::time::interval(Duration::from_secs(poll_interval_secs.max(1)));
+        // Merge queue polling — same interval as the main execution poll.
+        let mut merge_interval =
+            tokio::time::interval(Duration::from_secs(poll_interval_secs.max(1)));
         // Periodic stale execution check: detect executions stuck in
         // picked_up/executing beyond the trigger timeout. These are
         // likely from a panicked spawn_blocking task or a hung backend.
@@ -187,6 +223,9 @@ impl WorkerRunner {
                 _ = poll_interval.tick() => {
                     self.poll_once(&semaphore).await;
                 }
+                _ = merge_interval.tick() => {
+                    self.poll_merge_ops().await;
+                }
                 _ = heartbeat_interval.tick() => {
                     if let Err(e) = self.store
                         .write_heartbeat(&self.worker_id, env!("CARGO_PKG_VERSION"))
@@ -203,6 +242,18 @@ impl WorkerRunner {
                         }
                         Err(e) => {
                             tracing::warn!(error = %e, "stale execution check failed");
+                        }
+                        _ => {}
+                    }
+
+                    // Stale merge operation detection
+                    let merge_timeout_secs = self.config.load().orchestration.merge_timeout_secs;
+                    match self.store.mark_stale_merge_ops_failed(merge_timeout_secs).await {
+                        Ok(count) if count > 0 => {
+                            tracing::warn!(count, merge_timeout_secs, "marked stale merge operations as failed");
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "stale merge operation check failed");
                         }
                         _ => {}
                     }
@@ -470,6 +521,143 @@ impl WorkerRunner {
                 }
             }
         }
+    }
+
+    /// Poll for queued merge operations and execute them.
+    ///
+    /// Claims at most one merge op per poll cycle. The store's `claim_next_merge_op`
+    /// enforces per-target-branch serialization (at most one active merge per target).
+    /// Execution is spawned as a detached task to avoid blocking the select! loop.
+    ///
+    /// `pub` so integration tests in `tests/` can drive the worker directly without
+    /// starting the full poll loop.
+    pub async fn poll_merge_ops(&self) {
+        let op = match self.store.claim_next_merge_op().await {
+            Ok(Some(op)) => op,
+            Ok(None) => return, // No work or all target branches busy
+            Err(e) => {
+                tracing::error!(error = %e, "failed to claim merge operation");
+                return;
+            }
+        };
+
+        tracing::info!(
+            op_id = %op.id,
+            source = %op.source_branch,
+            target = %op.target_branch,
+            strategy = %op.merge_strategy,
+            "merge operation claimed"
+        );
+
+        // Transition to Executing
+        if let Err(e) = self
+            .store
+            .update_merge_op_status(&op.id, MergeOperationStatus::Executing, None, None, None)
+            .await
+        {
+            tracing::error!(op_id = %op.id, error = %e, "failed to set merge op to executing");
+            return;
+        }
+
+        // Spawn a detached task so the merge does not block the select! loop.
+        let store = self.store.clone();
+        let repo_root = self.config.load().default_workdir.clone();
+
+        tokio::spawn(async move {
+            // MergeExecutor::execute runs blocking git subprocesses — must use spawn_blocking.
+            let op_clone = op.clone();
+            let root = repo_root.clone();
+            let result =
+                tokio::task::spawn_blocking(move || MergeExecutor::execute(&op_clone, &root)).await;
+
+            match result {
+                Ok(Ok(merge_result)) if merge_result.success => {
+                    tracing::info!(
+                        op_id = %op.id,
+                        source = %op.source_branch,
+                        target = %op.target_branch,
+                        "merge completed"
+                    );
+                    if let Err(e) = store
+                        .update_merge_op_status(
+                            &op.id,
+                            MergeOperationStatus::Completed,
+                            merge_result.summary.as_deref(),
+                            None,
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to completed");
+                    }
+                }
+                Ok(Ok(merge_result)) => {
+                    // Merge executed but failed (e.g. conflict)
+                    let conflict_json = merge_result
+                        .conflict_files
+                        .as_ref()
+                        .and_then(|files| serde_json::to_string(files).ok());
+                    let error_msg = merge_result
+                        .error
+                        .as_deref()
+                        .unwrap_or("merge failed (unknown reason)");
+                    tracing::info!(
+                        op_id = %op.id,
+                        error = %error_msg,
+                        "merge failed"
+                    );
+                    if let Err(e) = store
+                        .update_merge_op_status(
+                            &op.id,
+                            MergeOperationStatus::Failed,
+                            None,
+                            Some(error_msg),
+                            conflict_json.as_deref(),
+                        )
+                        .await
+                    {
+                        tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to failed");
+                    }
+                }
+                Ok(Err(e)) => {
+                    // MergeExecutor::execute returned Err (infrastructure failure)
+                    tracing::error!(
+                        op_id = %op.id,
+                        error = %e,
+                        "merge infrastructure failure"
+                    );
+                    if let Err(update_err) = store
+                        .update_merge_op_status(
+                            &op.id,
+                            MergeOperationStatus::Failed,
+                            None,
+                            Some(&e),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(op_id = %op.id, error = %update_err, "failed to update merge op to failed");
+                    }
+                }
+                Err(join_err) => {
+                    // spawn_blocking panicked
+                    let error_msg = format!("merge task panicked: {}", join_err);
+                    tracing::error!(op_id = %op.id, error = %error_msg, "merge task panicked");
+                    if let Err(e) = store
+                        .update_merge_op_status(
+                            &op.id,
+                            MergeOperationStatus::Failed,
+                            None,
+                            Some(&error_msg),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to failed after panic");
+                    }
+                }
+            }
+        });
     }
 
     /// Scan for messages that should trigger an execution but haven't yet.

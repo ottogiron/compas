@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Worker: merge queue polling, crash recovery, and stale merge detection (MERGE-3)
 - Dashboard cost/token visibility (OBS-04): Ops footer appends `│ Cost: $X.XX  Tok: NK/NK` when cost or token data exists; Agents tab cards show a per-agent cost/token row between the active count and recent executions. Format helpers `format_tokens` and `format_cost_usd` added to `dashboard::views`.
 - CLI: `compas wait-merge --op-id <id>` blocking wait for merge completion (MERGE-6)
 - Generic backend registry wiring and documentation (GBE-3): `build_backend_registry()` now iterates `config.backend_definitions` and registers each as a `GenericBackend`; `compas doctor` validates generic backend commands on PATH; README documents `backend_definitions` with examples; ADR-022 records the config-driven generic backend design
