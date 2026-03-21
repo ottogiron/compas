@@ -270,6 +270,28 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                     def.name
                 )));
             }
+            if def.args.iter().any(|a| a.trim().is_empty()) {
+                return Err(OrchestratorError::Config(format!(
+                    "backend_definitions: '{}' args must not contain empty entries",
+                    def.name
+                )));
+            }
+            if let Some(ref env_remove) = def.env_remove {
+                if env_remove.iter().any(|v| v.trim().is_empty()) {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' env_remove must not contain empty entries",
+                        def.name
+                    )));
+                }
+            }
+            if let Some(ref resume) = def.resume {
+                if resume.session_id_arg.is_empty() {
+                    return Err(OrchestratorError::Config(format!(
+                        "backend_definitions: '{}' resume.session_id_arg must not be empty",
+                        def.name
+                    )));
+                }
+            }
             // result_field / session_id_field only make sense for json/jsonl formats
             if def.output.format == OutputFormat::Plaintext {
                 if def.output.result_field.is_some() {

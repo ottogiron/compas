@@ -33,7 +33,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for deserialization and validation
   - `make verify`
-- Status: Done
+- Status: In Progress
 
 ## Ticket GBE-2 — GenericBackend implementation
 
@@ -116,7 +116,7 @@ Created: 2026-03-21
 - Owner: (pending)
 - Complexity: (pending)
 - Risk: (pending)
-- Start: 2026-03-21 15:05 UTC
+- Start: 2026-03-21 15:20 UTC
 - End: 2026-03-21 15:11 UTC
 - Duration: 00:06:28
 - Notes: (pending)
