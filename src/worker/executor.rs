@@ -95,7 +95,17 @@ pub async fn execute_trigger(
             let err = format!("no agent config for alias '{}'", agent_alias);
             tracing::error!(%err);
             if let Ok(0) = store
-                .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
+                .fail_execution(
+                    &exec_id,
+                    &err,
+                    None,
+                    0,
+                    ExecutionStatus::Failed,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
@@ -124,7 +134,17 @@ pub async fn execute_trigger(
             let err = format!("backend lookup failed: {}", e);
             tracing::error!(%err, agent = %agent_alias);
             if let Ok(0) = store
-                .fail_execution(&exec_id, &err, None, 0, ExecutionStatus::Failed)
+                .fail_execution(
+                    &exec_id,
+                    &err,
+                    None,
+                    0,
+                    ExecutionStatus::Failed,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
@@ -295,6 +315,10 @@ pub async fn execute_trigger(
             let parsed_intent = result.parsed_intent.clone();
             let mut output_text = result.result_text.clone();
             let error_category = result.error_category.clone();
+            let cost_usd = result.cost_usd;
+            let tokens_in = result.tokens_in;
+            let tokens_out = result.tokens_out;
+            let num_turns = result.num_turns;
 
             // Persist the backend session ID unconditionally (safety net).
             // The telemetry consumer may have already persisted it mid-stream,
@@ -340,6 +364,10 @@ pub async fn execute_trigger(
                         Some(&truncate(&output_text, 4096)),
                         parsed_intent.as_deref(),
                         duration_ms,
+                        cost_usd,
+                        tokens_in,
+                        tokens_out,
+                        num_turns,
                     )
                     .await
                 {
@@ -362,6 +390,10 @@ pub async fn execute_trigger(
                         Some(1),
                         duration_ms,
                         ExecutionStatus::Failed,
+                        cost_usd,
+                        tokens_in,
+                        tokens_out,
+                        num_turns,
                     )
                     .await
                 {
@@ -417,7 +449,17 @@ pub async fn execute_trigger(
                 Some(crate::backend::classify_error(false, false, &err))
             };
             if let Ok(0) = store
-                .fail_execution(&exec_id, &err, None, duration_ms, status)
+                .fail_execution(
+                    &exec_id,
+                    &err,
+                    None,
+                    duration_ms,
+                    status,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
                 .await
             {
                 tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");

@@ -5,7 +5,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use super::process::{kill_process, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker};
-use super::{classify_error, Backend, BackendOutput, PingResult};
+use super::{classify_error, truncate_detail, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -110,20 +110,31 @@ impl Default for ClaudeCodeBackend {
     }
 }
 
-/// Extract result text and session_id from Claude stream-json (JSONL) output.
+/// Cost and token data extracted from a Claude `result` event.
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeCostData {
+    pub cost_usd: Option<f64>,
+    pub tokens_in: Option<i64>,
+    pub tokens_out: Option<i64>,
+    pub num_turns: Option<i32>,
+}
+
+/// Extract result text, session_id, and cost/token data from Claude stream-json (JSONL) output.
 ///
 /// With `--output-format stream-json`, Claude Code emits JSONL events during
 /// execution and a final result line:
 /// ```jsonl
 /// {"type":"system","subtype":"init","session_id":"abc-123",...}
 /// {"type":"assistant","message":{"content":[...]}}
-/// {"type":"result","subtype":"success","result":"Done.","session_id":"abc-123",...}
+/// {"type":"result","subtype":"success","result":"Done.","session_id":"abc-123",
+///   "total_cost_usd":0.0447,"num_turns":2,
+///   "usage":{"input_tokens":4,"output_tokens":112,...},...}
 /// ```
 ///
 /// Finds the last line with `"type":"result"` and extracts `result`, `session_id`,
-/// and whether a result line was found at all.
+/// cost/token data, and whether a result line was found at all.
 /// Falls back to raw stdout if no result line is found.
-fn extract_claude_stream_output(stdout: &[u8]) -> (String, Option<String>, bool) {
+fn extract_claude_stream_output(stdout: &[u8]) -> (String, Option<String>, bool, ClaudeCostData) {
     let text = String::from_utf8_lossy(stdout);
 
     // Scan lines from the end — the result line is typically the last line.
@@ -143,13 +154,30 @@ fn extract_claude_stream_output(stdout: &[u8]) -> (String, Option<String>, bool)
                     .get("session_id")
                     .and_then(|s| s.as_str())
                     .map(|s| s.to_string());
-                return (result_text, session_id, true);
+
+                // Extract cost/token data from the result event.
+                let cost_usd = val.get("total_cost_usd").and_then(|v| v.as_f64());
+                let tokens_in = val.pointer("/usage/input_tokens").and_then(|v| v.as_i64());
+                let tokens_out = val.pointer("/usage/output_tokens").and_then(|v| v.as_i64());
+                let num_turns = val
+                    .get("num_turns")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as i32);
+
+                let cost_data = ClaudeCostData {
+                    cost_usd,
+                    tokens_in,
+                    tokens_out,
+                    num_turns,
+                };
+
+                return (result_text, session_id, true, cost_data);
             }
         }
     }
 
     // Fallback: no result line found — return raw stdout.
-    (text.to_string(), None, false)
+    (text.to_string(), None, false, ClaudeCostData::default())
 }
 
 #[async_trait]
@@ -213,7 +241,7 @@ impl Backend for ClaudeCodeBackend {
         match output {
             Ok(out) => {
                 let raw_output = String::from_utf8_lossy(&out.stdout).to_string();
-                let (result_text, real_session_id, found_result) =
+                let (result_text, real_session_id, found_result, cost_data) =
                     extract_claude_stream_output(&out.stdout);
 
                 // Consider the trigger successful if we got a valid result line
@@ -237,6 +265,10 @@ impl Backend for ClaudeCodeBackend {
                     raw_output,
                     error_category,
                     pid: Some(pid),
+                    cost_usd: cost_data.cost_usd,
+                    tokens_in: cost_data.tokens_in,
+                    tokens_out: cost_data.tokens_out,
+                    num_turns: cost_data.num_turns,
                 })
             }
             Err(e) => Err(e),
@@ -322,26 +354,6 @@ pub fn extract_session_id_from_line(line: &str) -> Option<String> {
     Some(sid.to_string())
 }
 
-/// Maximum length for the `detail` field (raw JSON) stored per event.
-const MAX_DETAIL_LEN: usize = 2048;
-
-fn truncate_detail(s: &str) -> String {
-    if s.len() <= MAX_DETAIL_LEN {
-        s.to_string()
-    } else {
-        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
-    }
-}
-
-/// Parse a single Claude stream-json JSONL line into an `ExecutionEvent`.
-///
-/// Schemas observed from Claude Code CLI v1.0.x (`--output-format stream-json`).
-/// Returns `None` for unrecognized or irrelevant event lines.
-///
-/// **Limitation**: When an `assistant` message contains multiple `tool_use`
-/// blocks, only the *first* one is captured. Subsequent tool_use blocks in
-/// the same message are dropped. This is acceptable because Claude Code
-/// typically emits one tool_use per assistant message in stream-json mode.
 /// Shorten an absolute file path for display.
 /// Keeps the last 2-3 path components (e.g., "/home/user/projects/repo/src/backend/claude.rs" → "src/backend/claude.rs").
 fn shorten_path(path: &str) -> &str {
@@ -357,6 +369,15 @@ fn shorten_path(path: &str) -> &str {
     }
 }
 
+/// Parse a single Claude stream-json JSONL line into an `ExecutionEvent`.
+///
+/// Schemas observed from Claude Code CLI v1.0.x (`--output-format stream-json`).
+/// Returns `None` for unrecognized or irrelevant event lines.
+///
+/// **Limitation**: When an `assistant` message contains multiple `tool_use`
+/// blocks, only the *first* one is captured. Subsequent tool_use blocks in
+/// the same message are dropped. This is acceptable because Claude Code
+/// typically emits one tool_use per assistant message in stream-json mode.
 pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -452,6 +473,34 @@ pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                         detail: Some(truncate_detail(trimmed)),
                         timestamp_ms: now_ms,
                         event_index: 0,
+                        tool_name: Some(name.to_string()),
+                    });
+                }
+            }
+            None
+        }
+        "user" => {
+            // User events with tool_result content blocks indicate tool completion.
+            let content = val.pointer("/message/content")?;
+            let items = content.as_array()?;
+            for item in items {
+                if item.get("type").and_then(|t| t.as_str()) == Some("tool_result") {
+                    let tool_use_id = item
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("unknown");
+                    let is_error = item
+                        .get("is_error")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let status = if is_error { "error" } else { "completed" };
+                    return Some(super::ExecutionEvent {
+                        event_type: "tool_result".to_string(),
+                        summary: format!("tool_result: {} ({})", tool_use_id, status),
+                        detail: Some(truncate_detail(trimmed)),
+                        timestamp_ms: now_ms,
+                        event_index: 0,
+                        tool_name: None, // tool_result doesn't carry the tool name directly
                     });
                 }
             }
@@ -463,6 +512,7 @@ pub fn parse_claude_stream_line(line: &str) -> Option<super::ExecutionEvent> {
             detail: Some(truncate_detail(trimmed)),
             timestamp_ms: now_ms,
             event_index: 0,
+            tool_name: None,
         }),
         _ => None,
     }
@@ -581,9 +631,32 @@ mod tests {
     #[test]
     fn test_extract_stream_output_single_result_line() {
         let stdout = r#"{"type":"result","subtype":"success","cost_usd":0.003,"is_error":false,"duration_ms":5443,"duration_api_ms":3709,"num_turns":1,"result":"ok","session_id":"abc-123-def"}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "ok");
         assert_eq!(sid, Some("abc-123-def".to_string()));
+    }
+
+    #[test]
+    fn test_extract_stream_output_cost_data() {
+        let stdout = r#"{"type":"result","subtype":"success","total_cost_usd":0.0447,"num_turns":2,"usage":{"input_tokens":4000,"output_tokens":112,"cache_read_input_tokens":36632},"result":"done","session_id":"s1"}"#;
+        let (_text, _sid, found, cost) = extract_claude_stream_output(stdout.as_bytes());
+        assert!(found);
+        assert!((cost.cost_usd.unwrap() - 0.0447).abs() < 1e-6);
+        assert_eq!(cost.tokens_in, Some(4000));
+        assert_eq!(cost.tokens_out, Some(112));
+        assert_eq!(cost.num_turns, Some(2));
+    }
+
+    #[test]
+    fn test_extract_stream_output_no_cost_data() {
+        // Result line without cost/token fields
+        let stdout = r#"{"type":"result","subtype":"success","result":"ok"}"#;
+        let (_text, _sid, found, cost) = extract_claude_stream_output(stdout.as_bytes());
+        assert!(found);
+        assert!(cost.cost_usd.is_none());
+        assert!(cost.tokens_in.is_none());
+        assert!(cost.tokens_out.is_none());
+        assert!(cost.num_turns.is_none());
     }
 
     #[test]
@@ -593,7 +666,7 @@ mod tests {
 {"type":"assistant","message":{"id":"msg_01","type":"message","role":"assistant","content":[{"type":"text","text":"Working on it..."}]}}
 {"type":"assistant","message":{"id":"msg_02","type":"message","role":"assistant","content":[{"type":"tool_use","id":"tu_01","name":"Write","input":{}}]}}
 {"type":"result","subtype":"success","cost_usd":0.05,"is_error":false,"duration_ms":12000,"duration_api_ms":8000,"num_turns":3,"result":"Task completed successfully.","session_id":"abc-123"}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "Task completed successfully.");
         assert_eq!(sid, Some("abc-123".to_string()));
     }
@@ -602,7 +675,7 @@ mod tests {
     fn test_extract_stream_output_no_result_line_fallback() {
         // No result line — falls back to raw stdout
         let stdout = "plain text error from claude\n";
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "plain text error from claude\n");
         assert!(sid.is_none());
     }
@@ -612,7 +685,7 @@ mod tests {
         // Agent embeds JSON intent in the result field
         let stdout = r#"{"type":"system","subtype":"init","session_id":"s1"}
 {"type":"result","subtype":"success","result":"{\"intent\":\"status-update\",\"to\":\"lead\",\"body\":\"Task done\"}","session_id":"s1"}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert!(text.contains("status-update"));
         assert!(text.contains("Task done"));
         assert_eq!(sid, Some("s1".to_string()));
@@ -623,7 +696,7 @@ mod tests {
         // Edge case: multiple result lines — use the last one
         let stdout = r#"{"type":"result","subtype":"error","result":"first attempt failed","session_id":"s1"}
 {"type":"result","subtype":"success","result":"final answer","session_id":"s2"}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "final answer");
         assert_eq!(sid, Some("s2".to_string()));
     }
@@ -631,7 +704,7 @@ mod tests {
     #[test]
     fn test_extract_stream_output_result_without_session_id() {
         let stdout = r#"{"type":"result","subtype":"success","result":"done","cost_usd":0.01}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "done");
         assert!(sid.is_none());
     }
@@ -639,14 +712,14 @@ mod tests {
     #[test]
     fn test_extract_stream_output_empty_result_field() {
         let stdout = r#"{"type":"result","subtype":"success","result":"","session_id":"s1"}"#;
-        let (text, sid, _found) = extract_claude_stream_output(stdout.as_bytes());
+        let (text, sid, _found, _cost) = extract_claude_stream_output(stdout.as_bytes());
         assert_eq!(text, "");
         assert_eq!(sid, Some("s1".to_string()));
     }
 
     #[test]
     fn test_extract_stream_output_empty_stdout() {
-        let (text, sid, _found) = extract_claude_stream_output(b"");
+        let (text, sid, _found, _cost) = extract_claude_stream_output(b"");
         assert_eq!(text, "");
         assert!(sid.is_none());
     }
@@ -688,6 +761,7 @@ mod tests {
         let event = parse_claude_stream_line(line).expect("should parse Write tool_use");
         assert_eq!(event.event_type, "tool_call");
         assert_eq!(event.summary, "Write to src/events.rs");
+        assert_eq!(event.tool_name.as_deref(), Some("Write"));
         assert!(event.detail.is_some());
     }
 
@@ -770,6 +844,44 @@ mod tests {
     #[test]
     fn test_parse_claude_stream_json_without_type() {
         assert!(parse_claude_stream_line(r#"{"foo":"bar"}"#).is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_tool_name_bash() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse Bash");
+        assert_eq!(event.tool_name.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn test_parse_claude_stream_tool_result_success() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_01","content":"file written"}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse tool_result");
+        assert_eq!(event.event_type, "tool_result");
+        assert!(event.summary.contains("tu_01"));
+        assert!(event.summary.contains("completed"));
+    }
+
+    #[test]
+    fn test_parse_claude_stream_tool_result_error() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tu_02","is_error":true,"content":"permission denied"}]}}"#;
+        let event = parse_claude_stream_line(line).expect("should parse error tool_result");
+        assert_eq!(event.event_type, "tool_result");
+        assert!(event.summary.contains("tu_02"));
+        assert!(event.summary.contains("error"));
+    }
+
+    #[test]
+    fn test_parse_claude_stream_user_without_tool_result_returns_none() {
+        let line = r#"{"type":"user","message":{"content":[{"type":"text","text":"user input"}]}}"#;
+        assert!(parse_claude_stream_line(line).is_none());
+    }
+
+    #[test]
+    fn test_parse_claude_stream_result_has_no_tool_name() {
+        let line = r#"{"type":"result","subtype":"success","result":"Done."}"#;
+        let event = parse_claude_stream_line(line).expect("should parse result");
+        assert!(event.tool_name.is_none());
     }
 
     // -- extract_session_id_from_line tests --

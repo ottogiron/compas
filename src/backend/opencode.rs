@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::process::{
     extract_output_text, kill_process, resolve_prompt, spawn_cli, wait_with_timeout, ProcessTracker,
 };
-use super::{classify_error, Backend, BackendOutput, PingResult};
+use super::{classify_error, truncate_detail, Backend, BackendOutput, PingResult};
 use crate::error::Result;
 use crate::model::agent::Agent;
 use crate::model::session::{Session, SessionStatus};
@@ -247,6 +247,10 @@ impl Backend for OpenCodeBackend {
                     raw_output,
                     error_category,
                     pid: Some(pid),
+                    cost_usd: None, // OpenCode does not report cost
+                    tokens_in: None,
+                    tokens_out: None,
+                    num_turns: None,
                 })
             }
             Err(e) => Err(e),
@@ -329,17 +333,6 @@ pub fn extract_session_id_from_line(line: &str) -> Option<String> {
     Some(sid.to_string())
 }
 
-/// Maximum length for the `detail` field (raw JSON) stored per event.
-const MAX_DETAIL_LEN: usize = 2048;
-
-fn truncate_detail(s: &str) -> String {
-    if s.len() <= MAX_DETAIL_LEN {
-        s.to_string()
-    } else {
-        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
-    }
-}
-
 /// Parse a single OpenCode CLI JSONL line into an `ExecutionEvent`.
 ///
 /// Schemas observed from OpenCode CLI v0.2.x (`--format json` output).
@@ -363,6 +356,7 @@ pub fn parse_opencode_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                 detail: Some(truncate_detail(trimmed)),
                 timestamp_ms: now_ms,
                 event_index: 0,
+                tool_name: Some(name.to_string()),
             })
         }
         "step_finish" => Some(super::ExecutionEvent {
@@ -371,6 +365,7 @@ pub fn parse_opencode_stream_line(line: &str) -> Option<super::ExecutionEvent> {
             detail: Some(truncate_detail(trimmed)),
             timestamp_ms: now_ms,
             event_index: 0,
+            tool_name: None,
         }),
         "text" => {
             let text = val.pointer("/part/text").and_then(|v| v.as_str())?;
@@ -384,6 +379,7 @@ pub fn parse_opencode_stream_line(line: &str) -> Option<super::ExecutionEvent> {
                 detail: Some(truncate_detail(trimmed)),
                 timestamp_ms: now_ms,
                 event_index: 0,
+                tool_name: None,
             })
         }
         _ => None,

@@ -173,6 +173,14 @@ pub struct BackendOutput {
     pub error_category: Option<ErrorCategory>,
     /// OS PID of the spawned backend CLI process (for orphan tracking).
     pub pid: Option<u32>,
+    /// Total cost in USD for this execution. Currently only Claude reports this.
+    pub cost_usd: Option<f64>,
+    /// Number of input tokens consumed.
+    pub tokens_in: Option<i64>,
+    /// Number of output tokens produced.
+    pub tokens_out: Option<i64>,
+    /// Number of conversational turns in this execution.
+    pub num_turns: Option<i32>,
 }
 
 /// A structured event extracted from backend JSONL output during execution.
@@ -188,6 +196,20 @@ pub struct ExecutionEvent {
     pub timestamp_ms: i64,
     /// Monotonic index within this execution (for stable ordering)
     pub event_index: i32,
+    /// Tool name for tool_call/tool_result events (e.g., "Write", "Bash", "shell").
+    pub tool_name: Option<String>,
+}
+
+/// Maximum length for the `detail` field (raw JSON) stored per event.
+pub(super) const MAX_DETAIL_LEN: usize = 2048;
+
+/// Truncate a raw JSON detail string to `MAX_DETAIL_LEN` for storage.
+pub(super) fn truncate_detail(s: &str) -> String {
+    if s.len() <= MAX_DETAIL_LEN {
+        s.to_string()
+    } else {
+        format!("{}…(truncated)", &s[..MAX_DETAIL_LEN])
+    }
 }
 
 /// Backend trait for agent session management.

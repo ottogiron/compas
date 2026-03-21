@@ -169,6 +169,7 @@ pub struct ExecutionEventRow {
     pub detail: Option<String>,
     pub timestamp_ms: i64,
     pub event_index: i32,
+    pub tool_name: Option<String>,
 }
 
 /// A stored thread row.
@@ -363,6 +364,31 @@ impl Store {
                 .execute(&self.pool)
                 .await?;
         }
+        // OBS-01: cost/token telemetry columns
+        let has_cost_usd = columns.iter().any(|c| c.1 == "cost_usd");
+        if !has_cost_usd {
+            sqlx::query("ALTER TABLE executions ADD COLUMN cost_usd REAL")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_tokens_in = columns.iter().any(|c| c.1 == "tokens_in");
+        if !has_tokens_in {
+            sqlx::query("ALTER TABLE executions ADD COLUMN tokens_in INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_tokens_out = columns.iter().any(|c| c.1 == "tokens_out");
+        if !has_tokens_out {
+            sqlx::query("ALTER TABLE executions ADD COLUMN tokens_out INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
+        let has_num_turns = columns.iter().any(|c| c.1 == "num_turns");
+        if !has_num_turns {
+            sqlx::query("ALTER TABLE executions ADD COLUMN num_turns INTEGER")
+                .execute(&self.pool)
+                .await?;
+        }
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_exec_dispatch_msg ON executions(dispatch_message_id)",
         )
@@ -441,6 +467,18 @@ impl Store {
         )
         .execute(&self.pool)
         .await?;
+
+        // OBS-01: tool_name column for execution_events
+        let event_columns: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(execution_events)")
+                .fetch_all(&self.pool)
+                .await?;
+        let has_tool_name = event_columns.iter().any(|c| c.1 == "tool_name");
+        if !has_tool_name {
+            sqlx::query("ALTER TABLE execution_events ADD COLUMN tool_name TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
 
         // Legacy compatibility: fold old review workflow status into Active.
         sqlx::query(
@@ -1230,6 +1268,7 @@ impl Store {
     /// Returns the number of rows affected (0 if the execution was already
     /// in a terminal state, e.g., marked crashed by the stale execution
     /// check before the backend returned).
+    #[allow(clippy::too_many_arguments)]
     pub async fn complete_execution(
         &self,
         id: &str,
@@ -1237,6 +1276,10 @@ impl Store {
         output_preview: Option<&str>,
         parsed_intent: Option<&str>,
         duration_ms: i64,
+        cost_usd: Option<f64>,
+        tokens_in: Option<i64>,
+        tokens_out: Option<i64>,
+        num_turns: Option<i32>,
     ) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE executions
@@ -1245,7 +1288,11 @@ impl Store {
                  exit_code = ?,
                  output_preview = ?,
                  parsed_intent = ?,
-                 duration_ms = ?
+                 duration_ms = ?,
+                 cost_usd = ?,
+                 tokens_in = ?,
+                 tokens_out = ?,
+                 num_turns = ?
              WHERE id = ?
                AND status IN ('picked_up', 'executing')",
         )
@@ -1253,6 +1300,10 @@ impl Store {
         .bind(output_preview)
         .bind(parsed_intent)
         .bind(duration_ms)
+        .bind(cost_usd)
+        .bind(tokens_in)
+        .bind(tokens_out)
+        .bind(num_turns)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -1264,6 +1315,7 @@ impl Store {
     /// Returns the number of rows affected (0 if the execution was already
     /// in a terminal state, e.g., marked crashed by the stale execution
     /// check before the backend returned).
+    #[allow(clippy::too_many_arguments)]
     pub async fn fail_execution(
         &self,
         id: &str,
@@ -1271,6 +1323,10 @@ impl Store {
         exit_code: Option<i32>,
         duration_ms: i64,
         status: ExecutionStatus,
+        cost_usd: Option<f64>,
+        tokens_in: Option<i64>,
+        tokens_out: Option<i64>,
+        num_turns: Option<i32>,
     ) -> Result<u64, sqlx::Error> {
         let result = sqlx::query(
             "UPDATE executions
@@ -1278,7 +1334,11 @@ impl Store {
                  finished_at = strftime('%s','now'),
                  error_detail = ?,
                  exit_code = ?,
-                 duration_ms = ?
+                 duration_ms = ?,
+                 cost_usd = ?,
+                 tokens_in = ?,
+                 tokens_out = ?,
+                 num_turns = ?
              WHERE id = ?
                AND status IN ('picked_up', 'executing')",
         )
@@ -1286,6 +1346,10 @@ impl Store {
         .bind(error_detail)
         .bind(exit_code)
         .bind(duration_ms)
+        .bind(cost_usd)
+        .bind(tokens_in)
+        .bind(tokens_out)
+        .bind(num_turns)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -1753,8 +1817,8 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         for event in events {
             sqlx::query(
-                "INSERT INTO execution_events (execution_id, event_type, summary, detail, timestamp_ms, event_index)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO execution_events (execution_id, event_type, summary, detail, timestamp_ms, event_index, tool_name)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(execution_id)
             .bind(&event.event_type)
@@ -1762,6 +1826,7 @@ impl Store {
             .bind(&event.detail)
             .bind(event.timestamp_ms)
             .bind(event.event_index)
+            .bind(&event.tool_name)
             .execute(&mut *tx)
             .await?;
         }
@@ -1781,8 +1846,17 @@ impl Store {
         let since_idx = since_event_index.unwrap_or(-1);
         let lim = limit.unwrap_or(100);
 
-        let rows: Vec<(i64, String, String, String, Option<String>, i64, i32)> = sqlx::query_as(
-            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index
+        let rows: Vec<(
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            i32,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index, tool_name
              FROM execution_events
              WHERE execution_id = ? AND timestamp_ms >= ? AND event_index > ?
              ORDER BY event_index ASC
@@ -1805,6 +1879,7 @@ impl Store {
                 detail: r.4,
                 timestamp_ms: r.5,
                 event_index: r.6,
+                tool_name: r.7,
             })
             .collect())
     }
@@ -1814,8 +1889,17 @@ impl Store {
         &self,
         execution_id: &str,
     ) -> Result<Option<ExecutionEventRow>, sqlx::Error> {
-        let row: Option<(i64, String, String, String, Option<String>, i64, i32)> = sqlx::query_as(
-            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index
+        let row: Option<(
+            i64,
+            String,
+            String,
+            String,
+            Option<String>,
+            i64,
+            i32,
+            Option<String>,
+        )> = sqlx::query_as(
+            "SELECT id, execution_id, event_type, summary, detail, timestamp_ms, event_index, tool_name
                  FROM execution_events
                  WHERE execution_id = ?
                  ORDER BY event_index DESC
@@ -1833,6 +1917,7 @@ impl Store {
             detail: r.4,
             timestamp_ms: r.5,
             event_index: r.6,
+            tool_name: r.7,
         }))
     }
 
@@ -2091,6 +2176,10 @@ mod tests {
                 Some("output"),
                 Some("status-update"),
                 5000,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -2229,7 +2318,17 @@ mod tests {
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
         store
-            .complete_execution(&exec_id, Some(0), Some("ok"), None, 5000)
+            .complete_execution(
+                &exec_id,
+                Some(0),
+                Some("ok"),
+                None,
+                5000,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2307,7 +2406,17 @@ mod tests {
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id).await.unwrap();
         store
-            .complete_execution(&exec_id, Some(0), Some("ok"), None, 1000)
+            .complete_execution(
+                &exec_id,
+                Some(0),
+                Some("ok"),
+                None,
+                1000,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2342,7 +2451,17 @@ mod tests {
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id_1).await.unwrap();
         store
-            .complete_execution(&exec_id_1, Some(0), Some("ok"), None, 1000)
+            .complete_execution(
+                &exec_id_1,
+                Some(0),
+                Some("ok"),
+                None,
+                1000,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         store
@@ -2355,7 +2474,17 @@ mod tests {
         let _ = store.claim_next_execution(2).await.unwrap();
         store.mark_execution_executing(&exec_id_2).await.unwrap();
         store
-            .complete_execution(&exec_id_2, Some(0), Some("ok"), None, 1000)
+            .complete_execution(
+                &exec_id_2,
+                Some(0),
+                Some("ok"),
+                None,
+                1000,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         store
@@ -2458,6 +2587,10 @@ mod tests {
                 Some(1),
                 500,
                 ExecutionStatus::Failed,
+                None,
+                None,
+                None,
+                None,
             )
             .await
             .unwrap();
@@ -2488,7 +2621,17 @@ mod tests {
             .await
             .unwrap();
         store
-            .fail_execution(&exec_id_1, "crash 1", None, 100, ExecutionStatus::Crashed)
+            .fail_execution(
+                &exec_id_1,
+                "crash 1",
+                None,
+                100,
+                ExecutionStatus::Crashed,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2501,7 +2644,17 @@ mod tests {
             .await
             .unwrap();
         store
-            .fail_execution(&exec_id_2, "crash 2", None, 200, ExecutionStatus::Crashed)
+            .fail_execution(
+                &exec_id_2,
+                "crash 2",
+                None,
+                200,
+                ExecutionStatus::Crashed,
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -2533,5 +2686,71 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(sid.as_deref(), Some("sid-early-persist"));
+    }
+
+    #[tokio::test]
+    async fn test_execution_events_tool_name_roundtrip() {
+        let store = test_store().await;
+        store.ensure_thread("t-ev", None).await.unwrap();
+        let exec_id = store.insert_execution("t-ev", "agent-ev").await.unwrap();
+
+        let events = vec![
+            crate::backend::ExecutionEvent {
+                event_type: "tool_call".to_string(),
+                summary: "Write to src/main.rs".to_string(),
+                detail: None,
+                timestamp_ms: 1000,
+                event_index: 0,
+                tool_name: Some("Write".to_string()),
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "tool_result".to_string(),
+                summary: "tu_01: completed".to_string(),
+                detail: None,
+                timestamp_ms: 1001,
+                event_index: 1,
+                tool_name: None,
+            },
+            crate::backend::ExecutionEvent {
+                event_type: "turn_complete".to_string(),
+                summary: "completed".to_string(),
+                detail: None,
+                timestamp_ms: 1002,
+                event_index: 2,
+                tool_name: None,
+            },
+        ];
+
+        store
+            .insert_execution_events(&exec_id, &events)
+            .await
+            .unwrap();
+
+        let rows = store
+            .get_execution_events(&exec_id, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+
+        // tool_call has tool_name populated
+        assert_eq!(rows[0].event_type, "tool_call");
+        assert_eq!(rows[0].tool_name.as_deref(), Some("Write"));
+
+        // tool_result has tool_name=None (Claude limitation)
+        assert_eq!(rows[1].event_type, "tool_result");
+        assert!(rows[1].tool_name.is_none());
+
+        // turn_complete has tool_name=None
+        assert_eq!(rows[2].event_type, "turn_complete");
+        assert!(rows[2].tool_name.is_none());
+
+        // Also verify get_latest_execution_event returns the last one
+        let latest = store
+            .get_latest_execution_event(&exec_id)
+            .await
+            .unwrap()
+            .expect("should have a latest event");
+        assert_eq!(latest.event_type, "turn_complete");
+        assert!(latest.tool_name.is_none());
     }
 }
