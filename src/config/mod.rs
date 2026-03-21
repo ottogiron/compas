@@ -40,7 +40,7 @@ fn load_config_from_str_with_base(yaml: &str, base_dir: &Path) -> Result<Orchest
 fn resolve_paths(config: &mut OrchestratorConfig, base_dir: &Path) {
     let base = absolutize_base(base_dir);
 
-    config.target_repo_root = resolve_path(&base, &config.target_repo_root);
+    config.default_workdir = resolve_path(&base, &config.default_workdir);
     config.state_dir = resolve_path(&base, &config.state_dir);
 
     if let Some(ref worktree_dir) = config.worktree_dir {
@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn test_load_config_from_str() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test-mail
 agents:
   - alias: focused
@@ -119,7 +119,7 @@ agents:
     #[test]
     fn test_load_config_from_str_invalid() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test-mail
 agents: []
 "#;
@@ -130,8 +130,8 @@ agents: []
     #[test]
     fn test_load_config_from_file() {
         let dir = tempfile::tempdir().unwrap();
-        let target_repo_root = dir.path().join("repo");
-        std::fs::create_dir_all(&target_repo_root).unwrap();
+        let default_workdir = dir.path().join("repo");
+        std::fs::create_dir_all(&default_workdir).unwrap();
         let prompt_file = dir.path().join("prompts").join("focused.txt");
         std::fs::create_dir_all(prompt_file.parent().unwrap()).unwrap();
         std::fs::write(&prompt_file, "You are focused.").unwrap();
@@ -139,7 +139,7 @@ agents: []
         std::fs::write(
             &path,
             r#"
-target_repo_root: ./repo
+default_workdir: ./repo
 state_dir: ./.compas/state
 agents:
   - alias: focused
@@ -150,7 +150,7 @@ agents:
         .unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(config.agents.len(), 1);
-        assert_eq!(config.target_repo_root, target_repo_root);
+        assert_eq!(config.default_workdir, default_workdir);
         assert_eq!(config.state_dir, dir.path().join(".compas").join("state"));
         assert_eq!(
             config.db_path(),

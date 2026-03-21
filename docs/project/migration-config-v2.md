@@ -63,14 +63,14 @@ state_dir: /Users/<you>/.aster/orch
 state_dir: /Users/<you>/.aster-orch/state
 ```
 
-**b) Fix `target_repo_root`** (if it was relative):
+**b) Fix `default_workdir`** (if it was relative):
 
 ```yaml
 # Before (relative — worked when config was inside the aster repo)
-target_repo_root: ..
+default_workdir: ..
 
 # After (absolute — config is no longer inside a project repo)
-target_repo_root: /Users/<you>/workspace/github.com/<you>/aster
+default_workdir: /Users/<you>/workspace/github.com/<you>/aster
 ```
 
 **c) Remove REPLY PROTOCOL from all agent prompts:**
@@ -216,7 +216,7 @@ If something breaks:
 
 1. Recreate the old config: `mkdir -p <project-repo>/.aster-orch/ && cp ~/.aster-orch/config.yaml <project-repo>/.aster-orch/config.yaml`
 2. Add `--config <old-path>` back to MCP server args
-3. Fix `target_repo_root` to be relative (`..`) and `state_dir` to the old path
+3. Fix `default_workdir` to be relative (`..`) and `state_dir` to the old path
 4. Restart
 
 ## Related ADRs

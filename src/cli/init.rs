@@ -92,7 +92,7 @@ pub fn run(
     // 7. Print summary
     println!("Created config at {}", config_path.display());
     println!();
-    println!("  target_repo_root: {}", target_repo_root);
+    println!("  default_workdir:  {}", target_repo_root);
     println!("  backend:          {}", chosen_backend);
     println!("  agent alias:      {}", alias);
     if let Some(ref m) = chosen_model {
@@ -220,7 +220,7 @@ fn generate_minimal_config(
 ) -> String {
     let mut yaml = String::new();
     yaml.push_str(&format!(
-        "target_repo_root: {}\n",
+        "default_workdir: {}\n",
         yaml_quote(target_repo_root)
     ));
     yaml.push_str("state_dir: ~/.compas/state\n");
@@ -250,10 +250,10 @@ fn generate_commented_config(
     yaml.push_str("# Docs: https://github.com/ottogiron/compas\n");
     yaml.push('\n');
 
-    // target_repo_root
-    yaml.push_str("# Root directory of the repository where agents execute.\n");
+    // default_workdir
+    yaml.push_str("# Default working directory for agents that do not specify a per-agent workdir.\n");
     yaml.push_str(&format!(
-        "target_repo_root: {}\n",
+        "default_workdir: {}\n",
         yaml_quote(target_repo_root)
     ));
     yaml.push('\n');
@@ -494,7 +494,7 @@ mod tests {
                 });
                 let agents = parsed["agents"].as_sequence().unwrap();
                 assert_eq!(agents[0]["alias"].as_str().unwrap(), *alias);
-                assert_eq!(parsed["target_repo_root"].as_str().unwrap(), *repo);
+                assert_eq!(parsed["default_workdir"].as_str().unwrap(), *repo);
                 if let Some(m) = model {
                     assert_eq!(agents[0]["model"].as_str().unwrap(), *m);
                 }

@@ -195,7 +195,7 @@ pub async fn run(config_path: PathBuf, fix: bool) -> DoctorReport {
     let config = config.unwrap();
 
     // ── 3. Target repo root exists ───────────────────────────────────────
-    results.push(check_target_repo(&config.target_repo_root));
+    results.push(check_target_repo(&config.default_workdir));
 
     // ── 4. State directory writable ──────────────────────────────────────
     results.push(check_state_dir(&config.state_dir));
@@ -289,7 +289,7 @@ fn check_config(
     match crate::config::load_config(config_path) {
         Ok(config) => {
             let agent_count = config.agents.len();
-            let repo_display = config.target_repo_root.display().to_string();
+            let repo_display = config.default_workdir.display().to_string();
             Ok((
                 config,
                 vec![
@@ -297,7 +297,7 @@ fn check_config(
                     CheckResult::pass(
                         "Config valid",
                         &format!(
-                            "{} agent{}, target_repo_root: {}",
+                            "{} agent{}, default_workdir: {}",
                             agent_count,
                             if agent_count == 1 { "" } else { "s" },
                             repo_display
@@ -333,13 +333,13 @@ fn check_target_repo(path: &Path) -> CheckResult {
         CheckResult::fail(
             "Target repo",
             &format!("{} is not a directory", display),
-            "set target_repo_root to a valid directory",
+            "set default_workdir to a valid directory",
         )
     } else {
         CheckResult::fail(
             "Target repo",
             &format!("{} does not exist", display),
-            "create the directory or update target_repo_root in config",
+            "create the directory or update default_workdir in config",
         )
     }
 }
@@ -620,7 +620,7 @@ fn build_doctor_registry(config: &OrchestratorConfig) -> BackendRegistry {
     use crate::backend::opencode::OpenCodeBackend;
 
     let mut registry = BackendRegistry::new();
-    let workdir = Some(config.target_repo_root.clone());
+    let workdir = Some(config.default_workdir.clone());
 
     registry.register(
         "claude",
@@ -630,13 +630,13 @@ fn build_doctor_registry(config: &OrchestratorConfig) -> BackendRegistry {
     registry.register(
         "opencode",
         Arc::new(OpenCodeBackend::with_workdir(Some(
-            config.target_repo_root.clone(),
+            config.default_workdir.clone(),
         ))),
     );
     registry.register(
         "gemini",
         Arc::new(GeminiBackend::with_workdir(Some(
-            config.target_repo_root.clone(),
+            config.default_workdir.clone(),
         ))),
     );
 
@@ -840,7 +840,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "target_repo_root: {}\nstate_dir: {}\nagents:\n  - alias: dev\n    backend: stub\n",
+                "default_workdir: {}\nstate_dir: {}\nagents:\n  - alias: dev\n    backend: stub\n",
                 repo.display(),
                 dir.path().join("state").display()
             ),
@@ -876,7 +876,7 @@ mod tests {
         let config_path = dir.path().join("config.yaml");
         std::fs::write(
             &config_path,
-            "target_repo_root: /tmp\nstate_dir: /tmp\nagents: []\n",
+            "default_workdir: /tmp\nstate_dir: /tmp\nagents: []\n",
         )
         .unwrap();
 
@@ -990,7 +990,7 @@ mod tests {
         // Point to a config that doesn't have a real DB.
         let dir = tempfile::tempdir().unwrap();
         let config = OrchestratorConfig {
-            target_repo_root: dir.path().to_path_buf(),
+            default_workdir: dir.path().to_path_buf(),
             state_dir: dir.path().join("state"),
             poll_interval_secs: 1,
             models: None,
@@ -1027,7 +1027,7 @@ mod tests {
         std::fs::write(
             &config_path,
             format!(
-                "target_repo_root: {}\nstate_dir: {}\nagents:\n  - alias: dev\n    backend: stub\n",
+                "default_workdir: {}\nstate_dir: {}\nagents:\n  - alias: dev\n    backend: stub\n",
                 repo.display(),
                 dir.path().join("state").display()
             ),
@@ -1138,7 +1138,7 @@ mod tests {
     fn test_unique_backends_deduplicates() {
         use crate::config::types::AgentConfig;
         let config = OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,

@@ -9,21 +9,21 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
             "at least one agent must be configured".into(),
         ));
     }
-    if config.target_repo_root.as_os_str().is_empty() {
+    if config.default_workdir.as_os_str().is_empty() {
         return Err(OrchestratorError::Config(
-            "target_repo_root must not be empty".into(),
+            "default_workdir must not be empty".into(),
         ));
     }
-    if !config.target_repo_root.exists() {
+    if !config.default_workdir.exists() {
         return Err(OrchestratorError::Config(format!(
-            "target_repo_root does not exist: {}",
-            config.target_repo_root.display()
+            "default_workdir does not exist: {}",
+            config.default_workdir.display()
         )));
     }
-    if !config.target_repo_root.is_dir() {
+    if !config.default_workdir.is_dir() {
         return Err(OrchestratorError::Config(format!(
-            "target_repo_root must be a directory: {}",
-            config.target_repo_root.display()
+            "default_workdir must be a directory: {}",
+            config.default_workdir.display()
         )));
     }
 
@@ -273,7 +273,7 @@ mod tests {
 
     fn minimal_config() -> OrchestratorConfig {
         OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/test-mail"),
             poll_interval_secs: 5,
             models: None,
@@ -326,21 +326,21 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_missing_target_repo_root() {
+    fn test_config_validation_missing_default_workdir() {
         let mut config = minimal_config();
-        config.target_repo_root = PathBuf::new();
+        config.default_workdir = PathBuf::new();
         let err = validate_config(&config).unwrap_err();
         assert!(err
             .to_string()
-            .contains("target_repo_root must not be empty"));
+            .contains("default_workdir must not be empty"));
     }
 
     #[test]
-    fn test_config_validation_nonexistent_target_repo_root() {
+    fn test_config_validation_nonexistent_default_workdir() {
         let mut config = minimal_config();
-        config.target_repo_root = PathBuf::from("/definitely/nonexistent/project-root");
+        config.default_workdir = PathBuf::from("/definitely/nonexistent/project-root");
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("target_repo_root does not exist"));
+        assert!(err.to_string().contains("default_workdir does not exist"));
     }
 
     #[test]
@@ -394,7 +394,7 @@ mod tests {
     #[test]
     fn test_config_yaml_deserialization() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 10
 agents:
@@ -445,7 +445,7 @@ agents:
     #[test]
     fn test_config_yaml_with_new_fields() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test-mail
 poll_interval_secs: 5
 agents:
@@ -659,7 +659,7 @@ agents:
     #[test]
     fn test_global_models_catalog_roundtrip() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 models:
   - id: opus
@@ -685,7 +685,7 @@ agents:
     #[test]
     fn test_legacy_agent_model_fields_are_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 models:
   - id: opus
@@ -709,7 +709,7 @@ agents:
     #[test]
     fn test_legacy_db_path_field_is_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 db_path: /tmp/custom.sqlite
 agents:
@@ -740,7 +740,7 @@ agents:
     #[test]
     fn test_handoff_valid_simple_targets() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -761,7 +761,7 @@ agents:
     #[test]
     fn test_handoff_invalid_target_alias_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -778,7 +778,7 @@ agents:
     #[test]
     fn test_handoff_self_loop_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -793,7 +793,7 @@ agents:
     #[test]
     fn test_handoff_max_chain_depth_zero_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -809,7 +809,7 @@ agents:
     fn test_handoff_max_chain_depth_bounds() {
         // Depth 1 is valid
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -821,7 +821,7 @@ agents:
 
         // Depth 20 is valid
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -833,7 +833,7 @@ agents:
 
         // Depth 21 is rejected
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -848,7 +848,7 @@ agents:
     #[test]
     fn test_handoff_operator_target_is_valid() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -862,7 +862,7 @@ agents:
     #[test]
     fn test_handoff_no_config_preserves_behavior() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -877,7 +877,7 @@ agents:
     #[test]
     fn test_handoff_fanout_valid() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -897,7 +897,7 @@ agents:
     #[test]
     fn test_handoff_fanout_single_element_valid() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -914,7 +914,7 @@ agents:
     #[test]
     fn test_handoff_fanout_duplicates_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -933,7 +933,7 @@ agents:
     #[test]
     fn test_handoff_fanout_self_loop_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -951,7 +951,7 @@ agents:
     #[test]
     fn test_handoff_fanout_operator_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -970,7 +970,7 @@ agents:
     #[test]
     fn test_handoff_fanout_empty_rejected() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -986,7 +986,7 @@ agents:
     fn test_handoff_fanout_yaml_roundtrip() {
         // String form
         let yaml_single = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -1005,7 +1005,7 @@ agents:
 
         // List form
         let yaml_list = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -1022,5 +1022,19 @@ agents:
         let config = crate::config::load_config_from_str(yaml_list).unwrap();
         let handoff = config.agents[0].handoff.as_ref().unwrap();
         assert!(matches!(&handoff.on_response, Some(HandoffTarget::FanOut(v)) if v.len() == 2));
+    }
+
+    #[test]
+    fn test_config_backward_compat_target_repo_root_alias() {
+        let yaml = r#"
+target_repo_root: /tmp
+state_dir: /tmp/test-state
+agents:
+  - alias: a
+    backend: stub
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.default_workdir, PathBuf::from("/tmp"));
+        assert!(validate_config(&config).is_ok());
     }
 }

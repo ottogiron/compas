@@ -91,7 +91,7 @@ impl Backend for StubBackend {
 /// Create a minimal valid `OrchestratorConfig` with two worker agents.
 fn test_config() -> OrchestratorConfig {
     OrchestratorConfig {
-        target_repo_root: PathBuf::from("/tmp"),
+        default_workdir: PathBuf::from("/tmp"),
         state_dir: PathBuf::from("/tmp/compas-test"),
         poll_interval_secs: 1,
         models: None,
@@ -3024,7 +3024,7 @@ mod handoff_chain_tests {
     /// Config with agent A handing off `response` to agent B.
     fn chain_config() -> OrchestratorConfig {
         OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
@@ -3388,7 +3388,7 @@ mod handoff_chain_tests {
     #[tokio::test]
     async fn test_handoff_config_yaml_roundtrip() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -3576,7 +3576,7 @@ agents:
     #[tokio::test]
     async fn test_handoff_prompt_yaml_roundtrip() {
         let yaml = r#"
-target_repo_root: /tmp
+default_workdir: /tmp
 state_dir: /tmp/test
 agents:
   - alias: coder
@@ -4196,7 +4196,7 @@ mod fanout_tests {
 
     fn fanout_config() -> OrchestratorConfig {
         OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
@@ -4671,7 +4671,7 @@ mod read_log_tests {
 
     fn config_with_state_dir(state_dir: PathBuf) -> OrchestratorConfig {
         OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir,
             poll_interval_secs: 1,
             models: None,
@@ -5083,7 +5083,7 @@ mod session_resume_tests {
 
         // Config with backend = "claude" so consume_telemetry uses the Claude parser.
         let config = OrchestratorConfig {
-            target_repo_root: PathBuf::from("/tmp"),
+            default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/compas-test-stream"),
             poll_interval_secs: 1,
             models: None,

@@ -152,11 +152,11 @@ pub fn start_watching(
 /// These fields are consumed at startup (DB pool, backend workdir, semaphore)
 /// and require a process restart to take effect.
 fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig) {
-    if old.target_repo_root != new.target_repo_root {
+    if old.default_workdir != new.default_workdir {
         tracing::warn!(
-            old = %old.target_repo_root.display(),
-            new = %new.target_repo_root.display(),
-            "target_repo_root changed — requires restart to take effect"
+            old = %old.default_workdir.display(),
+            new = %new.default_workdir.display(),
+            "default_workdir changed — requires restart to take effect"
         );
     }
     if old.state_dir != new.state_dir {
@@ -185,17 +185,17 @@ fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig)
 mod tests {
     use super::*;
 
-    fn minimal_config(target_repo_root: &Path) -> OrchestratorConfig {
+    fn minimal_config(default_workdir: &Path) -> OrchestratorConfig {
         use crate::config::load_config_from_str;
         load_config_from_str(&format!(
             r#"
-target_repo_root: {}
+default_workdir: {}
 state_dir: /tmp/compas-test-state
 agents:
   - alias: test-agent
     backend: stub
 "#,
-            target_repo_root.display()
+            default_workdir.display()
         ))
         .unwrap()
     }
@@ -255,20 +255,20 @@ agents:
     #[test]
     fn test_start_watching_with_valid_config() {
         let dir = tempfile::tempdir().unwrap();
-        let target_repo_root = dir.path().join("repo");
-        std::fs::create_dir_all(&target_repo_root).unwrap();
+        let default_workdir = dir.path().join("repo");
+        std::fs::create_dir_all(&default_workdir).unwrap();
         let config_path = dir.path().join("config.yaml");
         std::fs::write(
             &config_path,
             format!(
                 r#"
-target_repo_root: {}
+default_workdir: {}
 state_dir: /tmp/compas-watcher-test
 agents:
   - alias: watched
     backend: stub
 "#,
-                target_repo_root.display()
+                default_workdir.display()
             ),
         )
         .unwrap();

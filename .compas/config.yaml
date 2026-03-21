@@ -1,6 +1,6 @@
 # Development config for compas
 # Uses a local state directory to avoid conflicting with production
-target_repo_root: ..
+default_workdir: ..
 state_dir: state
 poll_interval_secs: 2
 

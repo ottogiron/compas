@@ -126,7 +126,7 @@ impl CodexBackend {
         args.push("--full-auto".to_string());
         args.push("--json".to_string());
         // Forward `--skip-git-repo-check` when the agent has it in `backend_args`.
-        // Without this, the ping fails with exit code 1 when `target_repo_root` is
+        // Without this, the ping fails with exit code 1 when `default_workdir` is
         // not a git repository, causing all such agents to appear unhealthy.
         let has_skip_git = agent
             .backend_args

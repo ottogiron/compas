@@ -325,7 +325,7 @@ impl WorkerRunner {
                         .unwrap_or_default();
 
                     let worktree_manager = self.worktree_manager.clone();
-                    let target_repo_root = trigger_config.target_repo_root.clone();
+                    let default_workdir = trigger_config.default_workdir.clone();
                     let worktree_override_dir = trigger_config.worktree_dir.clone();
 
                     // Create telemetry channel for real-time stdout line forwarding.
@@ -415,7 +415,7 @@ impl WorkerRunner {
                             log_dir,
                             Some(stdout_tx),
                             &worktree_manager,
-                            &target_repo_root,
+                            &default_workdir,
                             worktree_override_dir,
                         )
                         .await;

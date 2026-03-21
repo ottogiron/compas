@@ -22,7 +22,7 @@ Architecture evaluation completed by `as-architect` agent (thread `01KM6PWMC2DNQ
 **Config example:**
 
 ```yaml
-target_repo_root: ~/workspace/github  # global fallback, still required
+default_workdir: ~/workspace/github  # global fallback, still required
 state_dir: ~/.compas/state
 
 agents:
@@ -118,7 +118,7 @@ orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
 1. `project.repo_root/repo` (if project + repo provided)
 2. `project.repo_root` (if project provided, no repo)
 3. `agent.workdir` (if set on agent)
-4. `target_repo_root` (global fallback)
+4. `default_workdir` (global fallback)
 
 **Handoff resolution:** If dispatch has project context, check `project.agent_overrides[alias].handoff`. If present, use it (full replacement, no merge). Otherwise, use agent's own handoff. No project context → agent's own handoff.
 
@@ -158,7 +158,7 @@ orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
   - Validate project/repo at dispatch time (project exists, repo in project's repo list)
   - Store project/repo on thread creation
   - Thread inheritance: follow-up dispatches inherit project/repo from existing thread if not specified
-  - `resolve_execution_workdir()` function in executor: project.repo_root/repo > project.repo_root > agent.workdir > target_repo_root
+  - `resolve_execution_workdir()` function in executor: project.repo_root/repo > project.repo_root > agent.workdir > default_workdir
   - Update `orch_dispatch` MCP tool description to list available projects
   - Update `orch_status` / `orch_poll` to include project context in output
   - Index on `threads.project_id` for dashboard queries
@@ -174,7 +174,7 @@ orch_dispatch(to="implementer", body="Fix script in ~/scripts/...")
   - `make verify` passes
 - Verification:
   - Integration test: dispatch with project+repo, verify workdir resolution
-  - Integration test: dispatch without project, verify fallback to target_repo_root
+  - Integration test: dispatch without project, verify fallback to default_workdir
   - Integration test: follow-up dispatch inherits project context
   - `make verify`
 - Status: Todo

@@ -50,7 +50,7 @@ The MCP server and worker are separate processes sharing the same SQLite databas
 
 `compas` uses two distinct filesystem roots:
 
-- `target_repo_root`: the target repository where backend CLIs run commands/tasks.
+- `default_workdir`: the default working directory where backend CLIs run commands/tasks.
 - `state_dir`: orchestrator-owned runtime state (DB/logs/heartbeats).
 
 This separation allows one shared orchestrator binary/config model to work across unrelated repositories.

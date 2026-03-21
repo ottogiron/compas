@@ -41,7 +41,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - New module `src/cli/mod.rs` with `src/cli/init.rs`
   - `compas init` interactive flow:
     - Detect installed backends via `command_exists()` for `[claude, codex, gemini, opencode]`
-    - Prompt for: target_repo_root (default: CWD), backend (default: first detected), agent alias (default: `dev`), model (optional)
+    - Prompt for: default_workdir (default: CWD), backend (default: first detected), agent alias (default: `dev`), model (optional)
     - Generate commented YAML config and write to `~/.compas/config.yaml`
     - Overwrite protection: refuse if config exists (require `--force`)
   - `--non-interactive` mode with `--repo`, `--backend`, `--alias`, `--model` flags
@@ -56,7 +56,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - Generating multi-agent configs (one implementer is enough for init; users add more manually)
 - Dependencies: None
 - Acceptance criteria:
-  - `compas init` in a repo directory creates a valid `~/.compas/config.yaml` with the repo's path as `target_repo_root`
+  - `compas init` in a repo directory creates a valid `~/.compas/config.yaml` with the repo's path as `default_workdir`
   - Generated config passes `load_config` + `validate_config` without errors
   - `compas init` when config exists prints error with `--force` hint
   - `compas init --force` overwrites existing config
@@ -115,7 +115,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - Reuse `src/cli/detection.rs` from CLI-2 for backend detection and MCP checks
   - Ordered checks:
     1. Config file exists and parses
-    2. Config validates (target_repo_root, agents, etc.)
+    2. Config validates (default_workdir, agents, etc.)
     3. State directory writable
     4. Backend CLIs installed (per agent's backend)
     5. Backend CLIs authenticated (ping — reuse `backend.ping()`)

@@ -95,7 +95,7 @@ The dashboard includes an embedded worker by default. Use `compas dashboard --st
 Create `~/.compas/config.yaml` manually:
 
 ```yaml
-target_repo_root: /path/to/your/project
+default_workdir: /path/to/your/project
 state_dir: ~/.compas/state
 
 agents:
@@ -302,7 +302,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override it for any subcommand. See [`examples/config-generic.yaml`](examples/config-generic.yaml) for a fully commented example.
 
 ```yaml
-target_repo_root: /path/to/repo        # Where agents work (required)
+default_workdir: /path/to/repo           # Default working directory for agents (required)
 state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
 # worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/../.compas-worktrees/)
@@ -342,7 +342,7 @@ agents:
     # env:                             # Per-agent environment variables
     #   SOME_VAR: value
     # backend_args: ["--flag"]         # Extra CLI args for the backend
-    # workdir: /path/to/other/repo     # Per-agent repo override (default: target_repo_root)
+    # workdir: /path/to/other/repo     # Per-agent workdir override (default: default_workdir)
     # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
     # max_retries: 0              # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30      # Base delay between retries (doubles each attempt)
@@ -357,11 +357,11 @@ agents:
 
 **Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
 
-**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `target_repo_root`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
+**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `default_workdir`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
 
 ### Per-Agent Working Directory
 
-By default, all agents work in `target_repo_root`. To have an agent work in a different repository, set `workdir`:
+By default, all agents work in `default_workdir`. To have an agent work in a different repository, set `workdir`:
 
 ```yaml
 agents:
@@ -385,7 +385,7 @@ agents:
     workspace: shared      # Default — reads files directly, no isolation needed
 ```
 
-Worktrees are created at `{repo_root}/../.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `target_repo_root`) to be a git repository — falls back to shared mode for non-git directories.
+Worktrees are created at `{repo_root}/../.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `default_workdir`) to be a git repository — falls back to shared mode for non-git directories.
 
 ### Retry on Transient Failure
 
@@ -462,7 +462,7 @@ agents:
     prompt: "You review compas changes. Run make verify."
 ```
 
-Agents without `workdir` use `target_repo_root`. Agents with `workdir` always work in that repo. The `implementer` above serves any repo — specify which via the dispatch body. `compas-reviewer` always works in the compas repo.
+Agents without `workdir` use `default_workdir`. Agents with `workdir` always work in that repo. The `implementer` above serves any repo — specify which via the dispatch body. `compas-reviewer` always works in the compas repo.
 
 **Cross-cutting agents** — agents that don't belong to any repo:
 
@@ -481,7 +481,7 @@ agents:
       Reference actual modules and patterns, not abstract advice.
 ```
 
-These agents work in `target_repo_root` by default but can be dispatched to review any file or document. No `workdir` or `workspace` needed.
+These agents work in `default_workdir` by default but can be dispatched to review any file or document. No `workdir` or `workspace` needed.
 
 ## How It Works
 

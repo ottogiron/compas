@@ -1,4 +1,4 @@
-target_repo_root: /path/to/your-repo
+default_workdir: /path/to/your-repo
 state_dir: ~/.compas/state
 poll_interval_secs: 1
 
@@ -29,7 +29,7 @@ agents:
   - alias: implementer
     backend: claude
     model: claude-sonnet-4-6
-    # workdir: /path/to/other-repo    # Per-agent repo override (default: target_repo_root)
+    # workdir: /path/to/other-repo    # Per-agent workdir override (default: default_workdir)
     # workspace: worktree             # "worktree" for git isolation, "shared" (default)
     # max_retries: 0                  # Auto-retry on transient failure (0 = disabled)
     # retry_backoff_secs: 30          # Base delay between retries (doubles each attempt)
@@ -52,6 +52,6 @@ agents:
   # - alias: infra-dev
   #   backend: claude
   #   model: claude-sonnet-4-6
-  #   workdir: /path/to/infra-repo     # Works in a different repo than target_repo_root
+  #   workdir: /path/to/infra-repo     # Works in a different repo than default_workdir
   #   workspace: worktree              # Each thread gets its own worktree
   #   prompt: "You work on infrastructure..."

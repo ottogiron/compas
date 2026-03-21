@@ -59,7 +59,7 @@ pub async fn execute_trigger(
     log_dir: Option<PathBuf>,
     stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
     worktree_manager: &Arc<WorktreeManager>,
-    target_repo_root: &std::path::Path,
+    default_workdir: &std::path::Path,
     worktree_override_dir: Option<PathBuf>,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
@@ -157,7 +157,7 @@ pub async fn execute_trigger(
     let agent_workdir = agent_config
         .workdir
         .clone()
-        .unwrap_or_else(|| target_repo_root.to_path_buf());
+        .unwrap_or_else(|| default_workdir.to_path_buf());
     // Track the actual worktree path (not fallback) for post-execution status check.
     let mut worktree_path_for_status: Option<PathBuf> = None;
 

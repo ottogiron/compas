@@ -298,7 +298,7 @@ fn resolve_config_path(config_path: &PathBuf) -> PathBuf {
 fn build_backend_registry(config: &compas::config::types::OrchestratorConfig) -> BackendRegistry {
     let mut registry = BackendRegistry::new();
 
-    let workdir = Some(config.target_repo_root.clone());
+    let workdir = Some(config.default_workdir.clone());
 
     // Register all known backends
     registry.register(
@@ -309,13 +309,13 @@ fn build_backend_registry(config: &compas::config::types::OrchestratorConfig) ->
     registry.register(
         "opencode",
         Arc::new(OpenCodeBackend::with_workdir(Some(
-            config.target_repo_root.clone(),
+            config.default_workdir.clone(),
         ))),
     );
     registry.register(
         "gemini",
         Arc::new(GeminiBackend::with_workdir(Some(
-            config.target_repo_root.clone(),
+            config.default_workdir.clone(),
         ))),
     );
 

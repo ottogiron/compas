@@ -6,8 +6,9 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OrchestratorConfig {
-    /// Root directory of the target repository where agent backends execute.
-    pub target_repo_root: PathBuf,
+    /// Default working directory for agents without a per-agent `workdir`.
+    #[serde(alias = "target_repo_root")]
+    pub default_workdir: PathBuf,
     /// Orchestrator-owned runtime directory (SQLite DB, logs, and state).
     pub state_dir: PathBuf,
     #[serde(default = "default_poll_interval_secs")]
@@ -272,7 +273,7 @@ pub struct AgentConfig {
     pub backend_args: Option<Vec<String>>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
-    /// Optional per-agent repository root. If omitted, uses global `target_repo_root`.
+    /// Optional per-agent working directory. If omitted, uses global `default_workdir`.
     #[serde(default)]
     pub workdir: Option<PathBuf>,
     /// Workspace isolation mode: `"worktree"` for git worktree isolation, `"shared"` (default).

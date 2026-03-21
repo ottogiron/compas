@@ -108,9 +108,9 @@ macOS desktop notifications on execution completion/failure via `osascript -e 'd
 **Date:** 2026-03
 **Status:** Active
 
-Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in different repositories without changing the global `target_repo_root`. Combined with `workspace: worktree | shared` for git worktree isolation per-thread.
+Added `workdir: Option<PathBuf>` to agent config, allowing agents to work in different repositories without changing the global `default_workdir` (formerly `target_repo_root`). Combined with `workspace: worktree | shared` for git worktree isolation per-thread.
 
-**Why:** The `target_repo_root` is global — all agents share it. When orchestrating work across multiple repos (e.g., aster compiler + compas), agents need different working directories. The original workaround was prompt-based `cd` instructions, which was fragile.
+**Why:** The `default_workdir` is global — all agents share it. When orchestrating work across multiple repos (e.g., aster compiler + compas), agents need different working directories. The original workaround was prompt-based `cd` instructions, which was fragile.
 
 **Design:** Per-agent `workdir` is the low-level primitive. It sets the `current_dir` for the backend CLI process. `workspace: worktree` creates git worktrees from the agent's base workdir. Both are optional — omitting them preserves the existing shared-workspace behavior.
 
