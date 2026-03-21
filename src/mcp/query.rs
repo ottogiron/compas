@@ -677,28 +677,17 @@ impl OrchestratorMcpServer {
     // ── orch_tasks ───────────────────────────────────────────────────────
 
     pub async fn tasks_impl(&self, params: TasksParams) -> Result<CallToolResult, rmcp::ErrorData> {
-        // Query executions — we use status_view as a convenient join
+        // Validate filter param.
+        if let Some(ref f) = params.filter {
+            if f != "scheduled" {
+                return Ok(err_text(format!(
+                    "unknown filter '{}'. Supported filters: 'scheduled'",
+                    f
+                )));
+            }
+        }
+
         let limit = params.limit.unwrap_or(20) as i64;
-        let views = match self
-            .store
-            .status_view(
-                None,
-                params.alias.as_deref(),
-                params.batch_id.as_deref(),
-                limit,
-            )
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
-        };
-
-        let now_unix = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
-
-        let is_scheduled_filter = params.filter.as_deref() == Some("scheduled");
 
         #[derive(Serialize)]
         struct TaskEntry {
@@ -718,18 +707,63 @@ impl OrchestratorMcpServer {
             eligible_reason: Option<String>,
         }
 
+        if params.filter.as_deref() == Some("scheduled") {
+            // Dedicated DB query — avoids status_view limit truncation.
+            let execs = match self
+                .store
+                .get_scheduled_executions(params.alias.as_deref(), limit)
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
+            };
+
+            let entries: Vec<TaskEntry> = execs
+                .into_iter()
+                .map(|e| {
+                    let eligible_at_iso = e.eligible_at.map(|ts| {
+                        DateTime::from_timestamp(ts, 0)
+                            .map(|dt| dt.to_rfc3339())
+                            .unwrap_or_else(|| ts.to_string())
+                    });
+                    TaskEntry {
+                        thread_id: e.thread_id,
+                        batch_id: e.batch_id,
+                        summary: None,
+                        agent: Some(e.agent_alias),
+                        execution_status: Some(e.status),
+                        started_at: e.started_at,
+                        finished_at: e.finished_at,
+                        duration_ms: e.duration_ms,
+                        error: e.error_detail,
+                        prompt_hash: e.prompt_hash,
+                        eligible_at: eligible_at_iso,
+                        eligible_reason: e.eligible_reason,
+                    }
+                })
+                .collect();
+
+            return Ok(json_text(&entries));
+        }
+
+        // Default path: use status_view join.
+        let views = match self
+            .store
+            .status_view(
+                None,
+                params.alias.as_deref(),
+                params.batch_id.as_deref(),
+                limit,
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
+        };
+
         let entries: Vec<TaskEntry> = views
             .into_iter()
             .filter(|v| v.execution_id.is_some())
-            .filter(|v| {
-                if is_scheduled_filter {
-                    // Only queued executions with future eligible_at
-                    v.execution_status.as_deref() == Some("queued")
-                        && v.eligible_at.is_some_and(|ea| ea > now_unix)
-                } else {
-                    true
-                }
-            })
             .map(|v| {
                 let eligible_at_iso = v.eligible_at.map(|ts| {
                     DateTime::from_timestamp(ts, 0)

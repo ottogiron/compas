@@ -1563,6 +1563,23 @@ mod scheduled_visibility_tests {
         let count = store.count_scheduled_executions().await.unwrap();
         assert_eq!(count, 1);
     }
+
+    #[tokio::test]
+    async fn test_orch_tasks_unknown_filter_rejected() {
+        let server = test_server().await;
+
+        let result = server
+            .tasks_impl(TasksParams {
+                alias: None,
+                batch_id: None,
+                limit: None,
+                filter: Some("bogus".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "unknown filter should return an error");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -1764,6 +1764,42 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Get queued executions with a future `eligible_at`, ordered by soonest first.
+    /// Optional agent alias filter.
+    pub async fn get_scheduled_executions(
+        &self,
+        agent: Option<&str>,
+        limit: i64,
+    ) -> Result<Vec<ExecutionRow>, sqlx::Error> {
+        let mut sql = String::from(
+            "SELECT e.id, e.thread_id, t.batch_id, e.agent_alias, e.dispatch_message_id, e.status, e.queued_at,
+                    picked_up_at, started_at, finished_at, duration_ms,
+                    exit_code, output_preview, error_detail, parsed_intent, prompt_hash,
+                    e.attempt_number, e.retry_after, e.error_category,
+                    e.original_dispatch_message_id,
+                    e.pid,
+                    e.eligible_at, e.eligible_reason
+             FROM executions e
+             LEFT JOIN threads t ON t.thread_id = e.thread_id
+             WHERE e.status = 'queued'
+               AND e.eligible_at IS NOT NULL
+               AND e.eligible_at > strftime('%s','now')",
+        );
+        if agent.is_some() {
+            sql.push_str(" AND e.agent_alias = ?");
+        }
+        sql.push_str(" ORDER BY e.eligible_at ASC LIMIT ?");
+
+        let mut query = sqlx::query_as::<_, ExecutionRowDb>(&sql);
+        if let Some(a) = agent {
+            query = query.bind(a);
+        }
+        query = query.bind(limit);
+
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(row_to_execution).collect())
+    }
+
     /// Get the most recent executions for a specific agent, newest first.
     pub async fn recent_agent_executions(
         &self,

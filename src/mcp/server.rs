@@ -89,7 +89,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_status",
-        description = "Query message status by agent and/or thread."
+        description = "Query thread and execution status by agent and/or thread. Response includes scheduled_count (queued executions with a future eligible_at)."
     )]
     async fn orch_status(
         &self,

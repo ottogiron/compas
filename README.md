@@ -309,12 +309,12 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 
 | Tool | What it does |
 | --- | --- |
-| `orch_status` | Thread and execution status (filter by agent or thread) |
+| `orch_status` | Thread and execution status (filter by agent or thread); includes `scheduled_count` of pending scheduled executions |
 | `orch_poll` | Quick non-blocking check for new messages |
 | `orch_transcript` | Full conversation history for a thread |
 | `orch_read` | Read a single message by reference |
 | `orch_batch_status` | Status breakdown for all threads in a batch |
-| `orch_tasks` | Execution history with timing and results |
+| `orch_tasks` | Execution history with timing and results; `filter="scheduled"` lists only queued executions with a future `eligible_at` |
 | `orch_metrics` | Aggregate stats (thread counts, queue depth) |
 | `orch_diagnose` | Thread diagnostics with suggested next actions |
 | `orch_execution_events` | Structured events from a running/completed execution (tool calls, file edits, tool names) |

@@ -1456,4 +1456,29 @@ mod tests {
         assert_eq!(stale, 1);
         assert_eq!(scheduled, 0);
     }
+
+    #[test]
+    fn test_format_relative_future_seconds() {
+        assert_eq!(format_relative_future(0), "now");
+        assert_eq!(format_relative_future(45), "in 45s");
+        assert_eq!(format_relative_future(-5), "now");
+    }
+
+    #[test]
+    fn test_format_relative_future_minutes() {
+        assert_eq!(format_relative_future(90), "in 1m 30s");
+        assert_eq!(format_relative_future(600), "in 10m 0s");
+    }
+
+    #[test]
+    fn test_format_relative_future_hours() {
+        assert_eq!(format_relative_future(3661), "in 1h 1m");
+        assert_eq!(format_relative_future(7200), "in 2h 0m");
+    }
+
+    #[test]
+    fn test_format_relative_future_days() {
+        assert_eq!(format_relative_future(90000), "in 1d 1h");
+        assert_eq!(format_relative_future(172800), "in 2d 0h");
+    }
 }
