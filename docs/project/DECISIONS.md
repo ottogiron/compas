@@ -238,7 +238,6 @@ Agent intent annotation (parsing JSON `{"intent":"review-request",...}` from age
 - **`spawn_worker_process()` keeps its pre-flight check** — avoids spawning a child process that would immediately exit due to the guard.
 - **`DaemonLockHeld` error enriched** with `worker_id`, PID, and heartbeat age for actionable diagnostics.
 
-
 ## ADR-017: Session resume after crash (early session ID persistence)
 
 **Date:** 2026-03

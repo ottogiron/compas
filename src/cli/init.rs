@@ -251,7 +251,9 @@ fn generate_commented_config(
     yaml.push('\n');
 
     // default_workdir
-    yaml.push_str("# Default working directory for agents that do not specify a per-agent workdir.\n");
+    yaml.push_str(
+        "# Default working directory for agents that do not specify a per-agent workdir.\n",
+    );
     yaml.push_str(&format!(
         "default_workdir: {}\n",
         yaml_quote(target_repo_root)
