@@ -21,7 +21,7 @@ pub struct OrchestratorConfig {
     pub models: Option<Vec<ModelEntry>>,
     pub agents: Vec<AgentConfig>,
     /// Optional override for worktree parent directory.
-    /// Default: `{repo_root}/../.compas-worktrees/`
+    /// Default: `{repo_root}/.compas-worktrees/`
     #[serde(default)]
     pub worktree_dir: Option<PathBuf>,
     #[serde(default)]

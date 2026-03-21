@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored). Operators with existing worktrees at the old location should run `git worktree prune`.
+
 ### Added
 
 - `summary` field on threads — optional short one-liner (~80 chars) set via `orch_dispatch`, visible in `orch_status`, `orch_tasks`, `orch_diagnose`, `orch_transcript`, `orch_poll`, `orch_batch_status`, and the TUI dashboard
