@@ -99,6 +99,7 @@ Created: 2026-03-21
 - Not in scope: agent-initiated recurring tasks (agents don't manage scheduling — ADR-015).
 
 ## Execution Metrics
+
 - Ticket: CRON-1
 - Owner: (pending)
 - Complexity: (pending)
@@ -107,5 +108,3 @@ Created: 2026-03-21
 - End: (pending)
 - Duration: (pending)
 - Notes: (pending)
-
-

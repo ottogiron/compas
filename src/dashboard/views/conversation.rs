@@ -1,7 +1,7 @@
 //! Thread conversation view — full-screen overlay showing message history
 //! interleaved with execution lifecycle markers.
 //!
-//! Opened with `c` from the Ops tab, closed with Esc. Follow the log viewer
+//! Opened with `c` from the Ops or History tab, closed with Esc. Follow the log viewer
 //! pattern: full-screen overlay that replaces the tab bar.
 
 use chrono::{TimeZone, Utc};
@@ -200,6 +200,7 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
     let mut in_code_block = false;
     let mut in_heading = false;
     let mut list_depth: usize = 0;
+    let mut list_counter_stack: Vec<Option<u64>> = Vec::new();
 
     let current_style = |stack: &[Style]| -> Style {
         stack
@@ -222,7 +223,12 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
                 in_heading = true;
                 let heading_style = match level {
                     HeadingLevel::H1 => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
-                    _ => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+                    HeadingLevel::H2 => Style::default()
+                        .fg(TEXT_BRIGHT)
+                        .add_modifier(Modifier::BOLD),
+                    _ => Style::default()
+                        .fg(TEXT_NORMAL)
+                        .add_modifier(Modifier::BOLD),
                 };
                 style_stack.push(heading_style);
             }
@@ -262,20 +268,31 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
                 }
             }
             Event::End(TagEnd::CodeBlock) => {
+                if !current_spans.is_empty() {
+                    flush_line(&mut current_spans, &mut result, &prefix);
+                }
+                // Blank line after code block for visual spacing.
+                result.push(Line::from(vec![prefix.clone()]));
                 in_code_block = false;
             }
-            Event::Start(Tag::List(_)) => {
+            Event::Start(Tag::List(start)) => {
                 list_depth += 1;
+                list_counter_stack.push(start);
             }
             Event::End(TagEnd::List(_)) => {
                 list_depth = list_depth.saturating_sub(1);
+                list_counter_stack.pop();
             }
             Event::Start(Tag::Item) => {
                 let indent = "  ".repeat(list_depth.saturating_sub(1));
-                current_spans.push(Span::styled(
-                    format!("{}• ", indent),
-                    Style::default().fg(TEXT_MUTED),
-                ));
+                let marker = if let Some(Some(ref mut n)) = list_counter_stack.last_mut() {
+                    let m = format!("{}{}. ", indent, n);
+                    *n += 1;
+                    m
+                } else {
+                    format!("{}• ", indent)
+                };
+                current_spans.push(Span::styled(marker, Style::default().fg(TEXT_MUTED)));
             }
             Event::End(TagEnd::Item) => {
                 if !current_spans.is_empty() {
@@ -290,13 +307,13 @@ fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
             }
             Event::Text(text) => {
                 if in_code_block {
-                    // Code blocks: render each line with dim style.
-                    let code_style = Style::default().fg(TEXT_MUTED);
+                    // Code blocks: 2-space indent + card background for visual distinction.
+                    let code_style = Style::default().fg(TEXT_MUTED).bg(BG_CARD);
                     for (i, code_line) in text.lines().enumerate() {
                         if i > 0 {
                             flush_line(&mut current_spans, &mut result, &prefix);
                         }
-                        current_spans.push(Span::styled(code_line.to_string(), code_style));
+                        current_spans.push(Span::styled(format!("  {}", code_line), code_style));
                     }
                 } else {
                     // Normal text: split on newlines to preserve source line breaks.
@@ -852,11 +869,26 @@ mod tests {
     }
 
     #[test]
-    fn test_markdown_heading_has_bold_accent_style() {
-        let lines = markdown_to_lines("## Summary", TEXT_DIM);
-        // Skip prefix span (index 0), check the text span style.
+    fn test_markdown_h1_has_accent_bold_style() {
+        let lines = markdown_to_lines("# Title", TEXT_DIM);
         let text_span = &lines[0].spans[1];
         assert_eq!(text_span.style.fg, Some(ACCENT));
+        assert!(text_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_markdown_h2_has_bright_bold_style() {
+        let lines = markdown_to_lines("## Summary", TEXT_DIM);
+        let text_span = &lines[0].spans[1];
+        assert_eq!(text_span.style.fg, Some(TEXT_BRIGHT));
+        assert!(text_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_markdown_h3_has_normal_bold_style() {
+        let lines = markdown_to_lines("### Detail", TEXT_DIM);
+        let text_span = &lines[0].spans[1];
+        assert_eq!(text_span.style.fg, Some(TEXT_NORMAL));
         assert!(text_span.style.add_modifier.contains(Modifier::BOLD));
     }
 
@@ -891,6 +923,41 @@ mod tests {
         // Should have at least one line with code content.
         let has_code = lines.iter().any(|l| l.contains("fn main()"));
         assert!(has_code);
+    }
+
+    #[test]
+    fn test_markdown_code_block_has_visual_spacing() {
+        let lines = md_text("before\n\n```\ncode\n```\n\nafter");
+        // After the code block content, there should be a blank prefix-only line.
+        let code_idx = lines.iter().position(|l| l.contains("code")).unwrap();
+        // Next line after code should be blank (prefix only).
+        assert_eq!(lines[code_idx + 1], "│ ");
+    }
+
+    #[test]
+    fn test_markdown_code_block_has_indent() {
+        let lines = md_text("```\nfn main() {}\n```");
+        let code_line = lines.iter().find(|l| l.contains("fn main()")).unwrap();
+        // Code lines should have 2-space indent.
+        assert!(
+            code_line.contains("│   fn main()"),
+            "Expected indent in: {}",
+            code_line
+        );
+    }
+
+    #[test]
+    fn test_markdown_ordered_list() {
+        let body = "1. first\n2. second\n3. third";
+        let lines = md_text(body);
+        let has_numbered = lines
+            .iter()
+            .any(|l| l.contains("1. ") && l.contains("first"));
+        assert!(has_numbered, "Expected numbered list: {:?}", lines);
+        let has_second = lines
+            .iter()
+            .any(|l| l.contains("2. ") && l.contains("second"));
+        assert!(has_second, "Expected second numbered item: {:?}", lines);
     }
 
     #[test]

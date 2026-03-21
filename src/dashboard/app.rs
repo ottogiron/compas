@@ -760,11 +760,20 @@ impl App {
 
     // ── Conversation view ────────────────────────────────────────────────────
 
-    /// Open the conversation view for the currently selected thread on the Ops tab.
+    /// Open the conversation view for the currently selected thread.
+    ///
+    /// Dispatches to the appropriate handler based on the active tab:
+    /// - Ops tab (0): uses the selected thread from activity data
+    /// - History tab (2): uses the selected execution row
     pub fn open_conversation(&mut self) {
-        if self.active_tab != 0 {
-            return;
+        match self.active_tab {
+            0 => self.open_conversation_from_activity(),
+            2 => self.open_conversation_from_execution(),
+            _ => {}
         }
+    }
+
+    fn open_conversation_from_activity(&mut self) {
         let Some(data) = &self.activity_data else {
             return;
         };
@@ -780,21 +789,37 @@ impl App {
         let Some(row) = data.rows.get(src_idx) else {
             return;
         };
-        let thread_id = row.thread_id.clone();
-        let batch_id = row.batch_id.clone();
-        let thread_status = row.thread_status.clone();
+        self.load_conversation(row.thread_id.clone());
+    }
 
+    fn open_conversation_from_execution(&mut self) {
+        let Some(data) = &self.executions_data else {
+            return;
+        };
+        let Some(HistorySelectable::Execution(exec_idx)) = self.selected_history_target() else {
+            return;
+        };
+        let Some(row) = data.executions.get(exec_idx) else {
+            return;
+        };
+        self.load_conversation(row.thread_id.clone());
+    }
+
+    fn load_conversation(&mut self, thread_id: String) {
         let store = self.store.clone();
         let tid = thread_id.clone();
         let result = self.handle.block_on(async {
             tokio::time::timeout(REFRESH_TIMEOUT, async {
+                let thread = store.get_thread(&tid).await?;
                 let messages = store.get_thread_messages(&tid).await?;
                 let executions = store.get_thread_executions(&tid).await?;
-                Ok::<_, sqlx::Error>((messages, executions))
+                Ok::<_, sqlx::Error>((thread, messages, executions))
             })
             .await
         });
-        if let Ok(Ok((messages, executions))) = result {
+        if let Ok(Ok((thread, messages, executions))) = result {
+            let (batch_id, thread_status) =
+                thread.map(|t| (t.batch_id, t.status)).unwrap_or_default();
             self.viewing_conversation = Some(ConversationViewState::new(
                 thread_id,
                 batch_id,
@@ -808,7 +833,10 @@ impl App {
     /// Close the conversation view and return to the list view.
     pub fn close_conversation(&mut self) {
         self.viewing_conversation = None;
-        self.refresh_activity();
+        match self.active_tab {
+            2 => self.refresh_executions(),
+            _ => self.refresh_activity(),
+        }
     }
 
     /// Close the detail view and return to the list view.
@@ -1352,11 +1380,9 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('G') => app.select_last_row(),
         KeyCode::Esc => app.clear_batch_drill(),
         KeyCode::Char('x') => app.clear_batch_drill(),
-        // Open conversation view for selected thread (Ops tab only).
+        // Open conversation view for selected thread.
         KeyCode::Char('c') => {
-            if app.active_tab == 0 {
-                app.open_conversation();
-            }
+            app.open_conversation();
         }
         // Enter: drill batch row in Ops/History, otherwise open execution detail.
         KeyCode::Enter => {
