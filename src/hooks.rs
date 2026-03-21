@@ -171,6 +171,7 @@ pub fn spawn_hook_consumer(
                             agent_alias,
                             success,
                             duration_ms,
+                            thread_summary,
                         } => {
                             let hooks = maybe_hooks
                                 .map(|h| h.on_execution_completed)
@@ -183,6 +184,7 @@ pub fn spawn_hook_consumer(
                                     "agent_alias": agent_alias,
                                     "success": success,
                                     "duration_ms": duration_ms,
+                                    "thread_summary": thread_summary,
                                     "timestamp": timestamp,
                                 });
                                 let event_json = serde_json::to_string(&payload)
@@ -492,6 +494,7 @@ mod tests {
             agent_alias: "worker-b".to_string(),
             success: true,
             duration_ms: 5000,
+            thread_summary: Some("Implement caching layer".to_string()),
         });
         event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
             thread_id: "t-3".to_string(),
@@ -529,6 +532,7 @@ mod tests {
         assert_eq!(completed["event"], "execution_completed");
         assert_eq!(completed["success"], true);
         assert_eq!(completed["duration_ms"], 5000);
+        assert_eq!(completed["thread_summary"], "Implement caching layer");
 
         let closed: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(&closed_file).expect("closed.json missing"),

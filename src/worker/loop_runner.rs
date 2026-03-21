@@ -916,6 +916,14 @@ async fn handle_trigger_output(
     output: &TriggerOutput,
     agent_configs: &[AgentConfig],
 ) {
+    // Fetch thread summary for richer notifications/hooks.
+    let thread_summary = store
+        .get_thread(&output.thread_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|t| t.summary);
+
     // Emit ExecutionCompleted before any retry/reply logic.
     event_bus.emit(OrchestratorEvent::ExecutionCompleted {
         execution_id: output.execution_id.clone(),
@@ -923,6 +931,7 @@ async fn handle_trigger_output(
         agent_alias: output.agent_alias.clone(),
         success: output.success,
         duration_ms: output.duration_ms,
+        thread_summary,
     });
 
     if output.success {
