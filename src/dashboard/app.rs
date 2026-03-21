@@ -1589,7 +1589,7 @@ impl App {
             let run_counts = self.schedule_run_counts.as_ref().unwrap_or(&empty_counts);
 
             for sched in schedules {
-                let (run_count, _) = run_counts.get(&sched.name).copied().unwrap_or((0, 0));
+                let (_, run_count) = run_counts.get(&sched.name).copied().unwrap_or((0, 0));
 
                 // Compute next fire time from cron expression.
                 let next_fire = if sched.enabled {
