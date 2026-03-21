@@ -58,6 +58,33 @@ enum Commands {
         #[arg(long, hide = true, conflicts_with = "standalone")]
         with_worker: bool,
     },
+    /// Create a new compas configuration file
+    Init {
+        /// Overwrite existing config file
+        #[arg(long)]
+        force: bool,
+        /// Skip interactive prompts, use defaults or explicit flags
+        #[arg(long)]
+        non_interactive: bool,
+        /// Target repository root (default: current directory)
+        #[arg(long)]
+        repo: Option<PathBuf>,
+        /// Backend to use (claude, codex, gemini, opencode)
+        #[arg(long)]
+        backend: Option<String>,
+        /// Agent alias (default: dev)
+        #[arg(long, alias = "alias")]
+        agent_alias: Option<String>,
+        /// Model identifier (optional)
+        #[arg(long)]
+        model: Option<String>,
+        /// Generate minimal config without comments
+        #[arg(long)]
+        minimal: bool,
+        /// Config file path (default: ~/.compas/config.yaml)
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// Wait for a message on a thread (reads SQLite directly, no MCP required).
     ///
     /// Exits 0 when a matching message is found, 1 on timeout, 2 on error.
@@ -108,6 +135,33 @@ async fn main() -> ExitCode {
             if let Err(e) = run_mcp_server(config).await {
                 eprintln!("error: {}", e);
                 return ExitCode::from(2);
+            }
+        }
+        Commands::Init {
+            force,
+            non_interactive,
+            repo,
+            backend,
+            agent_alias,
+            model,
+            minimal,
+            config,
+        } => {
+            let config_path = config
+                .map(|p| compas::config::expand_tilde(&p))
+                .unwrap_or_else(|| effective_config_path(None));
+            if let Err(e) = compas::cli::init::run(
+                config_path,
+                force,
+                non_interactive,
+                repo,
+                backend,
+                agent_alias,
+                model,
+                minimal,
+            ) {
+                eprintln!("error: {}", e);
+                return ExitCode::from(1);
             }
         }
         Commands::Dashboard {
@@ -1000,6 +1054,97 @@ mod tests {
             assert!(!await_chain);
         } else {
             panic!("expected Wait command");
+        }
+    }
+
+    // ── Init subcommand tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_init_parses_minimal() {
+        let parsed = Cli::try_parse_from(["compas", "init"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Init {
+                force,
+                non_interactive,
+                repo,
+                backend,
+                agent_alias,
+                model,
+                minimal,
+                config,
+            } = cli.command
+            {
+                assert!(!force);
+                assert!(!non_interactive);
+                assert!(repo.is_none());
+                assert!(backend.is_none());
+                assert!(agent_alias.is_none());
+                assert!(model.is_none());
+                assert!(!minimal);
+                assert!(config.is_none());
+            } else {
+                panic!("expected Init command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_init_parses_all_flags() {
+        let parsed = Cli::try_parse_from([
+            "compas",
+            "init",
+            "--force",
+            "--non-interactive",
+            "--repo",
+            "/tmp/repo",
+            "--backend",
+            "claude",
+            "--agent-alias",
+            "coder",
+            "--model",
+            "opus",
+            "--minimal",
+            "--config",
+            "custom.yaml",
+        ]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Init {
+                force,
+                non_interactive,
+                repo,
+                backend,
+                agent_alias,
+                model,
+                minimal,
+                config,
+            } = cli.command
+            {
+                assert!(force);
+                assert!(non_interactive);
+                assert_eq!(repo, Some(PathBuf::from("/tmp/repo")));
+                assert_eq!(backend, Some("claude".to_string()));
+                assert_eq!(agent_alias, Some("coder".to_string()));
+                assert_eq!(model, Some("opus".to_string()));
+                assert!(minimal);
+                assert_eq!(config, Some(PathBuf::from("custom.yaml")));
+            } else {
+                panic!("expected Init command");
+            }
+        }
+    }
+
+    #[test]
+    fn test_init_alias_flag_works() {
+        let parsed = Cli::try_parse_from(["compas", "init", "--alias", "my-agent"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            if let Commands::Init { agent_alias, .. } = cli.command {
+                assert_eq!(agent_alias, Some("my-agent".to_string()));
+            } else {
+                panic!("expected Init command");
+            }
         }
     }
 }

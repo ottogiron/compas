@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 
 /// Load and validate configuration from a YAML file.
 pub fn load_config(path: &Path) -> Result<OrchestratorConfig> {
+    if !path.exists() {
+        return Err(crate::error::OrchestratorError::Config(format!(
+            "config file not found at {}. Run `compas init` to create one, \
+             or use `--config <path>` to specify a different location.",
+            path.display()
+        )));
+    }
     let content = std::fs::read_to_string(path)?;
     let config_path = absolutize_base(path);
     let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
