@@ -999,6 +999,7 @@ mod tests {
             orchestration: Default::default(),
             database: Default::default(),
             notifications: Default::default(),
+            backend_definitions: None,
         };
 
         let result = check_worker(&config).await;
@@ -1196,6 +1197,7 @@ mod tests {
             orchestration: Default::default(),
             database: Default::default(),
             notifications: Default::default(),
+            backend_definitions: None,
         };
 
         let backends = unique_backends(&config);

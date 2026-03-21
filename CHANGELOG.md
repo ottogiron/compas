@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Config-driven generic backend definitions (`backend_definitions`) — define CLI-based backends entirely in YAML with template variables (`{{instruction}}`, `{{model}}`, `{{session_id}}`), output format parsing (plaintext/json/jsonl), optional session resume, custom ping commands, and env var stripping (GBE-1)
 - `compas doctor` command: pre-flight validation with ordered checklist (config, target repo, state dir, backend CLIs, backend pings, worker heartbeat, MCP registration), actionable fix suggestions, `--fix` for auto-registering MCP servers, and exit code 0/1 based on pass/fail
 - `compas setup-mcp` command: auto-register compas as an MCP server in coding tools (Claude Code, Codex, OpenCode, Gemini) with `--tool` filter, `--remove` for unregistration, `--dry-run` preview, and idempotent behavior. Includes shared `detection` module for tool discovery reusable by future CLI commands.
 - `compas init` command: interactive and non-interactive config scaffolding with backend detection, overwrite protection, and commented/minimal YAML output

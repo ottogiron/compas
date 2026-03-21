@@ -179,6 +179,9 @@ fn warn_restart_only_changes(old: &OrchestratorConfig, new: &OrchestratorConfig)
             "max_concurrent_triggers changed — requires restart to take effect"
         );
     }
+    if old.backend_definitions != new.backend_definitions {
+        tracing::warn!("backend_definitions changed — requires restart to take effect");
+    }
 }
 
 #[cfg(test)]

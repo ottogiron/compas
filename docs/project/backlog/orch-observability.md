@@ -15,19 +15,23 @@ Created: 2026-03-21
 Captured raw stream-json from all four backends. Key findings:
 
 **Claude** (`--output-format stream-json --verbose`):
+
 - Tool results are `"type":"user"` events with `content[].type: "tool_result"` — not a separate event type
 - `result` event has: `total_cost_usd`, `usage.input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `num_turns`, `duration_ms`, `modelUsage`
 
 **Codex** (`codex exec --json`):
+
 - Events: `thread.started`, `turn.started`, `item.started`, `item.completed`, `turn.completed`
 - Tool results: `item.completed` with `type: "command_execution"`, `exit_code`, `aggregated_output`
 - `turn.completed` has: `usage.input_tokens`, `output_tokens`, `cached_input_tokens`. No cost_usd.
 
 **Gemini** (`--output-format stream-json`):
+
 - Events: `init`, `message` (user/assistant), `result`
 - `result.stats` has: `total_tokens`, `input_tokens`, `output_tokens`, `cached`, `duration_ms`, `tool_calls`. No cost_usd.
 
 **OpenCode** (`--format json`):
+
 - Events: `{ type, timestamp, sessionID, ... }` format. Rate-limited during spike, incomplete capture.
 - Has `opencode stats` for usage data but unclear if inline token counts are emitted per-turn.
 

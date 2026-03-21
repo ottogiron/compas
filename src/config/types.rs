@@ -32,6 +32,10 @@ pub struct OrchestratorConfig {
     /// Desktop notification settings.
     #[serde(default)]
     pub notifications: NotificationConfig,
+    /// Config-driven backend definitions (generic backends).
+    /// Each entry defines a CLI-based backend that can be referenced by agent `backend:` fields.
+    #[serde(default)]
+    pub backend_definitions: Option<Vec<BackendDefinition>>,
 }
 
 impl OrchestratorConfig {
@@ -321,4 +325,95 @@ pub struct HandoffConfig {
     /// Maximum consecutive auto-handoffs before forcing operator review (default: 3).
     #[serde(default)]
     pub max_chain_depth: Option<u32>,
+}
+
+// ── Config-driven generic backend definitions (GBE-1) ──
+
+/// A config-driven backend definition.
+///
+/// Allows backends to be defined entirely in YAML without Rust code.
+/// Each definition describes a CLI command, its arguments (with template
+/// variables), output parsing, and optional session resume / ping behavior.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BackendDefinition {
+    /// Backend name, referenced by agent `backend:` field.
+    pub name: String,
+    /// CLI command to invoke (e.g. `aider`, `/usr/local/bin/my-tool`).
+    pub command: String,
+    /// Arguments with template variables: `{{instruction}}`, `{{model}}`, `{{session_id}}`.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Optional session resume configuration.
+    #[serde(default)]
+    pub resume: Option<ResumeConfig>,
+    /// Output format and extraction configuration.
+    #[serde(default)]
+    pub output: OutputConfig,
+    /// Optional custom ping/liveness check command.
+    #[serde(default)]
+    pub ping: Option<PingConfig>,
+    /// Environment variables to strip before spawning the backend process.
+    /// Composes with per-agent `env`: agent `env` adds vars, backend `env_remove` strips vars.
+    #[serde(default)]
+    pub env_remove: Option<Vec<String>>,
+}
+
+/// Session resume configuration for a generic backend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResumeConfig {
+    /// CLI flag to enable session resume (e.g. `--resume`, `-r`).
+    pub flag: String,
+    /// Template for the session ID argument (e.g. `{{session_id}}`).
+    pub session_id_arg: String,
+}
+
+/// Output format for generic backend result parsing.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OutputFormat {
+    /// Raw stdout is the result text.
+    #[default]
+    Plaintext,
+    /// Parse stdout as a single JSON object.
+    Json,
+    /// Parse last line of stdout as JSON.
+    Jsonl,
+}
+
+/// Output parsing configuration for a generic backend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputConfig {
+    /// Output format: plaintext, json, or jsonl.
+    #[serde(default)]
+    pub format: OutputFormat,
+    /// JSON field path to extract the result text (for json/jsonl formats).
+    #[serde(default)]
+    pub result_field: Option<String>,
+    /// JSON field path to extract the session ID (for json/jsonl formats).
+    #[serde(default)]
+    pub session_id_field: Option<String>,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            format: OutputFormat::Plaintext,
+            result_field: None,
+            session_id_field: None,
+        }
+    }
+}
+
+/// Custom ping/liveness check configuration for a generic backend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PingConfig {
+    /// Command to run for the liveness check.
+    pub command: String,
+    /// Arguments for the ping command.
+    #[serde(default)]
+    pub args: Vec<String>,
 }
