@@ -9,6 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored). Operators with existing worktrees at the old location should run `git worktree prune`.
+- Shortened thread IDs in Ops view (show last 8 chars wide / 6 narrow instead of first 16)
+- Added column separators between agent, summary, and batch columns
+- Progress summary now shows tool names instead of raw API IDs
+- Batch stats use readable labels with semantic colors
 
 ### Added
 

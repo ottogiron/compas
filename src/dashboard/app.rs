@@ -364,7 +364,7 @@ impl App {
                         let mut out = Vec::new();
                         for exec_id in &exec_ids {
                             let summary = store
-                                .get_latest_execution_event(exec_id)
+                                .get_latest_progress_event(exec_id)
                                 .await
                                 .ok()
                                 .flatten()

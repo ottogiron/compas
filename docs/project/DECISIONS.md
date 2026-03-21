@@ -327,3 +327,10 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 **Hot-reload via ConfigHandle.** Hook config is re-read from `ConfigHandle` on every event. Operators can add or remove hooks without restarting the worker — same pattern as the live-reload of `agents` and `trigger_intents`.
 
 **Phase 2 deferred:** `on_thread_abandoned`, `on_execution_retrying`, blocking/interceptor hooks, per-hook `workdir` override.
+
+## ADR-021: Filter noisy telemetry events from progress display
+
+**Date:** 2026-03
+**Status:** Active
+
+**Suppress `tool_result` and `turn_complete` from `ExecutionProgress` bus emissions.** These event types carry no operator-useful information for real-time progress display. `tool_result` summaries contained raw API tool_use_ids (`toolu_01Ewhkpgu...`), and `turn_complete` is a protocol-level boundary marker. Both are still stored in the `execution_events` table for diagnostic access via `orch_execution_events`. The DB query `get_latest_progress_event` applies the same filter for consistency between EventBus and DB refresh paths.
