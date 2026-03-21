@@ -80,6 +80,35 @@ pub fn format_duration_ms(ms: i64) -> String {
     }
 }
 
+/// Format a token count to a compact human-readable string.
+///
+/// * `< 1_000`       → `"N"` (plain number)
+/// * `< 1_000_000`   → `"N.NK"` (thousands)
+/// * `≥ 1_000_000`   → `"N.NM"` (millions)
+pub fn format_tokens(n: i64) -> String {
+    let n = n.max(0);
+    if n < 1_000 {
+        format!("{}", n)
+    } else if n < 1_000_000 {
+        let k = n as f64 / 1_000.0;
+        // Promote to M if rounding would produce "1000.0K"
+        if k >= 999.95 {
+            format!("{:.1}M", n as f64 / 1_000_000.0)
+        } else {
+            format!("{:.1}K", k)
+        }
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
+
+/// Format a USD cost value to a compact display string.
+///
+/// Always two decimal places: `"$0.00"`, `"$0.12"`, `"$1.23"`, etc.
+pub fn format_cost_usd(cost: f64) -> String {
+    format!("${:.2}", cost.max(0.0))
+}
+
 // ── Shared string helpers ──────────────────────────────────────────────────────
 
 /// Truncate a string to `max_chars` Unicode scalars, appending "…" if truncated.
@@ -395,5 +424,80 @@ mod tests {
         assert_eq!(truncate("日本語テスト", 4), "日本語…");
         assert_eq!(truncate("café", 4), "café"); // exactly 4 chars
         assert_eq!(truncate("café", 3), "ca…");
+    }
+
+    // format_tokens
+
+    #[test]
+    fn test_format_tokens_zero() {
+        assert_eq!(format_tokens(0), "0");
+    }
+
+    #[test]
+    fn test_format_tokens_below_thousand() {
+        assert_eq!(format_tokens(999), "999");
+    }
+
+    #[test]
+    fn test_format_tokens_one_thousand() {
+        assert_eq!(format_tokens(1_000), "1.0K");
+    }
+
+    #[test]
+    fn test_format_tokens_thousands() {
+        assert_eq!(format_tokens(12_345), "12.3K");
+    }
+
+    #[test]
+    fn test_format_tokens_below_million() {
+        // 999_999 / 1000.0 = 999.999 ≥ 999.95, promotes to M
+        assert_eq!(format_tokens(999_999), "1.0M");
+    }
+
+    #[test]
+    fn test_format_tokens_one_million() {
+        assert_eq!(format_tokens(1_000_000), "1.0M");
+    }
+
+    #[test]
+    fn test_format_tokens_millions() {
+        assert_eq!(format_tokens(1_234_567), "1.2M");
+    }
+
+    #[test]
+    fn test_format_tokens_negative_clamps_to_zero() {
+        assert_eq!(format_tokens(-5), "0");
+    }
+
+    // format_cost_usd
+
+    #[test]
+    fn test_format_cost_usd_zero() {
+        assert_eq!(format_cost_usd(0.0), "$0.00");
+    }
+
+    #[test]
+    fn test_format_cost_usd_small() {
+        assert_eq!(format_cost_usd(0.001), "$0.00");
+    }
+
+    #[test]
+    fn test_format_cost_usd_cents() {
+        assert_eq!(format_cost_usd(0.12), "$0.12");
+    }
+
+    #[test]
+    fn test_format_cost_usd_dollars() {
+        assert_eq!(format_cost_usd(1.23), "$1.23");
+    }
+
+    #[test]
+    fn test_format_cost_usd_tens() {
+        assert_eq!(format_cost_usd(12.34), "$12.34");
+    }
+
+    #[test]
+    fn test_format_cost_usd_negative_clamps_to_zero() {
+        assert_eq!(format_cost_usd(-1.0), "$0.00");
     }
 }
