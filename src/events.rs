@@ -1,4 +1,3 @@
-// merge queue e2e test — safe to remove
 //! Event broadcast channel for orchestrator state changes.
 //!
 //! The `EventBus` wraps a `tokio::sync::broadcast` channel. The worker emits
