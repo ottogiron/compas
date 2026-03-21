@@ -35,7 +35,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for HookRunner with stub scripts
   - `make verify`
-- Status: Done
+- Status: In Progress
 
 ## Ticket HOOKS-2 — EventBus integration
 
@@ -111,7 +111,7 @@ Created: 2026-03-21
 - Owner: (pending)
 - Complexity: (pending)
 - Risk: (pending)
-- Start: 2026-03-21 15:07 UTC
+- Start: 2026-03-21 15:30 UTC
 - End: 2026-03-21 15:14 UTC
 - Duration: 00:07:54
 - Notes: (pending)

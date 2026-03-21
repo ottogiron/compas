@@ -482,6 +482,52 @@ agents:
     }
 
     #[test]
+    fn test_hooks_config_yaml_roundtrip() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+hooks:
+  on_execution_started:
+    - command: notify.sh
+      args: ["--event"]
+      timeout_secs: 5
+      env:
+        WEBHOOK_URL: https://example.com
+  on_execution_completed: []
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        let hooks = config.hooks.as_ref().unwrap();
+        assert_eq!(hooks.on_execution_started.len(), 1);
+        assert_eq!(hooks.on_execution_started[0].command, "notify.sh");
+        assert_eq!(hooks.on_execution_started[0].timeout_secs, 5);
+        assert_eq!(
+            hooks.on_execution_started[0].env.as_ref().unwrap()["WEBHOOK_URL"],
+            "https://example.com"
+        );
+        assert!(hooks.on_execution_completed.is_empty());
+        assert!(hooks.on_thread_closed.is_empty());
+        assert!(hooks.on_thread_failed.is_empty());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_hooks_config_absent_is_backward_compatible() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.hooks.is_none());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
     fn test_config_validation_zero_timeout() {
         let mut config = minimal_config();
         config.agents[0].timeout_secs = Some(0);

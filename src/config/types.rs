@@ -115,7 +115,8 @@ pub struct HookEntry {
     /// Optional positional arguments passed after the command.
     #[serde(default)]
     pub args: Option<Vec<String>>,
-    /// Maximum seconds to wait before killing the hook process (default 10).
+    /// Maximum seconds to wait before sending SIGTERM; a 5-second grace period
+    /// follows before SIGKILL (effective ceiling: timeout_secs + 5s). Default 10.
     #[serde(default = "default_hook_timeout_secs")]
     pub timeout_secs: u64,
     /// Additional environment variables injected into the hook process.
@@ -140,7 +141,7 @@ pub struct HooksConfig {
     /// Fired when an execution completes successfully.
     #[serde(default)]
     pub on_execution_completed: Vec<HookEntry>,
-    /// Fired when a thread is closed (completed or manually closed).
+    /// Fired when a thread transitions to Completed status.
     #[serde(default)]
     pub on_thread_closed: Vec<HookEntry>,
     /// Fired when a thread transitions to a failed state.
