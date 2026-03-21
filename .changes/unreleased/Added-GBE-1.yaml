@@ -1,0 +1,2 @@
+kind: Added
+body: "Config-driven generic backend definitions (`backend_definitions`): define CLI-based backends entirely in YAML with template variables, output format parsing, session resume, and env var stripping (GBE-1)"

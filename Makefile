@@ -1,4 +1,4 @@
-.PHONY: build release test fmt fmt-check clippy check clean verify lint-md install worker dashboard dashboard-dev dashboard-standalone mcp-server setup-hooks
+.PHONY: build release test fmt fmt-check clippy check clean verify lint-md install worker dashboard dashboard-dev dashboard-standalone mcp-server setup-hooks changelog
 
 # ── Build ────────────────────────────────────────────────────────────
 build:
@@ -31,6 +31,10 @@ lint-md:
 
 # ── Quality gate (fmt-check + clippy + test + markdown lint) ─────────
 verify: fmt-check clippy test lint-md
+
+# ── Changelog ────────────────────────────────────────────────────────
+changelog:
+	@changie batch auto --dry-run
 
 # ── Install ──────────────────────────────────────────────────────────
 install:

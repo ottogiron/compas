@@ -1,0 +1,2 @@
+kind: Added
+body: "Dashboard cost/token visibility (OBS-04): Ops footer shows cost and token data; Agents tab cards show per-agent cost/token row"

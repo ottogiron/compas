@@ -1,0 +1,2 @@
+kind: Added
+body: "Delayed dispatch via `scheduled_for` parameter on `orch_dispatch` (SCHED-2): schedule executions for a future time using ISO 8601 timestamps, deferred via `eligible_at` / `eligible_reason` columns"

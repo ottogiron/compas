@@ -1,0 +1,2 @@
+kind: Added
+body: "Lifecycle hooks documentation, example scripts, and `compas doctor` hook-command existence check (HOOKS-3)"

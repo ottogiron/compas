@@ -1,0 +1,2 @@
+kind: Changed
+body: "Reply message and fan-out thread creation are atomic (single transaction) to prevent race conditions"

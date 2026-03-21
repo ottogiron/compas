@@ -1,0 +1,2 @@
+kind: Added
+body: "Store: `merge_operations` table and store methods for merge queue (MERGE-1)"

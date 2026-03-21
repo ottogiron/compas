@@ -1,0 +1,2 @@
+kind: Added
+body: "`orch_health` parallel pings with TTL cache: concurrent pings via `JoinSet`, cached results within `ping_cache_ttl_secs` window"

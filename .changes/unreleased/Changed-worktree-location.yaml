@@ -1,0 +1,2 @@
+kind: Changed
+body: "Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored)"

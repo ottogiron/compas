@@ -1,0 +1,2 @@
+kind: Changed
+body: "Rebranded from aster-orch to compas — new package name, binary, config paths (`~/.compas/`), and documentation"

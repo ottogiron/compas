@@ -1,0 +1,2 @@
+kind: Added
+body: "Embedded wait guidance in `orch_dispatch` and `orch_poll` tool descriptions with `next_step` CLI command"

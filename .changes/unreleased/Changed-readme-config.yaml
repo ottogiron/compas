@@ -1,0 +1,2 @@
+kind: Changed
+body: "README: add Config Patterns section (multi-repo agent teams, cross-cutting agents), add `role` and `models` fields to config reference"

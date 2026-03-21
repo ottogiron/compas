@@ -1,0 +1,2 @@
+kind: Added
+body: "Config: `merge_timeout_secs` (default 30) and `default_merge_strategy` (default \"merge\") in orchestration config"

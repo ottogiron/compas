@@ -1,0 +1,2 @@
+kind: Fixed
+body: "Conversation view: ordered (numbered) lists now render as `1. 2. 3.` instead of bullets"

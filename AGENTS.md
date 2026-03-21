@@ -35,6 +35,7 @@ make build          # cargo build
 make test           # cargo test
 make fmt            # cargo fmt --all
 make verify         # fmt-check + clippy + test + lint-md (matches CI)
+make changelog      # changie dry-run preview of next version
 make setup-hooks    # install pre-commit hook
 make worker         # run worker
 make dashboard      # run dashboard
@@ -87,7 +88,7 @@ The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only
 ### Pre-push Checklist (Mandatory)
 
 1. `make fmt` — apply formatting
-2. Verify `CHANGELOG.md` has an entry under `[Unreleased]` for the change (no CI enforcement — agent discipline only)
+2. Add a changelog fragment: `changie new -k <Added|Changed|Fixed|Removed> -b "<description>"` (no CI enforcement — agent discipline only)
 3. `make verify` — run the full CI gate (`fmt-check` + `clippy` + `test` + `lint-md`). **Do not push if this fails.**
 4. Push to remote after verification passes
 
@@ -99,23 +100,24 @@ Operator-authored changes (not just dispatched work) must be sent to `compas-rev
 
 When tagging a new release:
 
-1. Update the version in `Cargo.toml`
-2. Move `[Unreleased]` entries in `CHANGELOG.md` under the new version heading
-3. Update the install tag in `README.md` (`--tag vX.Y.Z` in both the install and build-from-source commands)
-4. Commit, tag (`git tag vX.Y.Z`), push with tags (`git push origin main --tags`)
+1. `changie batch <major|minor|patch>` — assemble fragments into a versioned entry
+2. `changie merge` — regenerate `CHANGELOG.md` from all version files
+3. Update the version in `Cargo.toml` to match
+4. Update the install tag in `README.md` (`--tag vX.Y.Z` in both the install and build-from-source commands)
+5. Commit, tag (`git tag vX.Y.Z`), push with tags (`git push origin main --tags`)
 
 ## Impact Update Matrix
 
 If you change a layer, update/review the paired artifacts in the same commit set.
 
-- MCP tools (`src/mcp/*`): `README.md`, integration tests, `CHANGELOG.md`
-- Worker/executor (`src/worker/*`): integration tests, `docs/project/DECISIONS.md` for behavioral changes, `CHANGELOG.md`
-- Dashboard (`src/dashboard/*`): visual verification, `CHANGELOG.md`
-- Backends (`src/backend/*`): backend-specific tests, `README.md`, `CHANGELOG.md`
-- Config (`src/config/*`): validation tests, `README.md`, `CHANGELOG.md`
-- Store/DB (`src/store/*`): migration handling, integration tests, `CHANGELOG.md`
-- Merge executor (`src/merge.rs`): integration tests, `docs/project/DECISIONS.md`, `CHANGELOG.md`
-- ADRs or known-issues updates (`docs/project/DECISIONS.md`, `docs/project/known-issues.md`): `CHANGELOG.md`
+- MCP tools (`src/mcp/*`): `README.md`, integration tests, changelog fragment (`changie new`)
+- Worker/executor (`src/worker/*`): integration tests, `docs/project/DECISIONS.md` for behavioral changes, changelog fragment (`changie new`)
+- Dashboard (`src/dashboard/*`): visual verification, changelog fragment (`changie new`)
+- Backends (`src/backend/*`): backend-specific tests, `README.md`, changelog fragment (`changie new`)
+- Config (`src/config/*`): validation tests, `README.md`, changelog fragment (`changie new`)
+- Store/DB (`src/store/*`): migration handling, integration tests, changelog fragment (`changie new`)
+- Merge executor (`src/merge.rs`): integration tests, `docs/project/DECISIONS.md`, changelog fragment (`changie new`)
+- ADRs or known-issues updates (`docs/project/DECISIONS.md`, `docs/project/known-issues.md`): changelog fragment (`changie new`)
 
 ## Development Workflow
 

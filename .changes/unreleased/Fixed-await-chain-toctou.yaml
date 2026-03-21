@@ -1,0 +1,2 @@
+kind: Fixed
+body: "`--await-chain` TOCTOU fix: re-fetch messages once when chain settles to capture responses inserted between queries"

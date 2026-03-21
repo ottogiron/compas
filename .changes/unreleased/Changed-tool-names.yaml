@@ -1,0 +1,2 @@
+kind: Changed
+body: "Progress summary now shows tool names instead of raw API IDs"

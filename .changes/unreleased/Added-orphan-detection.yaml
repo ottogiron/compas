@@ -1,0 +1,2 @@
+kind: Added
+body: "Orphan backend CLI detection: persist PIDs in executions table, kill orphan processes on worker startup"

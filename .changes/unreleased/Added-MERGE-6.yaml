@@ -1,0 +1,2 @@
+kind: Added
+body: "CLI: `compas wait-merge --op-id <id>` blocking wait for merge completion (MERGE-6)"

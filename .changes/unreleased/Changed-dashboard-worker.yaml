@@ -1,0 +1,2 @@
+kind: Changed
+body: "`dashboard` now spawns an embedded worker by default; `--standalone` disables it (ADR-016)"

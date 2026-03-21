@@ -1,0 +1,2 @@
+kind: Added
+body: "ADR-019: Merge queue for worktree branch integration — FIFO queue model, temporary worktree isolation, per-target-branch serialization"

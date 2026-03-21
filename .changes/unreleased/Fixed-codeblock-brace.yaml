@@ -1,0 +1,2 @@
+kind: Fixed
+body: "Conversation view: code block closing brace no longer merges with the next content element"

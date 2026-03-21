@@ -1,0 +1,2 @@
+kind: Added
+body: "Dashboard and MCP visibility for scheduled tasks (SCHED-3): `orch_tasks` supports `filter=\"scheduled\"`, `orch_status` includes `scheduled_count`, Ops tab displays a \"Scheduled\" section with human-readable due times"

@@ -1,0 +1,2 @@
+kind: Added
+body: "`--standalone` flag for `dashboard` to opt out of the embedded worker"

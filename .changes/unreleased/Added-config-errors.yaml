@@ -1,0 +1,2 @@
+kind: Added
+body: "Improved config error messages: `load_config` reports missing file path and suggests `compas init`"

@@ -1,0 +1,2 @@
+kind: Added
+body: "`compas setup-mcp` command: auto-register compas as an MCP server in coding tools with `--tool` filter, `--remove`, `--dry-run`, and idempotent behavior"

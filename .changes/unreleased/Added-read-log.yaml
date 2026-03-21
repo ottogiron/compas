@@ -1,0 +1,2 @@
+kind: Added
+body: "`orch_read_log` MCP tool: paginated access to execution log files with offset/limit/tail support"

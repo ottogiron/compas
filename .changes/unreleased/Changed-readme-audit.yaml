@@ -1,0 +1,2 @@
+kind: Changed
+body: "README audit: fix dashboard keybindings, correct worktree path, document `compas wait` flags/exit codes, add undocumented config fields"

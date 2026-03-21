@@ -1,0 +1,2 @@
+kind: Added
+body: "Execution cost/token telemetry (OBS-01): `cost_usd`, `tokens_in`, `tokens_out`, `num_turns` columns; backend-specific extraction for Claude, Codex, Gemini"

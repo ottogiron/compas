@@ -1,0 +1,2 @@
+kind: Added
+body: "Hook EventBus integration: hooks fire in the worker process on execution and thread lifecycle events with hot-reload support (HOOKS-2)"
