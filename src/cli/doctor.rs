@@ -238,6 +238,10 @@ pub async fn run(config_path: PathBuf, fix: bool) -> DoctorReport {
         .collect();
     results.extend(mcp_results);
 
+    // ── 9. Hook commands installed ───────────────────────────────────────
+    let hook_checks = check_hook_commands(&config);
+    results.extend(hook_checks);
+
     // ── --fix: auto-register missing MCP servers ─────────────────────────
     if fix && !unregistered_tools.is_empty() {
         for tool in &unregistered_tools {
@@ -531,6 +535,61 @@ fn check_mcp_registration() -> Vec<CheckResult> {
                 &label,
                 &format!("compas not registered in {}", tool),
                 &format!("run: compas setup-mcp --tool {}", tool),
+            ));
+        }
+    }
+
+    results
+}
+
+/// Check 9: hook commands referenced in config exist on PATH or filesystem.
+/// Reports missing commands as warnings (hooks are optional/additive).
+fn check_hook_commands(config: &OrchestratorConfig) -> Vec<CheckResult> {
+    let hooks = match &config.hooks {
+        Some(h) => h,
+        None => return vec![],
+    };
+
+    // Collect all unique hook commands across all hook points (deterministic order).
+    let mut seen: Vec<String> = Vec::new();
+    let all_entries = hooks
+        .on_execution_started
+        .iter()
+        .chain(hooks.on_execution_completed.iter())
+        .chain(hooks.on_thread_closed.iter())
+        .chain(hooks.on_thread_failed.iter());
+
+    for entry in all_entries {
+        if !seen.contains(&entry.command) {
+            seen.push(entry.command.clone());
+        }
+    }
+
+    if seen.is_empty() {
+        return vec![];
+    }
+
+    let mut results = Vec::new();
+    for cmd in &seen {
+        let label = format!("Hook: {}", cmd);
+        // For absolute or relative paths, also check filesystem existence.
+        if cmd.starts_with('/') || cmd.starts_with("./") || cmd.starts_with("../") {
+            if Path::new(cmd).exists() {
+                results.push(CheckResult::pass(&label, "found"));
+            } else {
+                results.push(CheckResult::warn(
+                    &label,
+                    &format!("{} not found", cmd),
+                    "ensure the script exists and is executable, or check the path in hooks config",
+                ));
+            }
+        } else if command_exists(cmd) {
+            results.push(CheckResult::pass(&label, "found on PATH"));
+        } else {
+            results.push(CheckResult::warn(
+                &label,
+                &format!("{} not found", cmd),
+                "ensure the script exists and is executable, or check the path in hooks config",
             ));
         }
     }
@@ -1204,5 +1263,98 @@ mod tests {
 
         let backends = unique_backends(&config);
         assert_eq!(backends, vec!["claude", "codex"]);
+    }
+
+    // ── Hook command checks ─────────────────────────────────────────────
+
+    #[test]
+    fn test_doctor_check_hook_commands_no_hooks() {
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+        };
+
+        let results = check_hook_commands(&config);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_doctor_check_hook_commands_path_missing() {
+        use crate::config::types::{HookEntry, HooksConfig};
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: Some(HooksConfig {
+                on_execution_started: vec![HookEntry {
+                    command: "/tmp/__compas_hook_does_not_exist_xyz__".to_string(),
+                    args: None,
+                    timeout_secs: 10,
+                    env: None,
+                }],
+                on_execution_completed: vec![],
+                on_thread_closed: vec![],
+                on_thread_failed: vec![],
+            }),
+        };
+
+        let results = check_hook_commands(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Warn);
+        assert!(results[0].detail.contains("not found"));
+    }
+
+    #[test]
+    fn test_doctor_check_hook_commands_path_exists() {
+        use crate::config::types::{HookEntry, HooksConfig};
+
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("my-hook.sh");
+        std::fs::write(&script, "#!/bin/sh\n").unwrap();
+
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: Some(HooksConfig {
+                on_execution_completed: vec![HookEntry {
+                    command: script.to_string_lossy().to_string(),
+                    args: None,
+                    timeout_secs: 10,
+                    env: None,
+                }],
+                on_execution_started: vec![],
+                on_thread_closed: vec![],
+                on_thread_failed: vec![],
+            }),
+        };
+
+        let results = check_hook_commands(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Pass);
     }
 }

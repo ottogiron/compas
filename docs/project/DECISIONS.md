@@ -308,3 +308,22 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 **Merge timeout 30s** (not 300s). Git operations are fast; a merge taking longer than 30 seconds indicates a hung process or filesystem problem, not a long-running operation. Long-running ops at the merge stage signal a bug.
 
 **Worktree cleanup blocked for threads with pending merge ops.** The stale-worktree cleanup loop performs a cross-table query before removing a worktree: if any `merge_operations` row for the thread is in `pending` or `claimed` status, cleanup is skipped. This prevents a race where the cleanup cycle deletes the worktree while a merge operation is in flight or queued.
+
+## ADR-020: Lifecycle hooks — git-hook model, fire-and-forget, EventBus subscription
+
+**Date:** 2026-03
+**Status:** Active
+
+**Git-hook model over HTTP webhooks.** Shell scripts fired at named lifecycle events mirror git hooks: predictable, debuggable in isolation, no auth complexity. Users who want HTTP webhooks write `curl` in their script. Industry precedent: Buildkite agent hooks, Fastlane triggers, git hooks themselves.
+
+**Fire-and-forget semantics.** Hook failures are logged as warnings and never propagate to callers. Hooks are purely observational — they cannot block or alter execution. This keeps the execution path deterministic regardless of hook behavior.
+
+**EventBus subscription over direct executor calls.** The `spawn_hook_consumer` task subscribes to the `EventBus` (same mechanism as the notification consumer) rather than calling hook runner directly from executor code. This decouples hook logic from execution logic and avoids polluting the hot path.
+
+**JSON on stdin over environment variables.** Environment variables are limited in size and don't support nested structure. JSON on stdin is self-documenting, easily parsed with `jq` or any scripting language, and consistent regardless of shell quoting rules.
+
+**Sequential execution per event, non-blocking subscriber loop.** Multiple hooks for one event run sequentially in declaration order (predictable, debuggable). Each hook group runs in a `spawn_blocking` task so a slow or hung hook cannot stall the subscriber loop. Parallel hook execution deferred to Phase 2.
+
+**Hot-reload via ConfigHandle.** Hook config is re-read from `ConfigHandle` on every event. Operators can add or remove hooks without restarting the worker — same pattern as the live-reload of `agents` and `trigger_intents`.
+
+**Phase 2 deferred:** `on_thread_abandoned`, `on_execution_retrying`, blocking/interceptor hooks, per-hook `workdir` override.

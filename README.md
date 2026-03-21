@@ -437,6 +437,106 @@ Fan-out creates one new batch-linked thread per target agent. All fan-out thread
 
 **Viewing chains:** In the dashboard, open a thread's conversation (`c` on a thread in the Ops tab) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
 
+### Lifecycle Hooks
+
+Compas fires shell scripts at named execution lifecycle events. Scripts run as subprocesses, receive event data as JSON on stdin, and are subject to a configurable timeout. All failures are logged as warnings and never affect execution — hooks are purely observational.
+
+**Hook points:**
+
+| Hook point | Fired when |
+|---|---|
+| `on_execution_started` | Agent process is spawned for a new execution |
+| `on_execution_completed` | Execution reaches a terminal state (success or failure) |
+| `on_thread_closed` | Thread transitions to `Completed` status |
+| `on_thread_failed` | Thread transitions to `Failed` status |
+
+> Note: `Abandoned` and `ExecutionRetrying` events are not hooked (Phase 2).
+
+**Config example:**
+
+```yaml
+hooks:
+  on_execution_completed:
+    - command: ./scripts/notify-slack.sh
+      timeout_secs: 10
+    - command: ./scripts/log-audit.sh
+  on_thread_failed:
+    - command: ./scripts/alert-pagerduty.sh
+      timeout_secs: 5
+```
+
+**Full `HookEntry` fields:**
+
+```yaml
+hooks:
+  on_execution_started:
+    - command: /path/to/script.sh   # Required: path or command name on PATH
+      args: ["--flag", "value"]     # Optional: positional args
+      timeout_secs: 10              # Optional: kill timeout (default: 10)
+      env:                          # Optional: extra env vars for this hook
+        SLACK_WEBHOOK_URL: https://hooks.slack.com/...
+```
+
+**JSON payload examples** (delivered to hook's stdin):
+
+`on_execution_started`:
+
+```json
+{
+  "event": "execution_started",
+  "thread_id": "01ABC...",
+  "execution_id": "01XYZ...",
+  "agent_alias": "dev",
+  "timestamp": "2026-03-21T17:00:00Z"
+}
+```
+
+`on_execution_completed`:
+
+```json
+{
+  "event": "execution_completed",
+  "thread_id": "01ABC...",
+  "execution_id": "01XYZ...",
+  "agent_alias": "dev",
+  "success": true,
+  "duration_ms": 12345,
+  "timestamp": "2026-03-21T17:00:00Z"
+}
+```
+
+`on_thread_closed`:
+
+```json
+{
+  "event": "thread_closed",
+  "thread_id": "01ABC...",
+  "new_status": "Completed",
+  "timestamp": "2026-03-21T17:00:00Z"
+}
+```
+
+`on_thread_failed`:
+
+```json
+{
+  "event": "thread_failed",
+  "thread_id": "01ABC...",
+  "new_status": "Failed",
+  "timestamp": "2026-03-21T17:00:00Z"
+}
+```
+
+**Behavior notes:**
+
+- Hooks run in `default_workdir` (no per-hook `workdir` override in Phase 1).
+- Multiple hooks per point run **sequentially** in declaration order.
+- A failing hook is logged as a warning and does not prevent subsequent hooks.
+- **Hot-reload:** Add or remove hooks in config without restarting the worker.
+- Webhooks: write `curl` in your hook script — no built-in HTTP support needed.
+
+See `examples/hooks/` for ready-to-use scripts.
+
 ### Config Patterns
 
 **Multi-repo agent team** — shared agents with a repo-scoped reviewer:
