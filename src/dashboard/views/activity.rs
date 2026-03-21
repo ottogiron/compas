@@ -22,15 +22,21 @@ use crate::dashboard::views::{
     format_cost_usd, format_duration_ms, format_duration_secs, format_tokens, humanize_exec_status,
     humanize_thread_status,
 };
-use crate::store::ThreadStatusView;
+use crate::store::{MergeOperation, ThreadStatusView};
 
 const RECENTLY_COMPLETED_LIMIT: usize = 12;
 const OPS_BATCH_SECTION_LIMIT: usize = 10;
+const MERGE_QUEUE_RECENT_LIMIT: usize = 5;
+/// Terminal merge ops (completed/cancelled) visible for this many seconds.
+const MERGE_TERMINAL_WINDOW_SECS: i64 = 600; // 10 minutes
+/// Failed merge ops persist longer in the list.
+const MERGE_FAILED_WINDOW_SECS: i64 = 1800; // 30 minutes
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpsSelectable {
     Thread(usize),
     Batch(String),
+    MergeOp(String),
 }
 
 #[derive(Debug, Clone)]
@@ -142,6 +148,45 @@ fn capped_batches(batches: &[BatchProgress]) -> &[BatchProgress] {
     &batches[..end]
 }
 
+/// Filter merge ops into active and recently-terminal lists.
+///
+/// Active: queued, claimed, executing.
+/// Recent terminal: completed/failed/cancelled within time window.
+/// Failed ops use a longer persistence window (30 min) vs other terminal (10 min).
+fn filter_merge_ops(ops: &[MergeOperation], now_unix: i64) -> Vec<&MergeOperation> {
+    let mut out: Vec<&MergeOperation> = Vec::new();
+    let mut terminal: Vec<&MergeOperation> = Vec::new();
+
+    for op in ops {
+        match op.status.as_str() {
+            "queued" | "claimed" | "executing" => out.push(op),
+            "failed" => {
+                let finished = op.finished_at.unwrap_or(op.queued_at);
+                if (now_unix - finished) < MERGE_FAILED_WINDOW_SECS {
+                    terminal.push(op);
+                }
+            }
+            "completed" | "cancelled" => {
+                let finished = op.finished_at.unwrap_or(op.queued_at);
+                if (now_unix - finished) < MERGE_TERMINAL_WINDOW_SECS {
+                    terminal.push(op);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Sort terminal by finished_at desc, cap at limit
+    terminal.sort_by(|a, b| {
+        let a_t = a.finished_at.unwrap_or(a.queued_at);
+        let b_t = b.finished_at.unwrap_or(b.queued_at);
+        b_t.cmp(&a_t)
+    });
+    terminal.truncate(MERGE_QUEUE_RECENT_LIMIT);
+    out.extend(terminal);
+    out
+}
+
 fn sort_indices_by_updated(rows: &[ThreadStatusView], indices: &mut [usize]) {
     indices.sort_by(|a, b| {
         let a_ts = rows.get(*a).map(|r| r.thread_updated_at).unwrap_or(0);
@@ -228,6 +273,7 @@ fn batch_progress(
 
 pub fn ops_selectable_targets(
     rows: &[ThreadStatusView],
+    merge_ops: &[MergeOperation],
     drill_batch: Option<&str>,
     now_unix: i64,
     stale_after_secs: i64,
@@ -272,6 +318,16 @@ pub fn ops_selectable_targets(
                 .map(OpsSelectable::Thread),
         );
     }
+    // Merge queue — between Active Threads and Recently Completed.
+    // Not shown when drilling into a batch (merge ops are not batch-scoped).
+    if drill_batch.is_none() {
+        let visible_merge_ops = filter_merge_ops(merge_ops, now_unix);
+        out.extend(
+            visible_merge_ops
+                .iter()
+                .map(|op| OpsSelectable::MergeOp(op.id.clone())),
+        );
+    }
     out.extend(
         capped_recently_completed(&classified.recently_completed)
             .iter()
@@ -291,23 +347,25 @@ pub fn ops_selectable_targets(
 
 pub fn ops_selected_target(
     rows: &[ThreadStatusView],
+    merge_ops: &[MergeOperation],
     drill_batch: Option<&str>,
     selected: usize,
     now_unix: i64,
     stale_after_secs: i64,
 ) -> Option<OpsSelectable> {
-    ops_selectable_targets(rows, drill_batch, now_unix, stale_after_secs)
+    ops_selectable_targets(rows, merge_ops, drill_batch, now_unix, stale_after_secs)
         .into_iter()
         .nth(selected)
 }
 
 pub fn ops_selectable_count(
     rows: &[ThreadStatusView],
+    merge_ops: &[MergeOperation],
     drill_batch: Option<&str>,
     now_unix: i64,
     stale_after_secs: i64,
 ) -> usize {
-    ops_selectable_targets(rows, drill_batch, now_unix, stale_after_secs).len()
+    ops_selectable_targets(rows, merge_ops, drill_batch, now_unix, stale_after_secs).len()
 }
 
 fn footer_counts(
@@ -381,6 +439,43 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
             format!("{}", scheduled),
             Style::new().fg(theme::TEXT_BRIGHT),
         ));
+    }
+
+    // Merge counts: show when any active merge ops exist
+    let merge_executing = data
+        .merge_ops
+        .iter()
+        .filter(|o| o.status == "executing" || o.status == "claimed")
+        .count();
+    let merge_queued = data
+        .merge_ops
+        .iter()
+        .filter(|o| o.status == "queued")
+        .count();
+    if merge_executing + merge_queued > 0 {
+        spans.push(Span::styled(
+            "  │  ".to_string(),
+            Style::new().fg(theme::BORDER_DIM),
+        ));
+        spans.push(label("Merges: ", theme::TEXT_MUTED));
+        if merge_executing > 0 {
+            spans.push(Span::styled(
+                format!("{}▸", merge_executing),
+                Style::new().fg(theme::ACCENT),
+            ));
+        }
+        if merge_queued > 0 {
+            if merge_executing > 0 {
+                spans.push(Span::styled(
+                    " ".to_string(),
+                    Style::new().fg(theme::TEXT_BRIGHT),
+                ));
+            }
+            spans.push(Span::styled(
+                format!("{}◌", merge_queued),
+                Style::new().fg(theme::WARNING),
+            ));
+        }
     }
 
     if let Some(cost) = &data.cost_summary {
@@ -466,6 +561,7 @@ fn render_ops_list(
     let selected_slot = app.activity_selected.min(
         ops_selectable_count(
             &data.rows,
+            &data.merge_ops,
             app.drill_batch.as_deref(),
             now_unix,
             stale_after_secs,
@@ -666,6 +762,40 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
+        }
+    }
+
+    // ── Merge Queue section ─────────────────────────────────────────────
+    // Skip merge queue when drilling into a batch — it's not batch-scoped.
+    let visible_merge_ops = if app.drill_batch.is_none() {
+        filter_merge_ops(&data.merge_ops, now_unix)
+    } else {
+        Vec::new()
+    };
+    if !visible_merge_ops.is_empty() {
+        let has_failed = visible_merge_ops.iter().any(|o| o.status == "failed");
+        let header_color = if has_failed {
+            theme::FAILURE
+        } else {
+            theme::ACCENT
+        };
+
+        items.push(ListItem::new(Line::from(Span::raw(""))));
+        push_section_header(
+            &mut items,
+            "Merge Queue",
+            visible_merge_ops.len(),
+            header_color,
+        );
+        for op in &visible_merge_ops {
+            let is_selected = selectable_slot == selected_slot;
+            sel_to_row.push(items.len());
+            let mut lines = vec![make_merge_op_line(op, is_selected, now_unix, list_width)];
+            if is_selected {
+                lines.push(make_merge_op_detail_line(op, list_width));
+            }
+            items.push(ListItem::new(lines));
+            selectable_slot += 1;
         }
     }
 
@@ -1127,6 +1257,149 @@ fn make_batch_line(
     Line::from(spans)
 }
 
+fn merge_op_icon(status: &str) -> (&'static str, Color) {
+    match status {
+        "executing" | "claimed" => (theme::MARKER_RUNNING, theme::ACCENT),
+        "queued" => (theme::MARKER_QUEUED, theme::WARNING),
+        "completed" => (theme::MARKER_COMPLETED, theme::SUCCESS_DIM),
+        "failed" => (theme::MARKER_FAILED, theme::FAILURE),
+        "cancelled" => (" ", theme::TEXT_DIM),
+        _ => (" ", theme::TEXT_NORMAL),
+    }
+}
+
+fn make_merge_op_line(
+    op: &MergeOperation,
+    is_selected: bool,
+    now_unix: i64,
+    width: usize,
+) -> Line<'static> {
+    let (icon, icon_color) = merge_op_icon(&op.status);
+
+    let bg = if is_selected {
+        theme::BG_HIGHLIGHT
+    } else {
+        theme::BG_PRIMARY
+    };
+    let base_mod = if is_selected {
+        Modifier::BOLD
+    } else {
+        Modifier::empty()
+    };
+
+    // Source branch — truncate compas/ prefix to c/ if needed
+    let source = if width < 100 {
+        op.source_branch.replace("compas/", "c/")
+    } else {
+        op.source_branch.clone()
+    };
+    let branch_budget = if width >= 100 { 50 } else { 30 };
+    let arrow = format!(
+        "{} → {}",
+        super::truncate(&source, branch_budget / 2),
+        super::truncate(&op.target_branch, branch_budget / 2)
+    );
+    let arrow_width = branch_budget + 4; // " → " = 3 chars + margin
+
+    let status_text = match op.status.as_str() {
+        "queued" => "Queued",
+        "claimed" => "Claimed",
+        "executing" => "Executing",
+        "completed" => "Completed",
+        "failed" => "Failed",
+        "cancelled" => "Cancelled",
+        other => other,
+    };
+    let status_color = theme::exec_status_color(&op.status);
+
+    let strategy = format!("[{}]", op.merge_strategy);
+
+    let duration = if let Some(ms) = op.duration_ms {
+        format_duration_ms(ms)
+    } else if matches!(op.status.as_str(), "executing" | "claimed") {
+        let started = op.started_at.unwrap_or(op.queued_at);
+        format_duration_secs((now_unix - started).max(0))
+    } else {
+        "-".to_string()
+    };
+
+    let mut spans = vec![
+        Span::styled(format!(" {} ", icon), Style::new().fg(icon_color).bg(bg)),
+        Span::styled(
+            format!("{:<w$}", arrow, w = arrow_width),
+            Style::new()
+                .fg(theme::TEXT_BRIGHT)
+                .bg(bg)
+                .add_modifier(base_mod),
+        ),
+        Span::styled(
+            format!("{:<12}", status_text),
+            Style::new().fg(status_color).bg(bg).add_modifier(base_mod),
+        ),
+    ];
+
+    if width >= 100 {
+        spans.push(Span::styled(
+            format!("{:<10}", strategy),
+            Style::new()
+                .fg(theme::TEXT_DIM)
+                .bg(bg)
+                .add_modifier(base_mod),
+        ));
+    }
+
+    spans.push(Span::styled(
+        format!("{:<8}", duration),
+        Style::new()
+            .fg(theme::TEXT_DIM)
+            .bg(bg)
+            .add_modifier(base_mod),
+    ));
+
+    Line::from(spans)
+}
+
+fn make_merge_op_detail_line(op: &MergeOperation, list_width: usize) -> Line<'static> {
+    let avail = list_width
+        .saturating_sub(DETAIL_PREFIX_LEN)
+        .saturating_sub(HINT_SUFFIX_LEN);
+
+    let detail = if op.status == "failed" {
+        // Show conflict files if present
+        if let Some(ref cf_json) = op.conflict_files {
+            if let Ok(files) = serde_json::from_str::<Vec<String>>(cf_json) {
+                if files.is_empty() {
+                    op.error_detail.as_deref().unwrap_or("failed").to_string()
+                } else {
+                    let file_list = files.join(", ");
+                    format!("{} conflicts: {}", files.len(), file_list)
+                }
+            } else {
+                op.error_detail.as_deref().unwrap_or("failed").to_string()
+            }
+        } else {
+            op.error_detail.as_deref().unwrap_or("failed").to_string()
+        }
+    } else {
+        // Normal: show op id and thread id
+        let op_short = super::truncate_left(&op.id, 7);
+        let thread_short = super::truncate_left(&op.thread_id, 7);
+        format!(
+            "op:{}  thread:{}  by:{}",
+            op_short, thread_short, op.requested_by
+        )
+    };
+
+    let padded = format!("{:<width$}", super::truncate(&detail, avail), width = avail);
+    Line::from(vec![
+        Span::raw("     └─ "),
+        Span::styled(padded, Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" │ ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled("[Enter]", Style::default().fg(theme::ACCENT)),
+        Span::styled(" thread", Style::default().fg(theme::TEXT_DIM)),
+    ])
+}
+
 fn push_section_header(
     items: &mut Vec<ListItem<'static>>,
     title: &str,
@@ -1272,7 +1545,7 @@ mod tests {
             make_row("t3", Some("b2"), "Completed", Some("completed"), 3),
         ];
 
-        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
         assert!(targets.iter().any(|t| matches!(t, OpsSelectable::Batch(_))));
     }
 
@@ -1283,7 +1556,7 @@ mod tests {
             make_row("t2", Some("b2"), "Active", Some("queued"), 2),
         ];
 
-        let targets = ops_selectable_targets(&rows, Some("b1"), 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], Some("b1"), 100, 3600);
         assert!(!targets.iter().any(|t| matches!(t, OpsSelectable::Batch(_))));
         assert_eq!(targets.len(), 1);
     }
@@ -1309,12 +1582,12 @@ mod tests {
             make_row("older", Some("b1"), "Active", None, 10),
             make_row("newer", Some("b1"), "Active", None, 20),
         ];
-        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
         let active_thread_ids: Vec<String> = targets
             .into_iter()
             .filter_map(|t| match t {
                 OpsSelectable::Thread(idx) => Some(rows[idx].thread_id.clone()),
-                OpsSelectable::Batch(_) => None,
+                _ => None,
             })
             .collect();
         assert_eq!(active_thread_ids[0], "newer");
@@ -1367,7 +1640,7 @@ mod tests {
             ));
         }
 
-        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
         let recent_threads = targets
             .into_iter()
             .filter(|t| matches!(t, OpsSelectable::Thread(_)))
@@ -1383,8 +1656,8 @@ mod tests {
             make_row("done", Some("b1"), "Completed", Some("completed"), 8),
         ];
 
-        let count = ops_selectable_count(&rows, None, 100, 3600);
-        let targets_len = ops_selectable_targets(&rows, None, 100, 3600).len();
+        let count = ops_selectable_count(&rows, &[], None, 100, 3600);
+        let targets_len = ops_selectable_targets(&rows, &[], None, 100, 3600).len();
         assert_eq!(count, targets_len);
     }
 
@@ -1401,7 +1674,7 @@ mod tests {
             ));
         }
 
-        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
         let batch_count = targets
             .iter()
             .filter(|t| matches!(t, OpsSelectable::Batch(_)))
@@ -1422,7 +1695,7 @@ mod tests {
             ));
         }
 
-        let targets = ops_selectable_targets(&rows, None, 100, 3600);
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
         let batch_count = targets
             .iter()
             .filter(|t| matches!(t, OpsSelectable::Batch(_)))
@@ -1447,6 +1720,7 @@ mod tests {
             heartbeat: None,
             fetched_at: std::time::Instant::now(),
             cost_summary: None,
+            merge_ops: Vec::new(),
         };
 
         let (active, failed, completed, stale, scheduled) = footer_counts(&data, 1000, 300);
@@ -1480,5 +1754,122 @@ mod tests {
     fn test_format_relative_future_days() {
         assert_eq!(format_relative_future(90000), "in 1d 1h");
         assert_eq!(format_relative_future(172800), "in 2d 0h");
+    }
+
+    fn make_merge_op(id: &str, status: &str, finished_at: Option<i64>) -> MergeOperation {
+        MergeOperation {
+            id: id.to_string(),
+            thread_id: format!("thread-{}", id),
+            source_branch: format!("compas/thread-{}", id),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: status.to_string(),
+            push_requested: false,
+            queued_at: 100,
+            claimed_at: None,
+            started_at: None,
+            finished_at,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        }
+    }
+
+    #[test]
+    fn test_merge_queue_section_hidden_when_empty() {
+        let rows = vec![make_row("t1", Some("b1"), "Active", Some("executing"), 10)];
+        let merge_ops: Vec<MergeOperation> = Vec::new();
+        let targets = ops_selectable_targets(&rows, &merge_ops, None, 100, 3600);
+        assert!(!targets
+            .iter()
+            .any(|t| matches!(t, OpsSelectable::MergeOp(_))));
+    }
+
+    #[test]
+    fn test_merge_queue_section_shows_active_ops() {
+        let rows = vec![make_row("t1", Some("b1"), "Active", Some("executing"), 10)];
+        let merge_ops = vec![
+            make_merge_op("op1", "queued", None),
+            make_merge_op("op2", "executing", None),
+        ];
+        let targets = ops_selectable_targets(&rows, &merge_ops, None, 100, 3600);
+        let merge_count = targets
+            .iter()
+            .filter(|t| matches!(t, OpsSelectable::MergeOp(_)))
+            .count();
+        assert_eq!(merge_count, 2);
+    }
+
+    #[test]
+    fn test_ops_selectable_includes_merge_ops() {
+        let rows = vec![
+            make_row("t1", None, "Active", Some("executing"), 10),
+            make_row("t2", None, "Completed", Some("completed"), 5),
+        ];
+        let merge_ops = vec![make_merge_op("op1", "executing", None)];
+        let targets = ops_selectable_targets(&rows, &merge_ops, None, 100, 3600);
+
+        // Merge ops should appear between active threads and recently completed
+        let merge_positions: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| matches!(t, OpsSelectable::MergeOp(_)))
+            .map(|(i, _)| i)
+            .collect();
+        let completed_positions: Vec<usize> = targets
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                if let OpsSelectable::Thread(idx) = t {
+                    rows[*idx].thread_status == "Completed"
+                } else {
+                    false
+                }
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        assert!(!merge_positions.is_empty());
+        assert!(!completed_positions.is_empty());
+        // Merge ops should come before recently completed
+        assert!(merge_positions[0] < completed_positions[0]);
+    }
+
+    #[test]
+    fn test_merge_ops_terminal_filtered_by_time_window() {
+        let now_unix = 1000;
+        // Completed op within window (10 min = 600s)
+        let recent = make_merge_op("recent", "completed", Some(500));
+        // Completed op outside window
+        let old = make_merge_op("old", "completed", Some(100));
+        // Failed op within extended window (30 min = 1800s)
+        let mut failed_recent = make_merge_op("failed-recent", "failed", Some(500));
+        failed_recent.error_detail = Some("merge conflict".to_string());
+
+        let ops = vec![recent, old, failed_recent];
+        let visible = filter_merge_ops(&ops, now_unix);
+
+        let ids: Vec<&str> = visible.iter().map(|o| o.id.as_str()).collect();
+        assert!(ids.contains(&"recent"));
+        assert!(!ids.contains(&"old")); // too old
+        assert!(ids.contains(&"failed-recent"));
+    }
+
+    #[test]
+    fn test_ops_selectable_excludes_merge_ops_in_drill_mode() {
+        let rows = vec![make_row("t1", Some("b1"), "Active", Some("executing"), 10)];
+        let merge_ops = vec![
+            make_merge_op("op1", "executing", None),
+            make_merge_op("op2", "queued", None),
+        ];
+        let targets = ops_selectable_targets(&rows, &merge_ops, Some("b1"), 100, 3600);
+        assert!(
+            !targets
+                .iter()
+                .any(|t| matches!(t, OpsSelectable::MergeOp(_))),
+            "merge ops should not appear when drilling into a batch"
+        );
     }
 }

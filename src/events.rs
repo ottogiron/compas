@@ -83,6 +83,19 @@ pub enum OrchestratorEvent {
         /// Unix timestamp when the retry execution becomes eligible for claiming.
         retry_after: i64,
     },
+    /// A merge operation has been claimed and execution is starting.
+    MergeStarted {
+        op_id: String,
+        thread_id: String,
+        source_branch: String,
+        target_branch: String,
+    },
+    /// A merge operation has finished (succeeded or failed).
+    MergeCompleted {
+        op_id: String,
+        thread_id: String,
+        success: bool,
+    },
 }
 
 /// Shared event bus — thin wrapper around `tokio::broadcast`.

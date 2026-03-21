@@ -559,8 +559,16 @@ impl WorkerRunner {
             return;
         }
 
+        self.event_bus.emit(OrchestratorEvent::MergeStarted {
+            op_id: op.id.clone(),
+            thread_id: op.thread_id.clone(),
+            source_branch: op.source_branch.clone(),
+            target_branch: op.target_branch.clone(),
+        });
+
         // Spawn a detached task so the merge does not block the select! loop.
         let store = self.store.clone();
+        let event_bus = self.event_bus.clone();
         // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
         // falling back to config.default_workdir for shared-workspace or legacy threads.
         let repo_root = match self.store.get_thread_worktree_info(&op.thread_id).await {
@@ -600,6 +608,11 @@ impl WorkerRunner {
                     {
                         tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to completed");
                     }
+                    event_bus.emit(OrchestratorEvent::MergeCompleted {
+                        op_id: op.id.clone(),
+                        thread_id: op.thread_id.clone(),
+                        success: true,
+                    });
                 }
                 Ok(Ok(merge_result)) => {
                     // Merge executed but failed (e.g. conflict)
@@ -628,6 +641,11 @@ impl WorkerRunner {
                     {
                         tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to failed");
                     }
+                    event_bus.emit(OrchestratorEvent::MergeCompleted {
+                        op_id: op.id.clone(),
+                        thread_id: op.thread_id.clone(),
+                        success: false,
+                    });
                 }
                 Ok(Err(e)) => {
                     // MergeExecutor::execute returned Err (infrastructure failure)
@@ -648,6 +666,11 @@ impl WorkerRunner {
                     {
                         tracing::error!(op_id = %op.id, error = %update_err, "failed to update merge op to failed");
                     }
+                    event_bus.emit(OrchestratorEvent::MergeCompleted {
+                        op_id: op.id.clone(),
+                        thread_id: op.thread_id.clone(),
+                        success: false,
+                    });
                 }
                 Err(join_err) => {
                     // spawn_blocking panicked
@@ -665,6 +688,11 @@ impl WorkerRunner {
                     {
                         tracing::error!(op_id = %op.id, error = %e, "failed to update merge op to failed after panic");
                     }
+                    event_bus.emit(OrchestratorEvent::MergeCompleted {
+                        op_id: op.id.clone(),
+                        thread_id: op.thread_id.clone(),
+                        success: false,
+                    });
                 }
             }
         });

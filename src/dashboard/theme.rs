@@ -151,7 +151,7 @@ pub fn exec_status_color(status: &str) -> Color {
     match status {
         "completed" => SUCCESS_DIM,
         "failed" | "crashed" | "timed_out" => FAILURE,
-        "executing" | "picked_up" => ACCENT,
+        "executing" | "picked_up" | "claimed" => ACCENT,
         "queued" => WARNING,
         "cancelled" => TEXT_DIM,
         _ => TEXT_NORMAL,

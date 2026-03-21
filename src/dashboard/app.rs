@@ -40,7 +40,9 @@ use crate::dashboard::views::conversation::{render_conversation, ConversationVie
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
 use crate::events::{EventBus, OrchestratorEvent};
-use crate::store::{AgentCostSummary, CostSummary, ExecutionRow, Store, ThreadStatusView};
+use crate::store::{
+    AgentCostSummary, CostSummary, ExecutionRow, MergeOperation, Store, ThreadStatusView,
+};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -74,6 +76,8 @@ pub struct ActivityData {
     pub fetched_at: Instant,
     /// Aggregated cost and token totals from all executions.
     pub cost_summary: Option<CostSummary>,
+    /// Active and recently-completed merge operations.
+    pub merge_ops: Vec<MergeOperation>,
 }
 
 // ── Agents data ───────────────────────────────────────────────────────────────
@@ -297,6 +301,11 @@ impl App {
                 let queue_depth = store.queue_depth().await.unwrap_or(0);
                 let heartbeat = store.latest_heartbeat().await.unwrap_or(None);
                 let cost = store.cost_summary(None).await.ok();
+                const MERGE_QUEUE_FETCH_LIMIT: i64 = 20;
+                let merge_ops = store
+                    .list_merge_ops(None, None, None, MERGE_QUEUE_FETCH_LIMIT)
+                    .await
+                    .unwrap_or_default();
 
                 Ok::<_, sqlx::Error>(ActivityData {
                     rows,
@@ -305,6 +314,7 @@ impl App {
                     heartbeat,
                     fetched_at: Instant::now(),
                     cost_summary: cost,
+                    merge_ops,
                 })
             })
             .await
@@ -315,6 +325,7 @@ impl App {
                 // Clamp selection to new selectable count.
                 let count = activity::ops_selectable_count(
                     &data.rows,
+                    &data.merge_ops,
                     self.drill_batch.as_deref(),
                     Self::now_unix(),
                     self.stale_active_secs(),
@@ -587,6 +598,7 @@ impl App {
                     .map(|d| {
                         activity::ops_selectable_count(
                             &d.rows,
+                            &d.merge_ops,
                             self.drill_batch.as_deref(),
                             Self::now_unix(),
                             self.stale_active_secs(),
@@ -640,6 +652,7 @@ impl App {
         };
         let Some(OpsSelectable::Thread(src_idx)) = activity::ops_selected_target(
             &data.rows,
+            &data.merge_ops,
             self.drill_batch.as_deref(),
             self.activity_selected,
             Self::now_unix(),
@@ -779,6 +792,7 @@ impl App {
         };
         let Some(OpsSelectable::Thread(src_idx)) = activity::ops_selected_target(
             &data.rows,
+            &data.merge_ops,
             self.drill_batch.as_deref(),
             self.activity_selected,
             Self::now_unix(),
@@ -790,6 +804,18 @@ impl App {
             return;
         };
         self.load_conversation(row.thread_id.clone());
+    }
+
+    /// Open conversation view for a merge operation's source thread.
+    fn open_merge_op_thread(&mut self, op_id: &str) {
+        let Some(data) = &self.activity_data else {
+            return;
+        };
+        let Some(op) = data.merge_ops.iter().find(|o| o.id == op_id) else {
+            return;
+        };
+        let thread_id = op.thread_id.clone();
+        self.load_conversation(thread_id);
     }
 
     fn open_conversation_from_execution(&mut self) {
@@ -855,6 +881,7 @@ impl App {
         let data = self.activity_data.as_ref()?;
         activity::ops_selected_target(
             &data.rows,
+            &data.merge_ops,
             self.drill_batch.as_deref(),
             self.activity_selected,
             Self::now_unix(),
@@ -893,6 +920,7 @@ impl App {
         };
         let Some(OpsSelectable::Batch(batch_id)) = activity::ops_selected_target(
             &data.rows,
+            &data.merge_ops,
             self.drill_batch.as_deref(),
             self.activity_selected,
             Self::now_unix(),
@@ -929,6 +957,7 @@ impl App {
                     .map(|d| {
                         activity::ops_selectable_count(
                             &d.rows,
+                            &d.merge_ops,
                             self.drill_batch.as_deref(),
                             Self::now_unix(),
                             self.stale_active_secs(),
@@ -1210,6 +1239,10 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                                 app.progress_summaries.remove(execution_id);
                                 app.progress_last_changed.remove(execution_id);
                             }
+                            OrchestratorEvent::MergeStarted { .. }
+                            | OrchestratorEvent::MergeCompleted { .. } => {
+                                // Merge events handled by invalidate_data() below.
+                            }
                             _ => {}
                         }
                     }
@@ -1393,6 +1426,12 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
                 )
             {
                 app.enter_batch_drill();
+            } else if app.active_tab == 0 {
+                if let Some(OpsSelectable::MergeOp(op_id)) = app.selected_activity_target() {
+                    app.open_merge_op_thread(&op_id);
+                } else {
+                    app.open_log_viewer();
+                }
             } else if app.active_tab == 2
                 && matches!(
                     app.selected_history_target(),
