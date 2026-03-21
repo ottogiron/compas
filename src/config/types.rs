@@ -138,7 +138,7 @@ pub struct HooksConfig {
     /// Fired when an execution starts (agent process is spawned).
     #[serde(default)]
     pub on_execution_started: Vec<HookEntry>,
-    /// Fired when an execution completes successfully.
+    /// Fired when an execution reaches a terminal state (success or failure).
     #[serde(default)]
     pub on_execution_completed: Vec<HookEntry>,
     /// Fired when a thread transitions to Completed status.

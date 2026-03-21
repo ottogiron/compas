@@ -68,7 +68,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: stub hook script writes event JSON to file, verify contents
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket HOOKS-3 — Documentation and examples
 
@@ -112,8 +112,8 @@ Created: 2026-03-21
 - Complexity: (pending)
 - Risk: (pending)
 - Start: 2026-03-21 15:55 UTC
-- End: (pending)
-- Duration: (pending)
+- End: 2026-03-21 15:59 UTC
+- Duration: 00:03:59
 - Notes: (pending)
 
 - Ticket: HOOKS-1

@@ -389,6 +389,167 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn test_spawn_hook_consumer_fires_on_events() {
+        use crate::config::types::{HooksConfig, OrchestratorConfig};
+        use crate::config::watcher::ConfigHandle;
+        use crate::events::{EventBus, OrchestratorEvent};
+        use std::path::PathBuf;
+
+        let dir = tempfile::tempdir().unwrap();
+        let workdir = dir.path().to_path_buf();
+
+        // Create a stub script that writes stdin JSON to the file path given as $1
+        let script_path = dir.path().join("write-event.sh");
+        std::fs::write(&script_path, "#!/bin/sh\ncat > \"$1\"\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // Sentinel files for each hook point
+        let started_file = dir.path().join("started.json");
+        let completed_file = dir.path().join("completed.json");
+        let closed_file = dir.path().join("closed.json");
+        let failed_file = dir.path().join("failed.json");
+        let progress_file = dir.path().join("progress.json");
+
+        let script = script_path.to_string_lossy().to_string();
+        let hooks = HooksConfig {
+            on_execution_started: vec![HookEntry {
+                command: script.clone(),
+                args: Some(vec![started_file.to_string_lossy().to_string()]),
+                timeout_secs: 10,
+                env: None,
+            }],
+            on_execution_completed: vec![HookEntry {
+                command: script.clone(),
+                args: Some(vec![completed_file.to_string_lossy().to_string()]),
+                timeout_secs: 10,
+                env: None,
+            }],
+            on_thread_closed: vec![HookEntry {
+                command: script.clone(),
+                args: Some(vec![closed_file.to_string_lossy().to_string()]),
+                timeout_secs: 10,
+                env: None,
+            }],
+            on_thread_failed: vec![HookEntry {
+                command: script.clone(),
+                args: Some(vec![failed_file.to_string_lossy().to_string()]),
+                timeout_secs: 10,
+                env: None,
+            }],
+        };
+
+        let mut config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: Some(hooks),
+        };
+        // Suppress validation error for empty agents
+        config.agents.push(crate::config::types::AgentConfig {
+            alias: "stub".to_string(),
+            backend: "stub".to_string(),
+            role: Default::default(),
+            model: None,
+            prompt: None,
+            prompt_file: None,
+            timeout_secs: None,
+            backend_args: None,
+            env: None,
+            workdir: None,
+            workspace: None,
+            max_retries: 0,
+            retry_backoff_secs: 30,
+            handoff: None,
+        });
+
+        let config_handle = ConfigHandle::new(config);
+        let event_bus = EventBus::new();
+
+        let _handle = spawn_hook_consumer(&event_bus, config_handle, workdir);
+
+        // Emit all four hooked events
+        event_bus.emit(OrchestratorEvent::ExecutionStarted {
+            execution_id: "e-1".to_string(),
+            thread_id: "t-1".to_string(),
+            agent_alias: "worker-a".to_string(),
+        });
+        event_bus.emit(OrchestratorEvent::ExecutionCompleted {
+            execution_id: "e-2".to_string(),
+            thread_id: "t-2".to_string(),
+            agent_alias: "worker-b".to_string(),
+            success: true,
+            duration_ms: 5000,
+        });
+        event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+            thread_id: "t-3".to_string(),
+            new_status: "Completed".to_string(),
+        });
+        event_bus.emit(OrchestratorEvent::ThreadStatusChanged {
+            thread_id: "t-4".to_string(),
+            new_status: "Failed".to_string(),
+        });
+
+        // Emit a non-hooked event
+        event_bus.emit(OrchestratorEvent::ExecutionProgress {
+            execution_id: "e-99".to_string(),
+            thread_id: "t-99".to_string(),
+            agent_alias: "worker-x".to_string(),
+            summary: "doing stuff".to_string(),
+        });
+
+        // Wait for hooks to fire (spawn_blocking + subprocess)
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+        // Verify each sentinel file exists and has correct JSON
+        let started: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&started_file).expect("started.json missing"),
+        )
+        .unwrap();
+        assert_eq!(started["event"], "execution_started");
+        assert_eq!(started["thread_id"], "t-1");
+        assert_eq!(started["execution_id"], "e-1");
+
+        let completed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&completed_file).expect("completed.json missing"),
+        )
+        .unwrap();
+        assert_eq!(completed["event"], "execution_completed");
+        assert_eq!(completed["success"], true);
+        assert_eq!(completed["duration_ms"], 5000);
+
+        let closed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&closed_file).expect("closed.json missing"),
+        )
+        .unwrap();
+        assert_eq!(closed["event"], "thread_closed");
+        assert_eq!(closed["new_status"], "Completed");
+
+        let failed: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&failed_file).expect("failed.json missing"),
+        )
+        .unwrap();
+        assert_eq!(failed["event"], "thread_failed");
+        assert_eq!(failed["new_status"], "Failed");
+
+        // Non-hooked event should NOT produce a sentinel file
+        assert!(
+            !progress_file.exists(),
+            "ExecutionProgress should not trigger any hook"
+        );
+    }
+
     #[test]
     fn test_hook_uses_provided_workdir() {
         let dir = tempfile::tempdir().unwrap();
