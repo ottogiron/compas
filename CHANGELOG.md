@@ -17,6 +17,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Added column separators between agent, summary, and batch columns
 - Progress summary now shows tool names instead of raw API IDs
 - Batch stats use readable labels with semantic colors
+- Ops view: agent column widened (18/14 chars) with truncation; summary column is now elastic (fills remaining width, clamped 10–60 chars)
 
 ### Added
 

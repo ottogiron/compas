@@ -753,6 +753,8 @@ fn make_thread_line(
     };
     let (status_text, status_color) = row_status_display(t);
     let agent = t.agent_alias.as_deref().unwrap_or("-").to_string();
+    let agent_width: usize = if is_wide { 18 } else { 14 };
+    let agent_display = super::truncate(&agent, agent_width.saturating_sub(2));
     let batch = t
         .batch_id
         .as_deref()
@@ -785,7 +787,7 @@ fn make_thread_line(
             Style::new().fg(status_color).bg(bg).add_modifier(base_mod),
         ),
         Span::styled(
-            format!("{:<w$}", agent, w = if is_wide { 12 } else { 10 }),
+            format!("{:<w$}", agent_display, w = agent_width),
             Style::new()
                 .fg(theme::TEXT_NORMAL)
                 .bg(bg)
@@ -801,7 +803,12 @@ fn make_thread_line(
 
     // Summary column (between agent and batch_id)
     let summary_text = t.summary.as_deref().unwrap_or("-");
-    let (summary_trunc, summary_width) = if is_wide { (20, 22) } else { (14, 16) };
+    // Fixed-width columns budget (excluding summary).
+    // Wide:   icon(3) + id(10) + status(16) + agent(18) + sep1(3) + sep2(3) + batch(14) + duration(8) = 75
+    // Narrow: icon(3) + id(8)  + status(12) + agent(14) + sep1(3) + duration(8)                      = 48
+    let fixed_cols = if is_wide { 75 } else { 48 };
+    let summary_width = (width.saturating_sub(fixed_cols)).clamp(10, 60);
+    let summary_trunc = summary_width.saturating_sub(2); // ensure ≥1 char of right-padding before separator
     spans.push(Span::styled(
         format!(
             "{:<w$}",
@@ -830,7 +837,7 @@ fn make_thread_line(
     }
 
     spans.push(Span::styled(
-        duration,
+        format!("{:<8}", duration),
         Style::new()
             .fg(theme::TEXT_DIM)
             .bg(bg)
