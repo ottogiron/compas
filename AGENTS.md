@@ -13,6 +13,7 @@ This is a standalone repository (`ottogiron/compas`).
 - Prioritize correctness, consistency, and maintainability.
 - **AX (Agent Experience).** Tools and APIs must serve agents as primary consumers — diagnostic errors, resilient contracts, no escape hatches. See `docs/project/AX.md`.
 - **Active development, no backward-compatibility burden.** Pre-v1, rapid iteration. The only stability contract is passing tests and verification gates.
+- **Compas-first implementation.** All non-trivial implementation work should be dispatched to worker agents via compas (`orch-dispatch` skill), not implemented inline by the operator. This gives worktree isolation, automatic review handoff, merge queue integration, and full execution telemetry. Inline implementation is acceptable only for trivial fixes (typos, single-line config changes) where dispatch overhead exceeds value.
 
 ## Module Overview
 
