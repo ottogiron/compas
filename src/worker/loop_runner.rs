@@ -215,6 +215,24 @@ impl WorkerRunner {
             Duration::from_secs(60),
         );
 
+        // CRON-2: Schedule evaluation interval (every 60s).
+        // On startup, load last-fire times from the durable schedule_runs
+        // table to avoid double-firing after restart.
+        let mut schedule_runs_cache: std::collections::HashMap<String, (i64, u64)> =
+            match self.store.get_all_schedule_runs().await {
+                Ok(runs) => {
+                    if !runs.is_empty() {
+                        tracing::info!(count = runs.len(), "loaded schedule run state from DB");
+                    }
+                    runs
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to load schedule runs; starting fresh");
+                    std::collections::HashMap::new()
+                }
+            };
+        let mut schedule_interval = tokio::time::interval(Duration::from_secs(60));
+
         // Create the shutdown signal future once before the loop.
         let mut shutdown = std::pin::pin!(shutdown_signal());
 
@@ -310,6 +328,9 @@ impl WorkerRunner {
                             tracing::warn!(error = %e, "failed to query stale worktrees");
                         }
                     }
+                }
+                _ = schedule_interval.tick() => {
+                    self.evaluate_schedules(&mut schedule_runs_cache).await;
                 }
                 _ = &mut shutdown => {
                     tracing::info!("received shutdown signal, draining in-flight executions...");
@@ -737,6 +758,148 @@ impl WorkerRunner {
                         dispatch_message_id = message_id,
                         error = %e,
                         "failed to enqueue trigger"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Evaluate configured cron schedules and dispatch messages for due schedules.
+    ///
+    /// Reads schedules from the live-reloaded config on each tick. For each
+    /// enabled schedule that hasn't exceeded `max_runs`, check if the cron
+    /// expression indicates a firing should have occurred since the last fire.
+    /// When due, insert a dispatch message and record the fire in the durable
+    /// `schedule_runs` table.
+    async fn evaluate_schedules(&self, cache: &mut std::collections::HashMap<String, (i64, u64)>) {
+        let config = self.config.load();
+        let schedules = match config.schedules.as_ref() {
+            Some(s) if !s.is_empty() => s,
+            _ => return,
+        };
+
+        let now_utc = chrono::Utc::now();
+        let now_ts = now_utc.timestamp();
+
+        for sched in schedules {
+            // Skip disabled schedules.
+            if !sched.enabled {
+                continue;
+            }
+
+            // Check max_runs cap.
+            let (last_fired_at, run_count) = cache.get(&sched.name).copied().unwrap_or((0, 0));
+
+            if run_count >= sched.max_runs {
+                tracing::debug!(
+                    schedule = %sched.name,
+                    run_count,
+                    max_runs = sched.max_runs,
+                    "schedule hit max_runs cap, skipping"
+                );
+                continue;
+            }
+
+            // Parse cron expression.
+            let cron = match sched.cron.parse::<croner::Cron>() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        schedule = %sched.name,
+                        cron = %sched.cron,
+                        error = %e,
+                        "invalid cron expression, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            // Determine if the schedule is due.
+            // Find the next occurrence after the last fire time. If that
+            // occurrence is at or before now, the schedule is due.
+            let reference_time = if last_fired_at > 0 {
+                match chrono::DateTime::from_timestamp(last_fired_at, 0) {
+                    Some(dt) => dt,
+                    None => {
+                        tracing::warn!(
+                            schedule = %sched.name,
+                            last_fired_at,
+                            "invalid last_fired_at timestamp, treating as never fired"
+                        );
+                        chrono::DateTime::from_timestamp(0, 0).unwrap()
+                    }
+                }
+            } else {
+                // Never fired — use epoch so first due time triggers.
+                chrono::DateTime::from_timestamp(0, 0).unwrap()
+            };
+
+            let next_occurrence = match cron.find_next_occurrence(&reference_time, false) {
+                Ok(next) => next,
+                Err(e) => {
+                    tracing::warn!(
+                        schedule = %sched.name,
+                        error = %e,
+                        "failed to compute next cron occurrence"
+                    );
+                    continue;
+                }
+            };
+
+            if next_occurrence > now_utc {
+                // Not due yet.
+                continue;
+            }
+
+            // Schedule is due — create a dispatch message.
+            let thread_id = ulid::Ulid::new().to_string();
+            tracing::info!(
+                schedule = %sched.name,
+                agent = %sched.agent,
+                thread_id = %thread_id,
+                run_count = run_count + 1,
+                max_runs = sched.max_runs,
+                "cron schedule due, dispatching"
+            );
+
+            match self
+                .store
+                .insert_message(
+                    &thread_id,
+                    "scheduler",
+                    &sched.agent,
+                    "dispatch",
+                    &sched.body,
+                    sched.batch.as_deref(),
+                    Some(&format!("[sched] {}", sched.name)),
+                )
+                .await
+            {
+                Ok(_msg_id) => {
+                    // Record fire in the durable table, then update cache.
+                    // Cache is always updated for in-process dedup, but the
+                    // log severity differs: if the DB write fails, a restart
+                    // will re-read stale DB state and double-fire.
+                    match self.store.record_schedule_fire(&sched.name, now_ts).await {
+                        Ok(()) => {
+                            cache.insert(sched.name.clone(), (now_ts, run_count + 1));
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                schedule = %sched.name,
+                                error = %e,
+                                "failed to record schedule fire in DB; restart will cause double-fire"
+                            );
+                            // Still update cache to prevent in-process duplicate fires.
+                            cache.insert(sched.name.clone(), (now_ts, run_count + 1));
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        schedule = %sched.name,
+                        error = %e,
+                        "failed to insert scheduled dispatch message"
                     );
                 }
             }
@@ -2152,5 +2315,144 @@ mod tests {
             .find(|m| m.from_alias == "worker-a")
             .expect("should have a reply from the agent");
         assert_eq!(reply.intent, "response");
+    }
+
+    // ── Schedule evaluation tests (CRON-2) ──────────────────────────────
+
+    use crate::config::types::ScheduleConfig;
+
+    fn test_worker_runner(store: Store, schedules: Option<Vec<ScheduleConfig>>) -> WorkerRunner {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let _keep = dir.keep();
+        let config = crate::config::types::OrchestratorConfig {
+            default_workdir: path,
+            state_dir: std::path::PathBuf::from("/tmp/compas-test-sched"),
+            poll_interval_secs: 5,
+            models: None,
+            agents: vec![crate::config::types::AgentConfig {
+                alias: "coder".into(),
+                backend: "stub".into(),
+                role: AgentRole::Worker,
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules,
+        };
+        let config_handle = ConfigHandle::new(config);
+        let backend_registry = BackendRegistry::new();
+        let event_bus = EventBus::new();
+        let worktree_manager = WorktreeManager::new();
+        WorkerRunner::new(
+            config_handle,
+            store,
+            backend_registry,
+            event_bus,
+            worktree_manager,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_schedules_fires_when_due() {
+        let store = test_store().await;
+        let runner = test_worker_runner(
+            store.clone(),
+            Some(vec![ScheduleConfig {
+                name: "every-minute".into(),
+                agent: "coder".into(),
+                cron: "* * * * *".into(),
+                body: "Run CI checks".into(),
+                batch: Some("BATCH-1".into()),
+                max_runs: 100,
+                enabled: true,
+            }]),
+        );
+        let mut cache = std::collections::HashMap::new();
+
+        runner.evaluate_schedules(&mut cache).await;
+
+        // Should have inserted a dispatch message.
+        let count = store.message_count().await.unwrap();
+        assert_eq!(count, 1, "expected 1 dispatch message");
+
+        // Cache should be updated.
+        assert!(cache.contains_key("every-minute"));
+        let (_, run_count) = cache["every-minute"];
+        assert_eq!(run_count, 1);
+
+        // DB schedule_runs should be updated.
+        let run = store
+            .get_schedule_run("every-minute")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.1, 1); // run_count = 1
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_schedules_skips_disabled() {
+        let store = test_store().await;
+        let runner = test_worker_runner(
+            store.clone(),
+            Some(vec![ScheduleConfig {
+                name: "disabled-sched".into(),
+                agent: "coder".into(),
+                cron: "* * * * *".into(),
+                body: "Should not fire".into(),
+                batch: None,
+                max_runs: 100,
+                enabled: false,
+            }]),
+        );
+        let mut cache = std::collections::HashMap::new();
+
+        runner.evaluate_schedules(&mut cache).await;
+
+        let count = store.message_count().await.unwrap();
+        assert_eq!(count, 0, "disabled schedule should not fire");
+        assert!(cache.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_schedules_respects_max_runs() {
+        let store = test_store().await;
+        let runner = test_worker_runner(
+            store.clone(),
+            Some(vec![ScheduleConfig {
+                name: "capped-sched".into(),
+                agent: "coder".into(),
+                cron: "* * * * *".into(),
+                body: "Capped task".into(),
+                batch: None,
+                max_runs: 2,
+                enabled: true,
+            }]),
+        );
+
+        // Pre-populate cache as if 2 runs already happened (at cap).
+        let mut cache = std::collections::HashMap::new();
+        cache.insert("capped-sched".to_string(), (1700000000_i64, 2_u64));
+
+        runner.evaluate_schedules(&mut cache).await;
+
+        let count = store.message_count().await.unwrap();
+        assert_eq!(count, 0, "schedule at max_runs should not fire");
+        // Cache should remain unchanged.
+        assert_eq!(cache["capped-sched"].1, 2);
     }
 }

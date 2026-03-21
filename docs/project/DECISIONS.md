@@ -376,3 +376,23 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 - **`eligible_reason` as free-text, not enum** — extensible for future deferral reasons (e.g., `'dependency'`, `'rate_limit'`) without schema changes.
 - **No prompt_hash on pre-created execution** — the worker would normally compute prompt_hash at trigger time. For scheduled dispatches, the execution is created before the worker sees it. The prompt_hash field is left NULL; the worker does not overwrite it since the execution is already linked. This is an acceptable trade-off for v1.
 - **Response includes `scheduled_for` and `execution_id`** — the operator can verify the schedule took effect and track the execution directly.
+
+## ADR-024: Config-declared recurring schedules (cron evaluation)
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** Operators need recurring dispatches (CI monitoring, periodic health checks, nightly builds) without manually re-dispatching. GitHub Actions cron schedules and Airflow DAG schedules demonstrate the pattern.
+
+**Decision:** The worker evaluates `schedules` from config on a 60-second interval. Each schedule defines a `name`, `agent`, `cron` expression, `body`, optional `batch`, `max_runs` safety cap, and `enabled` flag. When a schedule is due (its cron expression indicates a fire since the last recorded fire), the worker inserts a dispatch message (`from: 'scheduler'`, `intent: 'dispatch'`) targeting the configured agent. The existing trigger loop picks up the message and creates an execution as normal — no new execution path is introduced.
+
+**Dedup / durability:** A `schedule_runs` SQLite table (`schedule_name TEXT PRIMARY KEY, last_fired_at INTEGER, run_count INTEGER`) tracks last-fire times durably. On worker startup, the cache is populated from this table to avoid double-fires after restarts. After a successful dispatch message insertion, the DB is updated first, then the in-memory cache. If the DB write fails, the cache is still updated (to prevent in-process duplicate fires) but a warning is logged that a restart would cause a double-fire. The two writes are not atomic — this is an acceptable trade-off since schedule dispatch is idempotent at the agent level.
+
+**Key choices:**
+
+- **Durable `schedule_runs` table over in-memory HashMap** — prevents double-fires on worker restart. The simplicity cost (one extra table, one upsert per fire) is negligible compared to the correctness gain.
+- **Message insertion, not direct execution creation** — dispatches flow through the same `insert_message` → `scan_and_enqueue_triggers` → `insert_execution_with_dispatch` pipeline as operator dispatches. This preserves the single execution creation path, dedup safety, and trigger intent matching.
+- **60-second evaluation interval** — balances timeliness (sub-minute cron precision is uncommon) with minimal polling overhead. The interval is independent of `poll_interval_secs` to avoid coupling schedule evaluation frequency to trigger claim frequency.
+- **Hot-reload via `ConfigHandle`** — schedules are read from the live config on each tick. Adding, removing, or modifying schedules takes effect on the next 60s tick without restart.
+- **`max_runs` enforced from `schedule_runs.run_count`** — prevents runaway schedules. Once hit, the schedule is silently skipped with a debug log. Resetting requires deleting the row from `schedule_runs` (manual DB operation, acceptable for a safety cap).
+- **`from: 'scheduler'` sender alias** — distinguishes cron-originated dispatches from operator dispatches in message history and diagnostics.

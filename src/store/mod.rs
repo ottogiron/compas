@@ -695,6 +695,17 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // CRON-2: schedule_runs table for durable last-fire tracking
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schedule_runs (
+                schedule_name  TEXT PRIMARY KEY,
+                last_fired_at  INTEGER NOT NULL,
+                run_count      INTEGER NOT NULL DEFAULT 0
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -2872,6 +2883,59 @@ impl Store {
         .map_err(|e| format!("count_queued_merge_ops failed: {}", e))?;
         Ok(row.0)
     }
+
+    // ── Schedule runs (CRON-2) ──────────────────────────────────────────
+
+    /// Get the last-fired timestamp and run count for a schedule.
+    pub async fn get_schedule_run(
+        &self,
+        schedule_name: &str,
+    ) -> Result<Option<(i64, u64)>, String> {
+        let row: Option<(i64, i64)> = sqlx::query_as(
+            "SELECT last_fired_at, run_count FROM schedule_runs WHERE schedule_name = ?",
+        )
+        .bind(schedule_name)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| format!("get_schedule_run failed: {}", e))?;
+        Ok(row.map(|(ts, cnt)| (ts, cnt as u64)))
+    }
+
+    /// Record a schedule fire: upsert last-fire timestamp and increment run count.
+    pub async fn record_schedule_fire(
+        &self,
+        schedule_name: &str,
+        fired_at: i64,
+    ) -> Result<(), String> {
+        sqlx::query(
+            "INSERT INTO schedule_runs (schedule_name, last_fired_at, run_count)
+             VALUES (?, ?, 1)
+             ON CONFLICT(schedule_name) DO UPDATE SET
+               last_fired_at = excluded.last_fired_at,
+               run_count = schedule_runs.run_count + 1",
+        )
+        .bind(schedule_name)
+        .bind(fired_at)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| format!("record_schedule_fire failed: {}", e))?;
+        Ok(())
+    }
+
+    /// Get all schedule runs (for startup cache population).
+    pub async fn get_all_schedule_runs(
+        &self,
+    ) -> Result<std::collections::HashMap<String, (i64, u64)>, String> {
+        let rows: Vec<(String, i64, i64)> =
+            sqlx::query_as("SELECT schedule_name, last_fired_at, run_count FROM schedule_runs")
+                .fetch_all(&self.pool)
+                .await
+                .map_err(|e| format!("get_all_schedule_runs failed: {}", e))?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, ts, cnt)| (name, (ts, cnt as u64)))
+            .collect())
+    }
 }
 
 /// Combined thread + execution view.
@@ -4921,5 +4985,68 @@ mod tests {
         assert!(fetched.started_at.is_some());
         assert!(fetched.finished_at.is_none());
         assert!(fetched.duration_ms.is_none());
+    }
+
+    // ── Schedule runs tests (CRON-2) ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_schedule_run_initial_state_empty() {
+        let store = test_store().await;
+        let run = store.get_schedule_run("nonexistent").await.unwrap();
+        assert!(run.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_record_and_retrieve() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("ci-check", 1700000000)
+            .await
+            .unwrap();
+        let run = store.get_schedule_run("ci-check").await.unwrap().unwrap();
+        assert_eq!(run.0, 1700000000); // last_fired_at
+        assert_eq!(run.1, 1); // run_count
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_increments_count() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("ci-check", 1700000000)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("ci-check", 1700000060)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("ci-check", 1700000120)
+            .await
+            .unwrap();
+        let run = store.get_schedule_run("ci-check").await.unwrap().unwrap();
+        assert_eq!(run.0, 1700000120); // latest last_fired_at
+        assert_eq!(run.1, 3); // 3 fires
+    }
+
+    #[tokio::test]
+    async fn test_schedule_run_get_all() {
+        let store = test_store().await;
+        store
+            .record_schedule_fire("sched-a", 1700000000)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("sched-b", 1700000060)
+            .await
+            .unwrap();
+        store
+            .record_schedule_fire("sched-a", 1700000120)
+            .await
+            .unwrap();
+
+        let all = store.get_all_schedule_runs().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(all["sched-a"], (1700000120, 2));
+        assert_eq!(all["sched-b"], (1700000060, 1));
     }
 }
