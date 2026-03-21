@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- Default worktree location changed from `{repo_root}/../.compas-worktrees/` to `{repo_root}/.compas-worktrees/` (inside repo, gitignored). Operators with existing worktrees at the old location should run `git worktree prune`.
+
 ### Added
 
 - Tool and cost aggregation queries (OBS-02): `tool_call_counts`, `tool_error_rates`, `tool_usage_by_agent`, `cost_summary`, and `cost_by_agent` store methods aggregate `execution_events` and `executions` into per-tool and per-agent observability metrics. New `ToolCallStat`, `CostSummary`, and `AgentCostSummary` structs carry the results. All methods return empty/zero results on empty tables.

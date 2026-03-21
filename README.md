@@ -305,7 +305,7 @@ The default config location is `~/.compas/config.yaml`. Use `--config <path>` to
 default_workdir: /path/to/repo           # Default working directory for agents (required)
 state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
 poll_interval_secs: 1                  # Worker poll frequency
-# worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/../.compas-worktrees/)
+# worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/.compas-worktrees/)
 
 # models:                             # Optional model catalog (informational only)
 #   - claude-sonnet-4-6
@@ -385,7 +385,7 @@ agents:
     workspace: shared      # Default — reads files directly, no isolation needed
 ```
 
-Worktrees are created at `{repo_root}/../.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `default_workdir`) to be a git repository — falls back to shared mode for non-git directories.
+Worktrees are created at `{repo_root}/.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `default_workdir`) to be a git repository — falls back to shared mode for non-git directories.
 
 ### Retry on Transient Failure
 

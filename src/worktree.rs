@@ -4,7 +4,7 @@
 //! creates an isolated git worktree for each thread. This prevents file
 //! conflicts when multiple agents work concurrently in the same repository.
 //!
-//! Default worktree location: `{repo_root}/../.compas-worktrees/{thread_id}/`
+//! Default worktree location: `{repo_root}/.compas-worktrees/{thread_id}/`
 //! An optional `worktree_dir` config overrides the parent directory.
 
 use std::path::{Path, PathBuf};
@@ -26,14 +26,11 @@ pub struct WorktreeInfo {
 /// Compute the worktree root directory.
 ///
 /// If `override_dir` is provided, uses that. Otherwise defaults to
-/// `{repo_root}/../.compas-worktrees/`.
+/// `{repo_root}/.compas-worktrees/`.
 fn worktree_root(repo_root: &Path, override_dir: Option<&Path>) -> PathBuf {
     match override_dir {
         Some(dir) => dir.to_path_buf(),
-        None => repo_root
-            .parent()
-            .unwrap_or(repo_root)
-            .join(".compas-worktrees"),
+        None => repo_root.join(".compas-worktrees"),
     }
 }
 
@@ -410,7 +407,7 @@ mod tests {
     #[test]
     fn test_worktree_root_default() {
         let root = worktree_root(Path::new("/home/user/repo"), None);
-        assert_eq!(root, PathBuf::from("/home/user/.compas-worktrees"));
+        assert_eq!(root, PathBuf::from("/home/user/repo/.compas-worktrees"));
     }
 
     #[test]
@@ -424,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_worktree_root_root_level_repo() {
-        // When repo_root is `/`, parent() returns None, so fallback to repo_root itself.
+        // repo_root is `/` — worktrees go inside at `/.compas-worktrees`.
         let root = worktree_root(Path::new("/"), None);
         assert_eq!(root, PathBuf::from("/.compas-worktrees"));
     }
@@ -513,13 +510,8 @@ mod tests {
         assert!(result.is_some(), "git repo should create worktree");
         let wt_path = result.unwrap();
         assert!(wt_path.exists(), "worktree path should exist");
-        // Default location: repo_root/../.compas-worktrees/thread_id
-        let expected = dir
-            .path()
-            .parent()
-            .unwrap()
-            .join(".compas-worktrees")
-            .join("test-thread-123");
+        // Default location: repo_root/.compas-worktrees/thread_id
+        let expected = dir.path().join(".compas-worktrees").join("test-thread-123");
         assert_eq!(wt_path, expected);
 
         // Calling again should reuse existing
@@ -534,7 +526,7 @@ mod tests {
         assert!(!wt_path.exists(), "worktree should be removed");
 
         // Also clean up the .compas-worktrees directory
-        let wt_root = dir.path().parent().unwrap().join(".compas-worktrees");
+        let wt_root = dir.path().join(".compas-worktrees");
         let _ = std::fs::remove_dir_all(&wt_root);
     }
 

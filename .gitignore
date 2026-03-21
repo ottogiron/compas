@@ -5,5 +5,6 @@
 !.claude/skills
 .DS_Store
 .compas/state/
+.compas-worktrees/
 .mcp.json
 opencode.json

@@ -2633,12 +2633,8 @@ mod worktree_tests {
 
         assert!(output.success, "execution should succeed");
 
-        // Verify worktree was created at the new default location
-        let wt_path = repo_path
-            .parent()
-            .unwrap()
-            .join(".compas-worktrees")
-            .join("t-wt-1");
+        // Verify worktree was created at the default location (inside repo)
+        let wt_path = repo_path.join(".compas-worktrees").join("t-wt-1");
         assert!(wt_path.exists(), "worktree directory should exist");
 
         // Verify worktree path was stored in DB
@@ -2654,7 +2650,7 @@ mod worktree_tests {
             .remove_worktree(repo_path, "t-wt-1", None)
             .unwrap();
         // Also clean up the .compas-worktrees directory
-        let wt_root = repo_path.parent().unwrap().join(".compas-worktrees");
+        let wt_root = repo_path.join(".compas-worktrees");
         let _ = std::fs::remove_dir_all(&wt_root);
     }
 
