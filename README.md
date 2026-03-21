@@ -597,6 +597,63 @@ agents:
 
 These agents work in `default_workdir` by default but can be dispatched to review any file or document. No `workdir` or `workspace` needed.
 
+### Custom Backends
+
+Define CLI-based backends entirely in YAML using `backend_definitions`. Any CLI tool that accepts a prompt and returns text can be wired in without writing Rust code.
+
+**Minimal example** (aider):
+
+```yaml
+backend_definitions:
+  - name: aider
+    command: aider
+    args: ["--message", "{{instruction}}"]
+
+agents:
+  - alias: aider-dev
+    backend: aider
+    prompt: "You implement changes using aider."
+```
+
+**Full example** (with resume, JSON output, custom ping, env stripping):
+
+```yaml
+backend_definitions:
+  - name: my-tool
+    command: /usr/local/bin/my-tool
+    args: ["--prompt", "{{instruction}}", "--model", "{{model}}"]
+    resume:
+      flag: "--resume"
+      session_id_arg: "{{session_id}}"
+    output:
+      format: json              # plaintext (default) | json | jsonl
+      result_field: data.text   # dot-path into JSON response
+      session_id_field: sid     # field to extract session ID for resume
+    ping:
+      command: my-tool
+      args: ["--health"]
+    env_remove:
+      - ANTHROPIC_API_KEY       # strip keys the tool shouldn't see
+```
+
+**Template variables** available in `args`:
+
+| Variable | Description |
+| --- | --- |
+| `{{instruction}}` | The dispatch message / task text |
+| `{{model}}` | Agent's configured `model` (omitted if absent) |
+| `{{session_id}}` | Previous session ID for resume (omitted if absent) |
+
+**Output formats:**
+
+- `plaintext` (default) — raw stdout is the result text
+- `json` — parse stdout as JSON, extract `result_field` for result text and `session_id_field` for session resume
+- `jsonl` — parse the last JSON line, extract fields as above
+
+**Doctor integration:** `compas doctor` checks that each generic backend's `command` exists on PATH and reports missing commands as warnings.
+
+See [`examples/config-generic.yaml`](examples/config-generic.yaml) for a complete example.
+
 ## How It Works
 
 1. **You dispatch** — ask your CLI to send a task to an agent

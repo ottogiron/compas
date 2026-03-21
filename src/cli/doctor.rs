@@ -211,6 +211,29 @@ pub async fn run(config_path: PathBuf, fix: bool) -> DoctorReport {
         results.push(check);
     }
 
+    // ── 5b. Generic backend commands on PATH ─────────────────────────────
+    if let Some(ref definitions) = config.backend_definitions {
+        for def in definitions {
+            let label = format!("Generic backend: {}", def.name);
+            if command_exists(&def.command) {
+                results.push(CheckResult::pass(
+                    &label,
+                    &format!("command '{}' found", def.command),
+                ));
+                installed_backends.insert(def.name.clone());
+            } else {
+                results.push(CheckResult::warn(
+                    &label,
+                    &format!("command '{}' not found in PATH", def.command),
+                    &format!(
+                        "install '{}' or fix the command path in backend_definitions",
+                        def.command
+                    ),
+                ));
+            }
+        }
+    }
+
     // ── 6. Backend CLIs authenticated (ping) ─────────────────────────────
     // This is the most expensive check (~5s per backend). Print progress.
     if !installed_backends.is_empty() {
@@ -676,6 +699,7 @@ fn build_doctor_registry(config: &OrchestratorConfig) -> BackendRegistry {
     use crate::backend::claude::ClaudeCodeBackend;
     use crate::backend::codex::CodexBackend;
     use crate::backend::gemini::GeminiBackend;
+    use crate::backend::generic::GenericBackend;
     use crate::backend::opencode::OpenCodeBackend;
 
     let mut registry = BackendRegistry::new();
@@ -698,6 +722,19 @@ fn build_doctor_registry(config: &OrchestratorConfig) -> BackendRegistry {
             config.default_workdir.clone(),
         ))),
     );
+
+    // Register config-driven generic backends.
+    if let Some(ref definitions) = config.backend_definitions {
+        for def in definitions {
+            registry.register(
+                &def.name,
+                Arc::new(GenericBackend::with_workdir(
+                    def.clone(),
+                    Some(config.default_workdir.clone()),
+                )),
+            );
+        }
+    }
 
     registry
 }

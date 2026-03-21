@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use compas::backend::claude::ClaudeCodeBackend;
 use compas::backend::codex::CodexBackend;
 use compas::backend::gemini::GeminiBackend;
+use compas::backend::generic::GenericBackend;
 use compas::backend::opencode::OpenCodeBackend;
 use compas::backend::registry::BackendRegistry;
 use compas::mcp::server::OrchestratorMcpServer;
@@ -344,6 +345,19 @@ fn build_backend_registry(config: &compas::config::types::OrchestratorConfig) ->
             config.default_workdir.clone(),
         ))),
     );
+
+    // Register config-driven generic backends.
+    if let Some(ref definitions) = config.backend_definitions {
+        for def in definitions {
+            registry.register(
+                &def.name,
+                Arc::new(GenericBackend::with_workdir(
+                    def.clone(),
+                    Some(config.default_workdir.clone()),
+                )),
+            );
+        }
+    }
 
     registry
 }

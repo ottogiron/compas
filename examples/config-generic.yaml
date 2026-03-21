@@ -55,3 +55,45 @@ agents:
   #   workdir: /path/to/infra-repo     # Works in a different repo than default_workdir
   #   workspace: worktree              # Each thread gets its own worktree
   #   prompt: "You work on infrastructure..."
+
+  # Example: agent using a custom (generic) backend
+  - alias: aider-dev
+    backend: aider
+    prompt: >
+      You implement changes using aider. Follow the project's coding standards.
+
+# ---------------------------------------------------------------------------
+# Custom backend definitions
+# ---------------------------------------------------------------------------
+# Define CLI-based backends entirely in YAML. Any tool that accepts a prompt
+# and returns text can be wired in. Agents reference these by name in their
+# `backend:` field.
+#
+# Template variables available in `args`:
+#   {{instruction}}  — the dispatch message / task text
+#   {{model}}        — agent's configured model (omitted when absent)
+#   {{session_id}}   — previous session ID for resume (omitted when absent)
+
+backend_definitions:
+  # Minimal: aider with plaintext output (raw stdout = result)
+  - name: aider
+    command: aider
+    args: ["--message", "{{instruction}}"]
+
+  # Full-featured: custom tool with JSON output, session resume, custom ping,
+  # and environment variable stripping.
+  # - name: my-tool
+  #   command: /usr/local/bin/my-tool
+  #   args: ["--prompt", "{{instruction}}", "--model", "{{model}}"]
+  #   resume:
+  #     flag: "--resume"
+  #     session_id_arg: "{{session_id}}"
+  #   output:
+  #     format: json              # plaintext (default) | json | jsonl
+  #     result_field: data.text   # dot-path into JSON response
+  #     session_id_field: sid     # extract session ID for resume
+  #   ping:
+  #     command: my-tool
+  #     args: ["--health"]
+  #   env_remove:
+  #     - ANTHROPIC_API_KEY       # strip keys the tool shouldn't see

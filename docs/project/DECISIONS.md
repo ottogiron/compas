@@ -309,6 +309,7 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **Worktree cleanup blocked for threads with pending merge ops.** The stale-worktree cleanup loop performs a cross-table query before removing a worktree: if any `merge_operations` row for the thread is in `pending` or `claimed` status, cleanup is skipped. This prevents a race where the cleanup cycle deletes the worktree while a merge operation is in flight or queued.
 
+
 ## ADR-020: Lifecycle hooks — git-hook model, fire-and-forget, EventBus subscription
 
 **Date:** 2026-03
@@ -328,9 +329,33 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **Phase 2 deferred:** `on_thread_abandoned`, `on_execution_retrying`, blocking/interceptor hooks, per-hook `workdir` override.
 
+
 ## ADR-021: Filter noisy telemetry events from progress display
 
 **Date:** 2026-03
 **Status:** Active
 
 **Suppress `tool_result` and `turn_complete` from `ExecutionProgress` bus emissions.** These event types carry no operator-useful information for real-time progress display. `tool_result` summaries contained raw API tool_use_ids (`toolu_01Ewhkpgu...`), and `turn_complete` is a protocol-level boundary marker. Both are still stored in the `execution_events` table for diagnostic access via `orch_execution_events`. The DB query `get_latest_progress_event` applies the same filter for consistency between EventBus and DB refresh paths.
+
+## ADR-022: Config-driven generic backends
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** Adding a new AI backend to compas required implementing the `Backend` trait in Rust, recompiling, and redeploying. This is a high barrier for teams that want to integrate CLI tools like aider, custom scripts, or internal wrappers.
+
+**Decision:** A `backend_definitions` section in `config.yaml` allows defining CLI-based backends entirely in YAML. Each definition specifies a command, args with template variables (`{{instruction}}`, `{{model}}`, `{{session_id}}`), output parsing (plaintext/json/jsonl), optional session resume, custom ping commands, and environment variable stripping. A `GenericBackend` struct implements the `Backend` trait and is instantiated from these definitions at startup.
+
+**Registration:** `build_backend_registry()` (in `src/bin/compas.rs`) iterates `config.backend_definitions` after registering the 4 built-in backends, creating a `GenericBackend` instance for each and registering it by name. The same pattern is mirrored in `build_doctor_registry()` for `compas doctor` ping checks.
+
+**Validation:** Config validation (GBE-1) rejects empty names, duplicate names, conflicts with built-in backend names (claude, codex, gemini, opencode), and empty commands. This prevents generic backends from shadowing built-in implementations.
+
+**Doctor integration:** `compas doctor` checks that each generic backend's `command` exists on PATH and reports missing commands as warnings (not failures, since the agent may not be actively used). Installed generic backends are included in the ping check cycle.
+
+**Key choices:**
+
+- **Config-driven over plugin system** — YAML definitions cover the 80% case (CLI tool that takes a prompt, returns text) without requiring Rust code, dynamic loading, or a plugin ABI.
+- **Template substitution over flag-based model passing** — `{{model}}` in args is more flexible than a dedicated `model_flag` field, since CLI tools vary widely in how they accept model parameters.
+- **Built-in backends remain as-is** — Claude, Codex, Gemini, and OpenCode have nuanced JSONL streaming parsers, telemetry extraction, and session management that a generic schema cannot express cleanly. Generic backends handle the simpler case.
+- **Restart-required, no hot-reload** — consistent with `default_workdir` and other structural config. Backend registration happens at startup; changing definitions requires a worker restart.
+- **`env_remove` composes with per-agent `env`** — agent `env` adds variables, backend `env_remove` strips them. This lets a generic backend clean up keys that should not leak to the subprocess (e.g., `ANTHROPIC_API_KEY` when running a non-Anthropic tool).
