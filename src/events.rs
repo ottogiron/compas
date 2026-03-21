@@ -46,6 +46,8 @@ pub enum OrchestratorEvent {
         /// `true` if the backend exited cleanly.
         success: bool,
         duration_ms: i64,
+        /// Thread summary describing what the work was about, if available.
+        thread_summary: Option<String>,
     },
     /// A thread's status has changed.
     ThreadStatusChanged {
@@ -162,6 +164,7 @@ mod tests {
             agent_alias: "worker-b".to_string(),
             success: true,
             duration_ms: 1000,
+            thread_summary: None,
         });
     }
 

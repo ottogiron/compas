@@ -541,6 +541,7 @@ hooks:
   "agent_alias": "dev",
   "success": true,
   "duration_ms": 12345,
+  "thread_summary": "Fix login timeout bug",
   "timestamp": "2026-03-21T17:00:00Z"
 }
 ```
