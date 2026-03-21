@@ -90,6 +90,8 @@ pub struct TasksParams {
     pub batch_id: Option<String>,
     /// Maximum number of recent historical tasks to return (default 20)
     pub limit: Option<usize>,
+    /// Optional filter: `"scheduled"` returns only queued executions with a future `eligible_at`.
+    pub filter: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

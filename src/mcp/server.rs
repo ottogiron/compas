@@ -230,7 +230,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_tasks",
-        description = "List active and recent trigger executions. Shows which agents are running, start time, duration, result status, and batch/ticket linkage."
+        description = "List active and recent trigger executions. Shows which agents are running, start time, duration, result status, and batch/ticket linkage. Set filter='scheduled' to list only queued executions with a future eligible_at."
     )]
     async fn orch_tasks(
         &self,

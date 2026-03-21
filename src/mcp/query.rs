@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use chrono::DateTime;
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
@@ -48,7 +49,7 @@ impl OrchestratorMcpServer {
         &self,
         params: StatusParams,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        match self
+        let rows = match self
             .store
             .status_view(
                 params.thread_id.as_deref(),
@@ -58,12 +59,24 @@ impl OrchestratorMcpServer {
             )
             .await
         {
-            Ok(rows) => {
-                let entries: Vec<StatusEntry> = rows.into_iter().map(StatusEntry::from).collect();
-                Ok(json_text(&entries))
-            }
-            Err(e) => Ok(err_text(format!("status query failed: {}", e))),
+            Ok(r) => r,
+            Err(e) => return Ok(err_text(format!("status query failed: {}", e))),
+        };
+
+        let scheduled_count = self.store.count_scheduled_executions().await.unwrap_or(0);
+
+        let entries: Vec<StatusEntry> = rows.into_iter().map(StatusEntry::from).collect();
+
+        #[derive(Serialize)]
+        struct StatusResponse {
+            threads: Vec<StatusEntry>,
+            scheduled_count: i64,
         }
+
+        Ok(json_text(&StatusResponse {
+            threads: entries,
+            scheduled_count,
+        }))
     }
 
     // ── orch_transcript ──────────────────────────────────────────────────
@@ -680,6 +693,13 @@ impl OrchestratorMcpServer {
             Err(e) => return Ok(err_text(format!("tasks query failed: {}", e))),
         };
 
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+
+        let is_scheduled_filter = params.filter.as_deref() == Some("scheduled");
+
         #[derive(Serialize)]
         struct TaskEntry {
             thread_id: String,
@@ -692,22 +712,44 @@ impl OrchestratorMcpServer {
             duration_ms: Option<i64>,
             error: Option<String>,
             prompt_hash: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            eligible_at: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            eligible_reason: Option<String>,
         }
 
         let entries: Vec<TaskEntry> = views
             .into_iter()
             .filter(|v| v.execution_id.is_some())
-            .map(|v| TaskEntry {
-                thread_id: v.thread_id,
-                batch_id: v.batch_id,
-                summary: v.summary,
-                agent: v.agent_alias,
-                execution_status: v.execution_status,
-                started_at: v.started_at,
-                finished_at: v.finished_at,
-                duration_ms: v.duration_ms,
-                error: v.error_detail,
-                prompt_hash: v.prompt_hash,
+            .filter(|v| {
+                if is_scheduled_filter {
+                    // Only queued executions with future eligible_at
+                    v.execution_status.as_deref() == Some("queued")
+                        && v.eligible_at.is_some_and(|ea| ea > now_unix)
+                } else {
+                    true
+                }
+            })
+            .map(|v| {
+                let eligible_at_iso = v.eligible_at.map(|ts| {
+                    DateTime::from_timestamp(ts, 0)
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_else(|| ts.to_string())
+                });
+                TaskEntry {
+                    thread_id: v.thread_id,
+                    batch_id: v.batch_id,
+                    summary: v.summary,
+                    agent: v.agent_alias,
+                    execution_status: v.execution_status,
+                    started_at: v.started_at,
+                    finished_at: v.finished_at,
+                    duration_ms: v.duration_ms,
+                    error: v.error_detail,
+                    prompt_hash: v.prompt_hash,
+                    eligible_at: eligible_at_iso,
+                    eligible_reason: v.eligible_reason,
+                }
             })
             .collect();
 

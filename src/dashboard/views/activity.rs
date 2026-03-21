@@ -47,6 +47,7 @@ struct BatchProgress {
 #[derive(Debug, Default)]
 struct ClassifiedRows {
     running: Vec<usize>,
+    scheduled: Vec<usize>,
     active_threads: Vec<usize>,
     uncategorized: Vec<usize>,
     recently_completed: Vec<usize>,
@@ -77,6 +78,10 @@ fn is_recently_completed(t: &ThreadStatusView) -> bool {
     t.execution_status.as_deref() == Some("completed") || t.thread_status == "Completed"
 }
 
+fn is_scheduled(t: &ThreadStatusView, now_unix: i64) -> bool {
+    t.execution_status.as_deref() == Some("queued") && t.eligible_at.is_some_and(|ea| ea > now_unix)
+}
+
 fn classify_rows(
     rows: &[ThreadStatusView],
     drill_batch: Option<&str>,
@@ -97,6 +102,8 @@ fn classify_rows(
     for (idx, row) in &filtered {
         if is_running_now(row) {
             out.running.push(*idx);
+        } else if is_scheduled(row, now_unix) {
+            out.scheduled.push(*idx);
         } else if is_active_waiting(row, now_unix, stale_after_secs) {
             out.active_threads.push(*idx);
         } else if is_recently_completed(row) {
@@ -107,6 +114,7 @@ fn classify_rows(
     }
 
     sort_indices_by_updated(rows, &mut out.running);
+    sort_scheduled_by_eligible_at(rows, &mut out.scheduled);
     sort_indices_by_updated(rows, &mut out.active_threads);
     sort_indices_by_updated(rows, &mut out.uncategorized);
     sort_indices_by_updated(rows, &mut out.recently_completed);
@@ -139,6 +147,15 @@ fn sort_indices_by_updated(rows: &[ThreadStatusView], indices: &mut [usize]) {
         let a_ts = rows.get(*a).map(|r| r.thread_updated_at).unwrap_or(0);
         let b_ts = rows.get(*b).map(|r| r.thread_updated_at).unwrap_or(0);
         b_ts.cmp(&a_ts)
+    });
+}
+
+/// Sort scheduled items by `eligible_at` ascending (soonest first).
+fn sort_scheduled_by_eligible_at(rows: &[ThreadStatusView], indices: &mut [usize]) {
+    indices.sort_by(|a, b| {
+        let a_ea = rows.get(*a).and_then(|r| r.eligible_at).unwrap_or(i64::MAX);
+        let b_ea = rows.get(*b).and_then(|r| r.eligible_at).unwrap_or(i64::MAX);
+        a_ea.cmp(&b_ea)
     });
 }
 
@@ -225,6 +242,13 @@ pub fn ops_selectable_targets(
             .copied()
             .map(OpsSelectable::Thread),
     );
+    out.extend(
+        classified
+            .scheduled
+            .iter()
+            .copied()
+            .map(OpsSelectable::Thread),
+    );
     if drill_batch.is_none() {
         out.extend(
             capped_batches(&classified.active_batches)
@@ -290,7 +314,7 @@ fn footer_counts(
     data: &ActivityData,
     now_unix: i64,
     stale_after_secs: i64,
-) -> (i64, i64, i64, i64) {
+) -> (i64, i64, i64, i64, i64) {
     let active = data
         .rows
         .iter()
@@ -300,6 +324,11 @@ fn footer_counts(
         .rows
         .iter()
         .filter(|r| is_stale_active(r, now_unix, stale_after_secs))
+        .count() as i64;
+    let scheduled = data
+        .rows
+        .iter()
+        .filter(|r| is_scheduled(r, now_unix))
         .count() as i64;
 
     let mut failed = 0i64;
@@ -311,11 +340,12 @@ fn footer_counts(
             _ => {}
         }
     }
-    (active, failed, completed, stale)
+    (active, failed, completed, stale, scheduled)
 }
 
 fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) -> Line<'static> {
-    let (active, failed, completed, stale) = footer_counts(data, now_unix, stale_after_secs);
+    let (active, failed, completed, stale, scheduled) =
+        footer_counts(data, now_unix, stale_after_secs);
 
     let label = |s: &str, color: Color| -> Span<'static> {
         Span::styled(s.to_string(), Style::new().fg(color))
@@ -340,6 +370,18 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
             Style::new().fg(theme::TEXT_BRIGHT),
         ),
     ];
+
+    if scheduled > 0 {
+        spans.push(Span::styled(
+            "  ".to_string(),
+            Style::new().fg(theme::TEXT_BRIGHT),
+        ));
+        spans.push(label("Sched: ", theme::TEXT_MUTED));
+        spans.push(Span::styled(
+            format!("{}", scheduled),
+            Style::new().fg(theme::TEXT_BRIGHT),
+        ));
+    }
 
     if let Some(cost) = &data.cost_summary {
         if cost.total_cost_usd > 0.0 || cost.total_tokens_in > 0 {
@@ -449,6 +491,7 @@ fn render_ops_list(
     }
 
     let all_active_empty = classified.running.is_empty()
+        && classified.scheduled.is_empty()
         && (app.drill_batch.is_some() || classified.active_batches.is_empty())
         && classified.active_threads.is_empty();
 
@@ -510,6 +553,32 @@ fn render_ops_list(
                     }
                 } else if is_selected {
                     lines.push(make_thread_detail_line(row, list_width));
+                }
+                items.push(ListItem::new(lines));
+                selectable_slot += 1;
+            }
+            rendered_active_section = true;
+        }
+
+        if !classified.scheduled.is_empty() {
+            if rendered_active_section {
+                items.push(ListItem::new(Line::from(Span::raw(""))));
+            }
+            push_section_header(
+                &mut items,
+                "Scheduled",
+                classified.scheduled.len(),
+                theme::TEXT_MUTED,
+            );
+            for src_idx in &classified.scheduled {
+                let Some(row) = data.rows.get(*src_idx) else {
+                    continue;
+                };
+                let is_selected = selectable_slot == selected_slot;
+                sel_to_row.push(items.len());
+                let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
+                if is_selected {
+                    lines.push(make_scheduled_detail_line(row, now_unix, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -710,6 +779,60 @@ fn make_thread_detail_line(row: &ThreadStatusView, list_width: usize) -> Line<'s
         Span::styled("[c]", Style::default().fg(theme::ACCENT)),
         Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),
     ])
+}
+
+fn make_scheduled_detail_line(
+    row: &ThreadStatusView,
+    now_unix: i64,
+    list_width: usize,
+) -> Line<'static> {
+    let due = row
+        .eligible_at
+        .map(|ea| {
+            let delta = (ea - now_unix).max(0);
+            format!("due {}", format_relative_future(delta))
+        })
+        .unwrap_or_else(|| "scheduled".to_string());
+
+    let detail = row
+        .summary
+        .as_deref()
+        .map(|s| format!("{} — {}", due, s))
+        .unwrap_or(due);
+
+    let avail = list_width
+        .saturating_sub(DETAIL_PREFIX_LEN)
+        .saturating_sub(HINT_SUFFIX_LEN);
+    let padded = format!("{:<width$}", super::truncate(&detail, avail), width = avail);
+    Line::from(vec![
+        Span::raw("     \u{2514}\u{2500} "),
+        Span::styled(padded, Style::default().fg(theme::TEXT_DIM)),
+        Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
+        Span::styled("[c]", Style::default().fg(theme::ACCENT)),
+        Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),
+    ])
+}
+
+/// Format a future duration in seconds as a human-readable relative time.
+/// Examples: "in 30s", "in 5m 20s", "in 2h 15m", "in 1d 3h".
+fn format_relative_future(secs: i64) -> String {
+    if secs <= 0 {
+        return "now".to_string();
+    }
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+
+    if days > 0 {
+        format!("in {}d {}h", days, hours)
+    } else if hours > 0 {
+        format!("in {}h {}m", hours, minutes)
+    } else if minutes > 0 {
+        format!("in {}m {}s", minutes, seconds)
+    } else {
+        format!("in {}s", seconds)
+    }
 }
 
 fn make_batch_detail_line(batch: &BatchProgress) -> Line<'static> {
@@ -1136,6 +1259,8 @@ mod tests {
             error_detail: None,
             parsed_intent: None,
             prompt_hash: None,
+            eligible_at: None,
+            eligible_reason: None,
         }
     }
 
@@ -1324,10 +1449,11 @@ mod tests {
             cost_summary: None,
         };
 
-        let (active, failed, completed, stale) = footer_counts(&data, 1000, 300);
+        let (active, failed, completed, stale, scheduled) = footer_counts(&data, 1000, 300);
         assert_eq!(active, 2);
         assert_eq!(failed, 0);
         assert_eq!(completed, 0);
         assert_eq!(stale, 1);
+        assert_eq!(scheduled, 0);
     }
 }
