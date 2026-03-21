@@ -21,6 +21,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- MCP tools: `orch_merge`, `orch_merge_status`, `orch_merge_cancel` for merge queue operations (MERGE-4). Includes `count_merge_ops_by_status` and `count_queued_merge_ops` store methods for accurate aggregate counts
 - Worker: merge queue polling, crash recovery, and stale merge detection (MERGE-3)
 - Dashboard cost/token visibility (OBS-04): Ops footer appends `│ Cost: $X.XX  Tok: NK/NK` when cost or token data exists; Agents tab cards show a per-agent cost/token row between the active count and recent executions. Format helpers `format_tokens` and `format_cost_usd` added to `dashboard::views`.
 - CLI: `compas wait-merge --op-id <id>` blocking wait for merge completion (MERGE-6)

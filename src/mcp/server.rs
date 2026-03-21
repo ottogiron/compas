@@ -271,6 +271,39 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.read_log_impl(params).await
     }
+
+    #[tool(
+        name = "orch_merge",
+        description = "Queue a merge operation for a completed thread's branch. Runs preflight validation (thread status, branch existence, clean worktree, no duplicate). After queuing, wait for completion using CLI: `compas wait-merge --op-id <id> --timeout 120`."
+    )]
+    async fn orch_merge(
+        &self,
+        Parameters(params): Parameters<MergeParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.merge_impl(params).await
+    }
+
+    #[tool(
+        name = "orch_merge_status",
+        description = "Query merge operation status. With op_id: returns full detail including conflict files and suggested actions on failure. Without op_id: returns aggregate counts by status and a preview of recent operations."
+    )]
+    async fn orch_merge_status(
+        &self,
+        Parameters(params): Parameters<MergeStatusParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.merge_status_impl(params).await
+    }
+
+    #[tool(
+        name = "orch_merge_cancel",
+        description = "Cancel a queued merge operation. Only operations in 'queued' status can be cancelled."
+    )]
+    async fn orch_merge_cancel(
+        &self,
+        Parameters(params): Parameters<MergeCancelParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.merge_cancel_impl(params).await
+    }
 }
 
 // ---------------------------------------------------------------------------

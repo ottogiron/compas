@@ -320,6 +320,14 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 | `orch_execution_events` | Structured events from a running/completed execution (tool calls, file edits, tool names) |
 | `orch_read_log` | Paginated access to execution log files with offset/limit/tail support |
 
+### Merge
+
+| Tool | What it does |
+| --- | --- |
+| `orch_merge` | Queue a merge of a completed thread's branch into a target branch |
+| `orch_merge_status` | Query merge operation detail (by op_id) or aggregate overview |
+| `orch_merge_cancel` | Cancel a queued merge operation |
+
 ### System
 
 | Tool | What it does |

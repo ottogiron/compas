@@ -2719,6 +2719,59 @@ impl Store {
         .map_err(|e| format!("has_pending_merge_for_thread failed: {}", e))?;
         Ok(row.0 > 0)
     }
+
+    /// Count merge operations grouped by status, with optional filters.
+    pub async fn count_merge_ops_by_status(
+        &self,
+        target_branch: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> Result<std::collections::HashMap<String, i64>, String> {
+        let mut conditions = Vec::new();
+        if target_branch.is_some() {
+            conditions.push("target_branch = ?");
+        }
+        if thread_id.is_some() {
+            conditions.push("thread_id = ?");
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            "SELECT status, COUNT(*) as cnt FROM merge_operations {} GROUP BY status",
+            where_clause
+        );
+
+        let mut query = sqlx::query_as::<_, (String, i64)>(&sql);
+        if let Some(tb) = target_branch {
+            query = query.bind(tb);
+        }
+        if let Some(tid) = thread_id {
+            query = query.bind(tid);
+        }
+
+        let rows = query
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| format!("count_merge_ops_by_status failed: {}", e))?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Count queued merge operations for a specific target branch.
+    pub async fn count_queued_merge_ops(&self, target_branch: &str) -> Result<i64, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM merge_operations WHERE target_branch = ? AND status = 'queued'",
+        )
+        .bind(target_branch)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("count_queued_merge_ops failed: {}", e))?;
+        Ok(row.0)
+    }
 }
 
 /// Combined thread + execution view.

@@ -162,3 +162,31 @@ pub struct ToolStatsParams {
     /// Filter to a specific agent alias (omit for all agents)
     pub agent_alias: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MergeParams {
+    /// Thread ID whose branch to merge
+    pub thread_id: String,
+    /// Target branch (default "main")
+    pub target_branch: Option<String>,
+    /// Merge strategy: "merge", "rebase", or "squash" (default from config)
+    pub strategy: Option<String>,
+    /// Alias of the requesting agent
+    pub from: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MergeStatusParams {
+    /// Specific merge operation ID (for detail view)
+    pub op_id: Option<String>,
+    /// Filter by target branch (for overview)
+    pub target_branch: Option<String>,
+    /// Filter by thread ID (for overview)
+    pub thread_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct MergeCancelParams {
+    /// Merge operation ID to cancel
+    pub op_id: String,
+}

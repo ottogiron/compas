@@ -6546,3 +6546,340 @@ mod merge_worker_tests {
         }
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Merge MCP Tool Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod merge_tool_tests {
+    use super::*;
+    use compas::store::MergeOperation;
+
+    /// Helper: insert a merge op directly via store for test setup.
+    async fn insert_test_merge_op(store: &Store, id: &str, status: &str, thread_id: &str) {
+        let op = MergeOperation {
+            id: id.to_string(),
+            thread_id: thread_id.to_string(),
+            source_branch: format!("compas/{}", thread_id),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: status.to_string(),
+            push_requested: false,
+            queued_at: chrono::Utc::now().timestamp(),
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_preflight_rejects_active_thread() {
+        let server = test_server().await;
+
+        // Create an active thread by inserting a message
+        server
+            .store
+            .insert_message(
+                "t-active", "op", "focused", "dispatch", "do work", None, None,
+            )
+            .await
+            .unwrap();
+
+        let result = server
+            .merge_impl(MergeParams {
+                thread_id: "t-active".to_string(),
+                target_branch: Some("main".to_string()),
+                strategy: Some("merge".to_string()),
+                from: "operator".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "should reject active thread");
+        let text = result
+            .content
+            .first()
+            .and_then(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            text.contains("Active"),
+            "error should mention Active status, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_rejects_invalid_strategy() {
+        let server = test_server().await;
+
+        let result = server
+            .merge_impl(MergeParams {
+                thread_id: "t-1".to_string(),
+                target_branch: Some("main".to_string()),
+                strategy: Some("yolo".to_string()),
+                from: "operator".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "should reject invalid strategy");
+        let text = result
+            .content
+            .first()
+            .and_then(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            text.contains("yolo"),
+            "error should mention the invalid strategy, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_queues_operation() {
+        let store = test_store().await;
+
+        // Directly test the store-level queue flow (bypasses git dependency)
+        let op = MergeOperation {
+            id: "merge-test-1".to_string(),
+            thread_id: "t-done".to_string(),
+            source_branch: "compas/t-done".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: chrono::Utc::now().timestamp(),
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        let fetched = store.get_merge_op("merge-test-1").await.unwrap().unwrap();
+        assert_eq!(fetched.status, "queued");
+        assert_eq!(fetched.thread_id, "t-done");
+        assert_eq!(fetched.target_branch, "main");
+
+        let depth = store.count_queued_merge_ops("main").await.unwrap();
+        assert_eq!(depth, 1);
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_cancel_queued() {
+        let server = test_server().await;
+        insert_test_merge_op(&server.store, "merge-cancel-1", "queued", "t-1").await;
+
+        let result = server
+            .merge_cancel_impl(MergeCancelParams {
+                op_id: "merge-cancel-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result), "cancel of queued op should succeed");
+        let json = extract_json(&result);
+        assert_eq!(json["cancelled"], true);
+        assert_eq!(json["op_id"], "merge-cancel-1");
+
+        // Verify it's actually cancelled in the store
+        let op = server
+            .store
+            .get_merge_op("merge-cancel-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(op.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_cancel_non_queued_fails() {
+        let server = test_server().await;
+        // Insert an op with 'executing' status — cannot be cancelled
+        insert_test_merge_op(&server.store, "merge-exec-1", "executing", "t-2").await;
+
+        let result = server
+            .merge_cancel_impl(MergeCancelParams {
+                op_id: "merge-exec-1".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            is_error(&result),
+            "cancel of non-queued op should return error"
+        );
+        let text = result
+            .content
+            .first()
+            .and_then(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            text.contains("executing"),
+            "error should mention current status, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_cancel_nonexistent_fails() {
+        let server = test_server().await;
+
+        let result = server
+            .merge_cancel_impl(MergeCancelParams {
+                op_id: "nonexistent-op".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "cancel of nonexistent op should error");
+        let text = result
+            .content
+            .first()
+            .and_then(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            text.contains("not found"),
+            "error should say not found, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_status_queue_overview() {
+        let server = test_server().await;
+
+        // Insert ops in different states
+        insert_test_merge_op(&server.store, "m-1", "queued", "t-1").await;
+        insert_test_merge_op(&server.store, "m-2", "queued", "t-2").await;
+        insert_test_merge_op(&server.store, "m-3", "completed", "t-3").await;
+        insert_test_merge_op(&server.store, "m-4", "failed", "t-4").await;
+
+        let result = server
+            .merge_status_impl(MergeStatusParams {
+                op_id: None,
+                target_branch: None,
+                thread_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result), "overview should succeed");
+        let json = extract_json(&result);
+
+        // Verify counts are true aggregates (not derived from truncated list)
+        assert_eq!(json["counts"]["queued"], 2);
+        assert_eq!(json["counts"]["completed"], 1);
+        assert_eq!(json["counts"]["failed"], 1);
+
+        // Verify recent list
+        assert_eq!(json["recent"].as_array().unwrap().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_status_nonexistent_op() {
+        let server = test_server().await;
+
+        let result = server
+            .merge_status_impl(MergeStatusParams {
+                op_id: Some("ghost-op".to_string()),
+                target_branch: None,
+                thread_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "status for nonexistent op should error");
+        let text = result
+            .content
+            .first()
+            .and_then(|c| match &c.raw {
+                rmcp::model::RawContent::Text(t) => Some(t.text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(text.contains("not found"), "error should say not found");
+    }
+
+    #[tokio::test]
+    async fn test_orch_merge_status_failed_op_shows_suggested_actions() {
+        let server = test_server().await;
+
+        // Insert a failed op with conflict files
+        let op = MergeOperation {
+            id: "merge-fail-1".to_string(),
+            thread_id: "t-fail".to_string(),
+            source_branch: "compas/t-fail".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "failed".to_string(),
+            push_requested: false,
+            queued_at: chrono::Utc::now().timestamp(),
+            claimed_at: Some(chrono::Utc::now().timestamp()),
+            started_at: Some(chrono::Utc::now().timestamp()),
+            finished_at: Some(chrono::Utc::now().timestamp()),
+            duration_ms: Some(150),
+            result_summary: None,
+            error_detail: Some("merge conflict detected".to_string()),
+            conflict_files: Some(serde_json::to_string(&vec!["file1.rs", "file2.rs"]).unwrap()),
+        };
+        server.store.insert_merge_op(&op).await.unwrap();
+
+        let result = server
+            .merge_status_impl(MergeStatusParams {
+                op_id: Some("merge-fail-1".to_string()),
+                target_branch: None,
+                thread_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result), "status for existing op should succeed");
+        let json = extract_json(&result);
+
+        assert_eq!(json["status"], "failed");
+        assert_eq!(json["error_detail"], "merge conflict detected");
+
+        // conflict_files should be deserialized from JSON string to array
+        let files = json["conflict_files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0], "file1.rs");
+        assert_eq!(files[1], "file2.rs");
+
+        // suggested_actions should be present for failed ops
+        let actions = json["suggested_actions"].as_array().unwrap();
+        assert!(
+            !actions.is_empty(),
+            "failed op should have suggested actions"
+        );
+        let actions_text: Vec<&str> = actions.iter().filter_map(|a| a.as_str()).collect();
+        assert!(
+            actions_text.iter().any(|a| a.contains("Resolve conflicts")),
+            "should suggest resolving conflicts, got: {:?}",
+            actions_text
+        );
+    }
+}
