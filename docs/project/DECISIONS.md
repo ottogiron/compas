@@ -309,6 +309,8 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **Worktree cleanup blocked for threads with pending merge ops.** The stale-worktree cleanup loop performs a cross-table query before removing a worktree: if any `merge_operations` row for the thread is in `pending` or `claimed` status, cleanup is skipped. This prevents a race where the cleanup cycle deletes the worktree while a merge operation is in flight or queued.
 
+**Auto-merge on completed close.** `orch_close(status: completed)` on worktree threads automatically queues a merge to `default_merge_target` (default: "main") using `default_merge_strategy`. The close status IS the merge intent — no separate `merge` parameter needed. `Failed` preserves the branch for inspection (no auto-merge). `Abandoned` discards entirely. Operators can still override target/strategy by passing an explicit `merge` object.
+
 ## ADR-020: Lifecycle hooks — git-hook model, fire-and-forget, EventBus subscription
 
 **Date:** 2026-03

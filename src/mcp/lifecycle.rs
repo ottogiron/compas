@@ -20,9 +20,12 @@ impl OrchestratorMcpServer {
             super::params::CloseStatus::Failed => crate::lifecycle::CloseStatus::Failed,
         };
 
-        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
-        // falling back to config.default_workdir for shared-workspace or legacy threads.
+        // Resolve merge intent:
+        // 1. Explicit `merge` param → use provided target/strategy with defaults
+        // 2. Completed status + worktree thread → auto-merge with config defaults
+        // 3. Failed/non-worktree → no merge
         let merge_intent = if let Some(m) = params.merge {
+            // Explicit override — use provided target/strategy
             let thread_repo_root =
                 match self.store.get_thread_worktree_info(&params.thread_id).await {
                     Ok(Some((_, root))) => root,
@@ -33,7 +36,9 @@ impl OrchestratorMcpServer {
                         config.default_workdir.clone()
                     }
                 };
-            let target_branch = m.target_branch.unwrap_or_else(|| "main".to_string());
+            let target_branch = m
+                .target_branch
+                .unwrap_or_else(|| config.orchestration.default_merge_target.clone());
             let strategy = m
                 .strategy
                 .unwrap_or_else(|| config.orchestration.default_merge_strategy.clone());
@@ -42,8 +47,23 @@ impl OrchestratorMcpServer {
                 strategy,
                 repo_root: thread_repo_root,
             })
+        } else if matches!(status, crate::lifecycle::CloseStatus::Completed) {
+            // Auto-merge for Completed worktree threads
+            match self.store.get_thread_worktree_info(&params.thread_id).await {
+                Ok(Some((_, repo_root))) => Some(MergeIntent {
+                    target_branch: config.orchestration.default_merge_target.clone(),
+                    strategy: config.orchestration.default_merge_strategy.clone(),
+                    repo_root,
+                }),
+                Ok(None) => None, // Shared workspace — nothing to merge
+                Err(e) => {
+                    tracing::warn!(thread_id = %params.thread_id, error = %e,
+                        "get_thread_worktree_info failed, skipping auto-merge");
+                    None
+                }
+            }
         } else {
-            None
+            None // Failed — no auto-merge
         };
 
         match self

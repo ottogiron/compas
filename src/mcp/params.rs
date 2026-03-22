@@ -50,8 +50,9 @@ pub struct CloseParams {
     pub status: CloseStatus,
     /// Optional close note
     pub note: Option<String>,
-    /// Optional: atomically queue a merge with the close.
-    /// Prevents the race where worktree cleanup runs before orch_merge is called.
+    /// Optional: override the auto-merge target branch or strategy.
+    /// Completed worktree threads are auto-merged using config defaults;
+    /// pass this to override target_branch or strategy.
     pub merge: Option<CloseMergeParams>,
 }
 

@@ -18,6 +18,7 @@ orchestration:
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
   # merge_timeout_secs: 30         # Timeout for merge operations (default: 30)
   # default_merge_strategy: merge  # Merge strategy: "merge", "rebase", or "squash"
+  # default_merge_target: main     # Target branch for auto-merge on completed close (default: "main")
 
 models:
   - id: claude-sonnet-4-6

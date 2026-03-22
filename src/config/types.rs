@@ -201,6 +201,9 @@ pub struct OrchestrationConfig {
     /// Default merge strategy: "merge", "rebase", or "squash" (default "merge").
     #[serde(default = "default_merge_strategy")]
     pub default_merge_strategy: String,
+    /// Default target branch for auto-merge on close (default: "main").
+    #[serde(default = "default_merge_target")]
+    pub default_merge_target: String,
 }
 
 impl Default for OrchestrationConfig {
@@ -216,6 +219,7 @@ impl Default for OrchestrationConfig {
             stale_active_secs: default_stale_active_secs(),
             merge_timeout_secs: default_merge_timeout_secs(),
             default_merge_strategy: default_merge_strategy(),
+            default_merge_target: default_merge_target(),
         }
     }
 }
@@ -258,6 +262,10 @@ fn default_merge_timeout_secs() -> u64 {
 
 fn default_merge_strategy() -> String {
     "merge".to_string()
+}
+
+fn default_merge_target() -> String {
+    "main".to_string()
 }
 
 /// Agent role determines worker behavior.

@@ -1964,6 +1964,194 @@ mod lifecycle_tests {
         // dispatch + status-update + failure = 3
         assert_eq!(msgs.len(), 3);
     }
+
+    // ── Auto-merge on completed close tests ──────────────────────────────
+
+    /// Helper: create a thread with a worktree backed by a real git repo (for branch checks).
+    async fn setup_worktree_thread(
+        server: &OrchestratorMcpServer,
+        thread_id: &str,
+    ) -> tempfile::TempDir {
+        setup_thread(server, thread_id).await;
+
+        // Create a temp git repo with the expected branch
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@test",
+                "-c",
+                "user.name=test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "init",
+            ])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["branch", &format!("compas/{}", thread_id)])
+            .current_dir(repo)
+            .output()
+            .unwrap();
+
+        // Set worktree path and repo root on the thread
+        server
+            .store
+            .set_thread_worktree_path(
+                thread_id,
+                &repo.join(".compas-worktrees").join(thread_id),
+                repo,
+            )
+            .await
+            .unwrap();
+
+        tmp
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_worktree_thread_auto_merges() {
+        let server = test_server().await;
+        let _tmp = setup_worktree_thread(&server, "t-auto-merge").await;
+
+        // Close as Completed WITHOUT explicit merge params
+        let result = server
+            .close_impl(CloseParams {
+                thread_id: "t-auto-merge".to_string(),
+                from: "operator".to_string(),
+                status: CloseStatus::Completed,
+                note: Some("auto-merge test".to_string()),
+                merge: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["status"], "Completed");
+        // Auto-merge should have created a merge op
+        assert!(
+            json["merge_op_id"].is_string(),
+            "expected merge_op_id for worktree thread, got: {:?}",
+            json
+        );
+
+        // Verify merge op exists in store with correct target
+        let op_id = json["merge_op_id"].as_str().unwrap();
+        let op = server.store.get_merge_op(op_id).await.unwrap().unwrap();
+        assert_eq!(op.target_branch, "main"); // default_merge_target
+        assert_eq!(op.merge_strategy, "merge"); // default_merge_strategy
+        assert_eq!(op.source_branch, "compas/t-auto-merge");
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_non_worktree_no_merge() {
+        let server = test_server().await;
+        setup_thread(&server, "t-shared-close").await;
+
+        // Close as Completed — shared workspace thread (no worktree)
+        let result = server
+            .close_impl(CloseParams {
+                thread_id: "t-shared-close".to_string(),
+                from: "operator".to_string(),
+                status: CloseStatus::Completed,
+                note: Some("shared ws".to_string()),
+                merge: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["status"], "Completed");
+        // No merge for shared-workspace threads
+        assert!(
+            json["merge_op_id"].is_null(),
+            "expected no merge_op_id for shared-workspace thread, got: {:?}",
+            json
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_failed_worktree_no_merge() {
+        let server = test_server().await;
+        let _tmp = setup_worktree_thread(&server, "t-fail-wt").await;
+
+        // Close as Failed — should NOT auto-merge even though it has a worktree
+        let result = server
+            .close_impl(CloseParams {
+                thread_id: "t-fail-wt".to_string(),
+                from: "operator".to_string(),
+                status: CloseStatus::Failed,
+                note: Some("failed work".to_string()),
+                merge: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["status"], "Failed");
+        // Failed close should NOT create a merge op
+        assert!(
+            json["merge_op_id"].is_null(),
+            "expected no merge_op_id for failed close, got: {:?}",
+            json
+        );
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_explicit_merge_overrides() {
+        let server = test_server().await;
+        let _tmp = setup_worktree_thread(&server, "t-override-merge").await;
+
+        // Create the "develop" branch in the temp repo
+        let repo_root = server
+            .store
+            .get_thread_worktree_info("t-override-merge")
+            .await
+            .unwrap()
+            .unwrap()
+            .1;
+        std::process::Command::new("git")
+            .args(["branch", "develop"])
+            .current_dir(&repo_root)
+            .output()
+            .unwrap();
+
+        // Close with explicit merge override
+        let result = server
+            .close_impl(CloseParams {
+                thread_id: "t-override-merge".to_string(),
+                from: "operator".to_string(),
+                status: CloseStatus::Completed,
+                note: Some("explicit merge target".to_string()),
+                merge: Some(CloseMergeParams {
+                    target_branch: Some("develop".to_string()),
+                    strategy: Some("squash".to_string()),
+                }),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["status"], "Completed");
+        assert!(json["merge_op_id"].is_string());
+
+        // Verify the merge targets the explicit override, not the default
+        let op_id = json["merge_op_id"].as_str().unwrap();
+        let op = server.store.get_merge_op(op_id).await.unwrap().unwrap();
+        assert_eq!(op.target_branch, "develop");
+        assert_eq!(op.merge_strategy, "squash");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -54,6 +54,8 @@ pub struct AbandonOutcome {
     pub thread_id: String,
     pub status: String,
     pub executions_cancelled: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -224,6 +226,17 @@ impl LifecycleService {
             .await
             .unwrap_or(0);
 
+        // Look up worktree info before status transition
+        let worktree_branch = match self.store.get_thread_worktree_info(thread_id).await {
+            Ok(Some(_)) => Some(format!("compas/{}", thread_id)),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(thread_id = %thread_id, error = %e,
+                    "get_thread_worktree_info failed during abandon");
+                None
+            }
+        };
+
         self.store
             .update_thread_status(thread_id, ThreadStatus::Abandoned)
             .await
@@ -236,6 +249,7 @@ impl LifecycleService {
             thread_id: thread_id.to_string(),
             status: "Abandoned".to_string(),
             executions_cancelled: cancelled,
+            worktree_branch,
         })
     }
 
