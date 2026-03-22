@@ -12,6 +12,8 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Point it at any reposit
 brew install ottogiron/tap/compas
 ```
 
+Pre-built binaries available for macOS (Apple Silicon, Intel) and Linux (x86_64, ARM64).
+
 <details>
 <summary><b>Other install methods</b></summary>
 
@@ -19,7 +21,7 @@ Always install from a tagged release — `main` may contain incomplete features.
 
 **Pre-built binary:**
 
-Download the archive for your platform from the [latest release](https://github.com/ottogiron/compas/releases/latest), extract it, and place `compas` on your PATH.
+Download the archive for your platform from the [latest release](https://github.com/ottogiron/compas/releases/latest), extract it, and place `compas` on your PATH. Available for `aarch64-darwin`, `x86_64-darwin`, `aarch64-linux`, and `x86_64-linux`.
 
 **cargo-binstall:**
 
@@ -39,68 +41,6 @@ cargo install --git https://github.com/ottogiron/compas --tag v0.4.0
 Run `compas doctor` after upgrading. Check the [CHANGELOG](CHANGELOG.md) for breaking changes.
 
 </details>
-
-## What Compas Does
-
-```text
-You ──dispatch──▶ Worker ──claim──▶ Agent ──execute──▶ reply
-                                                        │
-                              merge ◀──review ◀──handoff─┘
-```
-
-### Start simple
-
-All you need is a working directory, a state directory, and one agent:
-
-```yaml
-default_workdir: /path/to/repo
-state_dir: ~/.compas/state
-
-agents:
-  - alias: dev
-    backend: claude
-    prompt: "You implement changes. Follow the project's AGENTS.md."
-```
-
-No `model`, no `workspace`. This is all you need to get started.
-
-### Then add a reviewer
-
-When you want agents to review each other's work, add a second agent and wire them together. This is where `workspace: worktree` and `on_response` appear — isolation becomes necessary because two agents are now working on the same repo:
-
-```yaml
-agents:
-  - alias: dev
-    backend: claude
-    model: claude-sonnet-4-6
-    workspace: worktree
-    handoff:
-      on_response: reviewer
-      max_chain_depth: 3
-    prompt: "You implement changes. Follow the project's AGENTS.md."
-
-  - alias: reviewer
-    backend: claude
-    model: claude-sonnet-4-6
-    handoff:
-      on_response: dev
-    prompt: "Review for correctness and test coverage. Do not implement."
-```
-
-### This is what happens
-
-1. **You dispatch** — send a task to `dev` from your coding CLI
-2. **Worker claims** — the background worker picks up the execution and launches the backend CLI in an isolated worktree
-3. **Agent executes** — `dev` writes code, runs tests, and replies
-4. **Auto-handoff** — the system routes the response to `reviewer` automatically
-5. **Review loop** — `reviewer` reads the diff, replies with feedback, and the chain bounces back to `dev` until `max_chain_depth` is reached
-6. **You close** — review the final result, close the thread, and merge
-
-Wait for the full chain to settle from a script or CLI:
-
-```bash
-compas wait --thread-id <id> --await-chain --timeout 900
-```
 
 ## Quick Start
 
@@ -165,12 +105,46 @@ Group related tasks with a batch:
 
 For a structured dispatch-review-complete workflow, see the [orchestration skill example](examples/skills/orch-dispatch/SKILL.md).
 
+## How It Works
+
+```text
+Your CLI ──MCP──▶ compas ──▶ Worker ──▶ Agent ──execute──▶ reply
+                                                             │
+                                   merge ◀──review ◀──handoff─┘
+```
+
+You talk to your coding CLI (Claude Code, Codex, etc.) as usual. When you say "dispatch this to dev," the CLI calls compas through MCP — compas queues the work, the background worker picks it up, and launches the agent in an isolated worktree. You never leave your editor.
+
+1. **You ask your CLI** — "dispatch to dev: add a health check endpoint"
+2. **CLI calls compas via MCP** — `orch_dispatch` queues an execution for the `dev` agent
+3. **Worker claims and executes** — launches the backend CLI in an isolated git worktree
+4. **Auto-handoff** — the system routes the response to `reviewer` automatically
+5. **Review loop** — `reviewer` reads the diff, replies with feedback, and the chain bounces until `max_chain_depth` is reached
+6. **You close and merge** — review the result, close the thread, changes merge back to your branch
+
+Wait for the full chain to settle from a script or CLI:
+
+```bash
+compas wait --thread-id <id> --await-chain --timeout 900
+```
+
 ## Configuration
+
+A minimal config — one agent, one repo:
 
 ```yaml
 default_workdir: /path/to/repo
 state_dir: ~/.compas/state
 
+agents:
+  - alias: dev
+    backend: claude
+    prompt: "You implement changes. Follow the project's AGENTS.md."
+```
+
+Add a reviewer with auto-handoff and worktree isolation:
+
+```yaml
 agents:
   # Implements changes in an isolated worktree
   - alias: dev
