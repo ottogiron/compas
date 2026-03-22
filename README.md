@@ -44,7 +44,7 @@ cargo binstall --git-url https://github.com/ottogiron/compas compas
 **From source (cargo install):**
 
 ```bash
-cargo install --git https://github.com/ottogiron/compas --tag v0.3.0
+cargo install --git https://github.com/ottogiron/compas --tag v0.4.0
 ```
 
 **Build from source:**
