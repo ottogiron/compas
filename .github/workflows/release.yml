@@ -29,11 +29,11 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner: ubuntu-latest
             method: cross
-          # NOTE: macos-13 (Intel) is being deprecated by GitHub.
-          # Track migration timeline and switch to a supported runner
-          # when GitHub removes macos-13.
+          # Cross-compile x86_64-darwin from ARM runner.
+          # macos-13 (Intel) was removed by GitHub — Apple's toolchain
+          # handles x86_64 cross-compilation natively from ARM.
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-latest
             method: native
           - target: aarch64-apple-darwin
             runner: macos-latest
