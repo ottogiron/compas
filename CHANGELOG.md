@@ -4,6 +4,12 @@ All notable changes to Compas are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.4.1] - 2026-03-22
+
+### Fixed
+
+- Fix execution stuck in 'executing': set busy_timeout on every pool connection and retry finalization with backoff
+
 ## [v0.4.0] - 2026-03-22
 
 ### Added
