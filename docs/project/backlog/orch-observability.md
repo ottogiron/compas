@@ -164,7 +164,7 @@ Captured raw stream-json from all four backends. Key findings:
 - Verification:
   - `make verify`
   - `make dashboard-dev` — visually confirm Ops footer and Agents tab
-- Status: In Progress
+- Status: Done
 
 ## Execution Order
 
@@ -218,8 +218,8 @@ Captured raw stream-json from all four backends. Key findings:
 - Complexity: S
 - Risk: Low
 - Start: 2026-03-21 16:25 UTC
-- End: TBD
-- Duration: TBD
+- End: 2026-03-22 15:27 UTC
+- Duration: 23:02:04
 - Notes: Dashboard-only changes, no store/MCP modifications. 4 files.
 
 ## Closure Evidence

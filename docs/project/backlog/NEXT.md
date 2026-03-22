@@ -4,11 +4,7 @@ Last updated: 2026-03-22
 
 ## Active
 
-Currently in-flight work (from `ticket status`):
-
-- OBS-04 — Dashboard cost visibility (`orch-observability.md`)
-- ORCH-RENAME-1 — Config field rename (`orch-rename-workdir.md`)
-- WORKTREE-SAFETY-1 — Worktree cleanup safety guard (`orch-worktree-safety.md`)
+No tickets currently in-flight.
 
 > Update this section from `ticket status` output. Remove entries when their ticket is closed.
 
