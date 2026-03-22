@@ -1,3 +1,0 @@
-kind: Changed
-body: 'Restructure documentation: slim README from 784 to 384 lines, extract configuration reference, dashboard guide, and cookbook under docs/guides/'
-time: 2026-03-22T01:46:35.892154+01:00
