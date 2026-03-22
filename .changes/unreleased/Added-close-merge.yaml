@@ -1,2 +1,0 @@
-kind: Added
-body: "`orch_close` accepts optional `merge` field to atomically queue a merge with the close"

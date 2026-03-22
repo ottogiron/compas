@@ -1,2 +1,0 @@
-kind: Added
-body: "Worker singleton guard: fail-fast lockfile + heartbeat/PID check prevents multiple concurrent workers (ADR-016)"

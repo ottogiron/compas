@@ -1,2 +1,0 @@
-kind: Added
-body: "`compas doctor` command: pre-flight validation with ordered checklist, actionable fix suggestions, `--fix` for auto-registering MCP servers"

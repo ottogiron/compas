@@ -1,2 +1,0 @@
-kind: Added
-body: "`GenericBackend` implementing the `Backend` trait for config-defined backends — template substitution, output parsing, session resume, env_remove composition (GBE-2)"

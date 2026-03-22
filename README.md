@@ -35,7 +35,7 @@ Then run
 
 ```bash
 # you will be asked for github authentication in this step
-cargo install --git https://github.com/ottogiron/compas --tag v0.2.0
+cargo install --git https://github.com/ottogiron/compas --tag v0.3.0
 ```
 
 This installs a stable release and puts `compas` on your PATH.

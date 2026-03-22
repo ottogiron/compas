@@ -1,3 +1,0 @@
-kind: Changed
-body: 'orch_close(status: completed) now auto-merges worktree threads to default_merge_target (default: main). Use Failed or Abandoned for non-merge intents.'
-time: 2026-03-22T01:30:14.316285+01:00

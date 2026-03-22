@@ -1,2 +1,0 @@
-kind: Added
-body: "MCP tools: `orch_merge`, `orch_merge_status`, `orch_merge_cancel` for merge queue operations (MERGE-4)"

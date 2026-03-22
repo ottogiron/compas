@@ -1,2 +1,0 @@
-kind: Changed
-body: "Fan-out child threads linked via `source_thread_id` column instead of batch_id heuristics"

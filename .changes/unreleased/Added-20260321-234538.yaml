@@ -1,3 +1,0 @@
-kind: Added
-body: 'EventBus: MergeStarted and MergeCompleted events for merge lifecycle observability, desktop notifications on merge completion, on_merge_completed lifecycle hook (MERGE-5A)'
-time: 2026-03-21T23:45:38.677985+01:00

@@ -1,2 +1,0 @@
-kind: Changed
-body: "Renamed `orch-reviewer` agent to `compas-reviewer` in dispatch skill and config examples"

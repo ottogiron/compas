@@ -1,2 +1,0 @@
-kind: Changed
-body: "Ops view: agent column widened (18/14 chars) with truncation; summary column is now elastic (fills remaining width, clamped 10-60 chars)"

@@ -1,2 +1,0 @@
-kind: Changed
-body: "README: rewrite Quick Start to use `compas init` + `compas setup-mcp` + `compas doctor` (4-step flow)"

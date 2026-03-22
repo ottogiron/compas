@@ -1,2 +1,0 @@
-kind: Added
-body: "Worker: merge queue polling, crash recovery, and stale merge detection (MERGE-3)"

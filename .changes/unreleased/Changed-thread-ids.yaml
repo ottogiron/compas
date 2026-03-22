@@ -1,2 +1,0 @@
-kind: Changed
-body: "Shortened thread IDs in Ops view (show last 8 chars wide / 6 narrow instead of first 16)"

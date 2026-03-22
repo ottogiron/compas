@@ -1,2 +1,0 @@
-kind: Changed
-body: "`--await-chain` now waits for fan-out child threads to settle before returning (ADR-014 Phase 2)"

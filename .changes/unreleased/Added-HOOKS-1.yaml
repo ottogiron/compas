@@ -1,2 +1,0 @@
-kind: Added
-body: "Lifecycle hooks config schema and execution engine: `hooks` section in config for shell commands at lifecycle events, JSON on stdin, fire-and-forget semantics (HOOKS-1)"

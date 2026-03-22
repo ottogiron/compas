@@ -1,2 +1,0 @@
-kind: Fixed
-body: "Worktree handoff bug: non-worktree agents on the same thread now inherit the thread's worktree path when targeting the same repo. `workspace: shared` explicitly opts out of inheritance."

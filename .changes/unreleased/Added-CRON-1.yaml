@@ -1,2 +1,0 @@
-kind: Added
-body: "Config-declared recurring schedules (`schedules` section): cron-triggered dispatches in config with agent targeting, cron expression validation via `croner`, batch IDs, max runs safety cap, and enable/disable toggle (CRON-1)"

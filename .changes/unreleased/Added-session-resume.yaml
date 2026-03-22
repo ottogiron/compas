@@ -1,2 +1,0 @@
-kind: Added
-body: "Session resume after crash (ADR-017): backend session IDs persisted mid-stream, enabling resume after crashed executions"

@@ -1,2 +1,0 @@
-kind: Fixed
-body: "Worktree cleanup safety guard (ADR-018): worker checks `worktree_status` before removal; dirty worktrees and git-failure cases are skipped with a warning"

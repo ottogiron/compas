@@ -1,2 +1,0 @@
-kind: Added
-body: "Worktree uncommitted change detection: executor appends `## Worktree Status` to agent output when worktree has uncommitted changes"

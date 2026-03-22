@@ -1,2 +1,0 @@
-kind: Changed
-body: "Renamed config field `target_repo_root` to `default_workdir` — old key still works via serde alias"

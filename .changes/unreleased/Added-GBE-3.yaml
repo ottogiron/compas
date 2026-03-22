@@ -1,2 +1,0 @@
-kind: Added
-body: "Generic backend registry wiring and documentation (GBE-3): `build_backend_registry()` registers config-defined `GenericBackend` instances; `compas doctor` validates commands on PATH"

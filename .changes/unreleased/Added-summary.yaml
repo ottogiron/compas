@@ -1,2 +1,0 @@
-kind: Added
-body: "`summary` field on threads — optional short one-liner set via `orch_dispatch`, visible across all MCP tools and dashboard"

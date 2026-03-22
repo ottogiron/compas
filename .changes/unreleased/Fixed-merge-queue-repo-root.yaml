@@ -1,2 +1,0 @@
-kind: Fixed
-body: "Merge queue now resolves `repo_root` from the thread's `worktree_repo_root` for agents with per-agent `workdir` overrides"

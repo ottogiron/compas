@@ -1,3 +1,0 @@
-kind: Added
-body: 'Worker cron schedule evaluation loop: evaluates config-declared schedules every 60s, dispatches messages when cron expressions are due, tracks fires in durable schedule_runs table (CRON-2)'
-time: 2026-03-21T23:53:43.687158+01:00
