@@ -4,6 +4,12 @@ All notable changes to Compas are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.4.2] - 2026-03-22
+
+### Fixed
+
+- orch_dispatch next_step now directs agents to orch_wait MCP tool instead of compas wait CLI
+
 ## [v0.4.1] - 2026-03-22
 
 ### Fixed
