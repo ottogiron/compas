@@ -111,7 +111,7 @@ Operator-authored changes (not just dispatched work) must be sent to `compas-rev
 
 When tagging a new release:
 
-1. `changie batch <major|minor|patch>` — assemble fragments into a versioned entry
+1. `changie batch auto` — assemble fragments into a versioned entry (auto-determines bump level from fragment kinds: `Added` → minor, `Fixed` → patch, `Removed` → major)
 2. `changie merge` — regenerate `CHANGELOG.md` from all version files
 3. Update the version in `Cargo.toml` to match
 4. Update the install tag in `README.md` (`--tag vX.Y.Z` in both the install and build-from-source commands)
