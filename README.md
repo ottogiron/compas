@@ -286,7 +286,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 
 **`compas wait-merge` flags:**
 
-Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_merge`.
+Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_close` (for worktree auto-merges) or `orch_merge` (for explicit merge queuing).
 
 | Flag | Description |
 | --- | --- |
@@ -301,7 +301,7 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 | Tool | What it does |
 | --- | --- |
 | `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` (~80 chars) to label the thread and `scheduled_for` (ISO 8601 timestamp) for delayed execution |
-| `orch_close` | Close a thread as `completed` or `failed`. Optionally pass a `merge` object to atomically queue a merge with the close |
+| `orch_close` | Close a thread as `completed` or `failed`. Completed worktree threads are automatically merged to the default target branch. Pass a `merge` object to override target_branch or strategy |
 | `orch_abandon` | Cancel a thread and its active executions |
 | `orch_reopen` | Reopen a closed/failed/abandoned thread |
 
@@ -364,6 +364,7 @@ orchestration:
   # log_retention_count: 100      # Max execution log files to retain (default: 100)
   # merge_timeout_secs: 30         # Timeout for merge operations (default: 30)
   # default_merge_strategy: merge  # Merge strategy: "merge", "rebase", or "squash"
+  # default_merge_target: main     # Target branch for auto-merge on completed close (default: "main")
 
 database:                              # SQLite connection pool (requires restart to change)
   max_connections: 32

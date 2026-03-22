@@ -187,6 +187,12 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         )));
     }
 
+    if config.orchestration.default_merge_target.trim().is_empty() {
+        return Err(OrchestratorError::Config(
+            "orchestration.default_merge_target must not be empty".into(),
+        ));
+    }
+
     // ORCHV3-15: ensure state_dir is writable (create if needed)
     if !config.state_dir.exists() {
         std::fs::create_dir_all(&config.state_dir).map_err(|e| {
@@ -1535,6 +1541,7 @@ agents:
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.orchestration.merge_timeout_secs, 30);
         assert_eq!(config.orchestration.default_merge_strategy, "merge");
+        assert_eq!(config.orchestration.default_merge_target, "main");
         assert!(validate_config(&config).is_ok());
     }
 
@@ -1563,6 +1570,55 @@ orchestration:
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("default_merge_strategy must be"));
         assert!(err.to_string().contains("bogus"));
+    }
+
+    #[test]
+    fn test_config_merge_target_default_when_absent() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.orchestration.default_merge_target, "main");
+    }
+
+    #[test]
+    fn test_config_merge_target_explicit_value() {
+        let yaml = r#"
+default_workdir: /tmp
+state_dir: /tmp/test
+agents:
+  - alias: a1
+    backend: stub
+orchestration:
+  default_merge_target: develop
+"#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.orchestration.default_merge_target, "develop");
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_config_merge_target_empty_rejected() {
+        let mut config = minimal_config();
+        config.orchestration.default_merge_target = "".into();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("default_merge_target must not be empty"));
+    }
+
+    #[test]
+    fn test_config_merge_target_whitespace_rejected() {
+        let mut config = minimal_config();
+        config.orchestration.default_merge_target = "  ".into();
+        let err = validate_config(&config).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("default_merge_target must not be empty"));
     }
 
     // ── Schedule config validation tests (CRON-1) ──
