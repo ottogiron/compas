@@ -119,6 +119,7 @@ If you change a layer, update/review the paired artifacts in the same commit set
 - Store/DB (`src/store/*`): migration handling, integration tests, changelog fragment (`changie new`)
 - Merge executor (`src/merge.rs`): integration tests, `docs/project/DECISIONS.md`, changelog fragment (`changie new`)
 - ADRs or known-issues updates (`docs/project/DECISIONS.md`, `docs/project/known-issues.md`): changelog fragment (`changie new`)
+- User-facing guides (`docs/guides/*`): `README.md` links, changelog fragment (`changie new`)
 
 ## Development Workflow
 

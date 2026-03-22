@@ -126,7 +126,7 @@ agents:
       You are a development agent. Follow the project's AGENTS.md.
 ```
 
-Supported backends: `claude`, `codex`, `gemini`, `opencode`. See the [Configuration Reference](#configuration-reference) for all fields.
+Supported backends: `claude`, `codex`, `gemini`, `opencode`. See the [Configuration Reference](docs/guides/configuration.md) for all fields.
 
 Register the MCP server manually per tool:
 
@@ -223,49 +223,9 @@ The skill covers: worker delegation, reviewer routing, session continuity, workt
 
 ## Dashboard
 
-The TUI dashboard shows real-time orchestrator state across four tabs:
+The TUI dashboard shows real-time orchestrator state across four tabs: **Ops** (active threads, executions, merge queue), **Agents** (health and execution history per agent), **History** (recent executions with batch grouping), and **Settings** (config overview and schedules). Navigate with `Tab`/`1-4`, drill into executions with `Enter`, view thread conversations with `c`, and press `?` for keyboard help.
 
-- **Ops** — active threads, running executions, batch progress
-- **Agents** — configured agents with health status
-- **History** — completed executions with duration and status
-- **Settings** — current configuration
-
-| Key | Action |
-| --- | --- |
-| `Tab` / `Shift+Tab` | Next / previous tab |
-| `1-4` | Jump to tab |
-| `↑/↓` or `j/k` | Navigate rows |
-| `g` / `G` | Jump to first / last row |
-| `Enter` | Open log viewer / drill into batch |
-| `c` | Open conversation view (Ops tab, see below) |
-| `x` / `Esc` | Clear batch drill-down |
-| `r` | Refresh current tab |
-| `?` | Keyboard help |
-| `q` / `Ctrl+C` | Quit |
-
-**Log viewer** (`Enter` on an execution):
-
-| Key | Action |
-| --- | --- |
-| `↑/↓` or `j/k` | Navigate sections |
-| `Enter` | Expand / collapse section |
-| `g` / `G` | Jump to top / bottom |
-| `PgUp` / `PgDn` | Page scroll |
-| `f` | Toggle follow mode |
-| `J` | Pretty-print JSON |
-| `Esc` | Back to dashboard |
-
-**Conversation view** (`c` on a thread in Ops tab):
-
-![Conversation view showing dispatch and agent replies](docs/images/dashboard-conversation.png)
-
-| Key | Action |
-| --- | --- |
-| `↑/↓` or `j/k` | Scroll line by line |
-| `g` / `G` | Jump to top / bottom |
-| `PgUp` / `PgDn` | Page scroll |
-| `f` | Toggle follow mode (auto-scroll to new messages) |
-| `Esc` | Back to dashboard |
+See the [Dashboard Guide](docs/guides/dashboard.md) for full keyboard shortcuts, tab details, and tips.
 
 ## MCP Tools
 
@@ -286,7 +246,7 @@ For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-i
 
 **`compas wait-merge` flags:**
 
-Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_close` (for worktree auto-merges) or `orch_merge` (for explicit merge queuing).
+Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_merge`.
 
 | Flag | Description |
 | --- | --- |
@@ -301,7 +261,7 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 | Tool | What it does |
 | --- | --- |
 | `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` (~80 chars) to label the thread and `scheduled_for` (ISO 8601 timestamp) for delayed execution |
-| `orch_close` | Close a thread as `completed` or `failed`. Completed worktree threads are automatically merged to the default target branch. Pass a `merge` object to override target_branch or strategy |
+| `orch_close` | Close a thread as `completed` or `failed`. Optionally pass a `merge` object to atomically queue a merge with the close |
 | `orch_abandon` | Cancel a thread and its active executions |
 | `orch_reopen` | Reopen a closed/failed/abandoned thread |
 
@@ -337,396 +297,33 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 | `orch_session_info` | Current MCP session metadata |
 | `orch_worktrees` | List active git worktrees for agent isolation |
 
-## Configuration Reference
+## Configuration
 
-The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override it for any subcommand. See [`examples/config-generic.yaml`](examples/config-generic.yaml) for a fully commented example.
+The default config location is `~/.compas/config.yaml`. Use `--config <path>` to override on any subcommand. A minimal config needs two required fields and at least one agent:
 
 ```yaml
-default_workdir: /path/to/repo           # Default working directory for agents (required)
+default_workdir: /path/to/repo           # Working directory for agents (required)
 state_dir: ~/.compas/state               # Runtime state: DB, logs (required)
-poll_interval_secs: 1                  # Worker poll frequency
-# worktree_dir: /custom/worktrees     # Override worktree parent dir (default: {repo_root}/.compas-worktrees/)
 
-# models:                             # Optional model catalog (informational only)
-#   - claude-sonnet-4-6
-#   - id: gpt-5.4
-#     backend: codex
-#     description: "Codex default model"
-
-orchestration:
-  trigger_intents: [dispatch, handoff, changes-requested]  # Intents that trigger execution
-  execution_timeout_secs: 600           # Per-task timeout
-  max_concurrent_triggers: 4            # Global concurrency limit (default: number of worker agents)
-  max_triggers_per_agent: 2             # Per-agent concurrency limit
-  stale_active_secs: 3600              # Staleness threshold for idle threads
-  ping_timeout_secs: 15                # Backend health check timeout
-  ping_cache_ttl_secs: 60              # TTL for cached ping results (default: 60)
-  # log_retention_count: 100      # Max execution log files to retain (default: 100)
-  # merge_timeout_secs: 30         # Timeout for merge operations (default: 30)
-  # default_merge_strategy: merge  # Merge strategy: "merge", "rebase", or "squash"
-  # default_merge_target: main     # Target branch for auto-merge on completed close (default: "main")
-
-database:                              # SQLite connection pool (requires restart to change)
-  max_connections: 32
-  min_connections: 4
-  acquire_timeout_ms: 30000
-
-notifications:
-  desktop: false                       # macOS desktop notifications (requires worker restart)
-
-agents:
-  - alias: dev                         # Unique name for dispatching
-    backend: claude                    # claude | codex | gemini | opencode
-    model: claude-sonnet-4-6           # Model to use
-    prompt: "..."                      # System prompt for the agent
-    # prompt_file: prompts/dev.md      # Or load prompt from file (takes precedence over prompt)
-    # timeout_secs: 900                # Per-agent timeout override (default: execution_timeout_secs)
-    # role: worker                     # worker (default, triggered by dispatches) | operator (never triggered)
-    # env:                             # Per-agent environment variables
-    #   SOME_VAR: value
-    # backend_args: ["--flag"]         # Extra CLI args for the backend
-    # workdir: /path/to/other/repo     # Per-agent workdir override (default: default_workdir)
-    # workspace: shared                # "worktree" for git worktree isolation, "shared" (default)
-    # max_retries: 0              # Auto-retry on transient failure (0 = disabled)
-    # retry_backoff_secs: 30      # Base delay between retries (doubles each attempt)
-    # handoff:                          # Auto-handoff chain routing
-    #   on_response: other-agent        # String (single target) or list (fan-out): [agent-a, agent-b]
-    #   handoff_prompt: |               # Custom prompt prepended to auto-generated handoff context
-    #     Review for correctness, test coverage, and AGENTS.md compliance.
-    #   max_chain_depth: 3              # Max auto-handoffs before forcing operator review (default: 3)
-```
-
-**Path resolution:** Absolute paths are used as-is. `~/` expands to `$HOME`. Relative paths resolve against the config file's directory.
-
-**Multiple agents:** Define as many agents as needed with different backends, models, and prompts. Each agent gets its own concurrency slot.
-
-**Live config reload:** The worker hot-reloads the following fields without restart: `agents`, `schedules`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`. Changes to `default_workdir`, `state_dir`, `database`, and `max_concurrent_triggers` require a restart.
-
-### Recurring Schedules
-
-Define cron-based recurring dispatches that the worker evaluates automatically. Useful for CI monitoring, periodic health checks, or any recurring task.
-
-```yaml
-schedules:
-  - name: ci-monitor              # Unique schedule name
-    agent: reviewer                # Target agent alias (must exist in agents)
-    cron: "*/5 * * * *"            # Standard cron expression (every 5 minutes)
-    body: "Check CI status for open PRs and report any failures."
-    batch: ci-monitoring           # Optional batch ID for grouping dispatches
-    max_runs: 50                   # Safety cap (default: 100) — stops after this many fires
-    enabled: true                  # Active flag (default: true)
-
-  - name: nightly-health
-    agent: dev
-    cron: "0 2 * * *"              # Daily at 2:00 AM UTC
-    body: "Run full health check: verify all services are responsive, check disk usage, review error logs from the past 24 hours."
-    max_runs: 365
-```
-
-**Schedule fields:**
-
-| Field | Required | Default | Description |
-| --- | --- | --- | --- |
-| `name` | yes | — | Unique identifier for the schedule |
-| `agent` | yes | — | Target agent alias (must exist in `agents`) |
-| `cron` | yes | — | Standard cron expression (5 fields: minute, hour, day, month, weekday) |
-| `body` | yes | — | Dispatch message body sent to the agent |
-| `batch` | no | `null` | Batch/ticket ID attached to each dispatch |
-| `max_runs` | no | `100` | Safety cap — schedule stops firing after this many runs |
-| `enabled` | no | `true` | Set to `false` to pause without removing the config |
-
-**How it works:**
-
-1. The worker evaluates all enabled schedules every 60 seconds
-2. When a cron expression is due, the worker creates a dispatch message targeting the configured agent
-3. Run counts are persisted in SQLite — the worker tracks last-fire time per schedule to prevent double-fires on restart
-4. When `max_runs` is reached, the schedule stops firing (bump the value or reset the schedule to continue)
-
-**Dashboard visibility:** The Settings tab shows all configured schedules with their agent, cron expression, next fire time, run count, and enabled status.
-
-**Doctor validation:** `compas doctor` validates that schedule agent aliases exist and cron expressions parse correctly, reporting issues as warnings.
-
-### Per-Agent Working Directory
-
-By default, all agents work in `default_workdir`. To have an agent work in a different repository, set `workdir`:
-
-```yaml
 agents:
   - alias: dev
-    backend: claude
-    workdir: /path/to/other/repo       # Works in a different repo
-    workspace: worktree                # Optional: isolated worktree per thread
-```
-
-### Workspace Isolation
-
-When `workspace: worktree` is set, each thread dispatched to that agent gets its own git worktree. This prevents concurrent agents from stepping on each other's files:
-
-```yaml
-agents:
-  - alias: agent-a
-    workspace: worktree    # Each thread gets its own worktree
-  - alias: agent-b
-    workspace: worktree    # Independent worktree, no file conflicts with agent-a
-  - alias: reviewer
-    workspace: shared      # Default — reads files directly, no isolation needed
-```
-
-Worktrees are created at `{repo_root}/.compas-worktrees/{thread_id}/` on a branch named `compas/{thread_id}`. The parent directory can be overridden via the top-level `worktree_dir` config field. They're automatically cleaned up when the thread is completed or abandoned. Failed threads retain their worktrees for inspection. Requires `workdir` (or `default_workdir`) to be a git repository — falls back to shared mode for non-git directories.
-
-### Retry on Transient Failure
-
-When `max_retries` is set on an agent, transient failures (network blips, temporary rate limits) are automatically retried with exponential backoff. Non-retryable failures (quota exhaustion, auth errors, agent errors) fail immediately.
-
-Each retry creates a new execution entry. Check `orch_tasks` for `attempt_number` to see retry history. The thread stays Active during retries — it only fails when all retries are exhausted.
-
-### Auto-Handoff Chains
-
-Agents can automatically chain to other agents based on `on_response` routing. Configure `handoff` on an agent to dispatch its output to the next agent without operator intervention — for example, a dev agent that auto-routes to a reviewer, which routes back to dev.
-
-Agents reply naturally with no protocol overhead — the system assigns `response` intent to all agent replies and handles routing via config.
-
-```yaml
-agents:
-  - alias: dev
-    backend: claude
+    backend: claude                      # claude | codex | gemini | opencode
     model: claude-sonnet-4-6
     prompt: "You implement changes. Follow the project's AGENTS.md."
-    handoff:
-      on_response: reviewer            # Dev's replies go to reviewer
-      handoff_prompt: |                # Custom instructions prepended to handoff context
-        Review for correctness, test coverage, and AGENTS.md compliance.
-
-  - alias: reviewer
-    backend: claude
-    model: claude-sonnet-4-6
-    prompt: "You review code changes for correctness and quality."
-    handoff:
-      on_response: dev                 # Reviewer's replies go back to dev
 ```
 
-**Fan-out:** `on_response` accepts a list to route one agent's output to multiple agents simultaneously:
+Key configuration areas:
 
-```yaml
-    handoff:
-      on_response: [reviewer, reviewer-2]   # Fan-out to two reviewers in parallel
-```
+- **`orchestration`** — execution timeouts, concurrency limits, trigger intents, merge strategy
+- **`agents`** — per-agent backend, model, prompt, workdir, workspace isolation, retry, auto-handoff chains
+- **`schedules`** — cron-based recurring dispatches
+- **`hooks`** — shell scripts fired on lifecycle events (execution started/completed, thread closed/failed)
+- **`backend_definitions`** — wire in any CLI tool as a custom backend via YAML
+- **`notifications`** — macOS desktop notifications
 
-Fan-out creates one new batch-linked thread per target agent. All fan-out threads share the same batch ID, so you can track aggregate results with `orch_batch_status`. The operator is the join point — use `orch_batch_status` to see when all reviewers have finished, then decide next steps.
+The worker hot-reloads `agents`, `schedules`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, and `notifications` without restart.
 
-**Custom prompt:** `handoff_prompt` text is prepended to the auto-generated handoff context (which includes the originating thread's transcript). Use it to give the receiving agent specific instructions for that handoff.
-
-**Chain depth limit:** `max_chain_depth` (default: 3) caps the number of consecutive auto-handoffs on a thread. When the limit is reached, the chain stops and a review-request is inserted for the operator. This prevents runaway loops.
-
-**Waiting for chain settlement:** Use `compas wait --thread-id <id> --await-chain` to block until all threads in the chain (including fan-out threads) have settled.
-
-**Viewing chains:** In the dashboard, open a thread's conversation (`c` on a thread in the Ops tab) to see the full chain of dispatch → reply → handoff → reply messages. Use `orch_transcript` from your CLI to see the same history. Handoff messages appear with intent `handoff` in the transcript.
-
-### Lifecycle Hooks
-
-Compas fires shell scripts at named execution lifecycle events. Scripts run as subprocesses, receive event data as JSON on stdin, and are subject to a configurable timeout. All failures are logged as warnings and never affect execution — hooks are purely observational.
-
-**Hook points:**
-
-| Hook point | Fired when |
-|---|---|
-| `on_execution_started` | Agent process is spawned for a new execution |
-| `on_execution_completed` | Execution reaches a terminal state (success or failure) |
-| `on_thread_closed` | Thread transitions to `Completed` status |
-| `on_thread_failed` | Thread transitions to `Failed` status |
-
-> Note: `Abandoned` and `ExecutionRetrying` events are not hooked (Phase 2).
-
-**Config example:**
-
-```yaml
-hooks:
-  on_execution_completed:
-    - command: ./scripts/notify-slack.sh
-      timeout_secs: 10
-    - command: ./scripts/log-audit.sh
-  on_thread_failed:
-    - command: ./scripts/alert-pagerduty.sh
-      timeout_secs: 5
-```
-
-**Full `HookEntry` fields:**
-
-```yaml
-hooks:
-  on_execution_started:
-    - command: /path/to/script.sh   # Required: path or command name on PATH
-      args: ["--flag", "value"]     # Optional: positional args
-      timeout_secs: 10              # Optional: kill timeout (default: 10)
-      env:                          # Optional: extra env vars for this hook
-        SLACK_WEBHOOK_URL: https://hooks.slack.com/...
-```
-
-**JSON payload examples** (delivered to hook's stdin):
-
-`on_execution_started`:
-
-```json
-{
-  "event": "execution_started",
-  "thread_id": "01ABC...",
-  "execution_id": "01XYZ...",
-  "agent_alias": "dev",
-  "timestamp": "2026-03-21T17:00:00Z"
-}
-```
-
-`on_execution_completed`:
-
-```json
-{
-  "event": "execution_completed",
-  "thread_id": "01ABC...",
-  "execution_id": "01XYZ...",
-  "agent_alias": "dev",
-  "success": true,
-  "duration_ms": 12345,
-  "thread_summary": "Fix login timeout bug",
-  "timestamp": "2026-03-21T17:00:00Z"
-}
-```
-
-`on_thread_closed`:
-
-```json
-{
-  "event": "thread_closed",
-  "thread_id": "01ABC...",
-  "new_status": "Completed",
-  "timestamp": "2026-03-21T17:00:00Z"
-}
-```
-
-`on_thread_failed`:
-
-```json
-{
-  "event": "thread_failed",
-  "thread_id": "01ABC...",
-  "new_status": "Failed",
-  "timestamp": "2026-03-21T17:00:00Z"
-}
-```
-
-**Behavior notes:**
-
-- Hooks run in `default_workdir` (no per-hook `workdir` override in Phase 1).
-- Multiple hooks per point run **sequentially** in declaration order.
-- A failing hook is logged as a warning and does not prevent subsequent hooks.
-- **Hot-reload:** Add or remove hooks in config without restarting the worker.
-- Webhooks: write `curl` in your hook script — no built-in HTTP support needed.
-
-See `examples/hooks/` for ready-to-use scripts.
-
-### Config Patterns
-
-**Multi-repo agent team** — shared agents with a repo-scoped reviewer:
-
-```yaml
-agents:
-  - alias: implementer
-    backend: claude
-    workspace: worktree
-    handoff:
-      on_response: [design-reviewer, correctness-reviewer]
-    prompt: "You implement changes. Follow the repo's AGENTS.md."
-
-  - alias: design-reviewer
-    backend: claude
-    prompt: "Review for architecture, design quality, and risk."
-
-  - alias: correctness-reviewer
-    backend: codex
-    prompt: "Review for bugs, test coverage, and error handling."
-
-  - alias: compas-reviewer
-    backend: claude
-    workdir: /path/to/compas           # Scoped to a specific repo
-    prompt: "You review compas changes. Run make verify."
-```
-
-Agents without `workdir` use `default_workdir`. Agents with `workdir` always work in that repo. The `implementer` above serves any repo — specify which via the dispatch body. `compas-reviewer` always works in the compas repo.
-
-**Cross-cutting agents** — agents that don't belong to any repo:
-
-```yaml
-agents:
-  - alias: doc-reviewer
-    backend: claude
-    prompt: |
-      You review technical documents against quality standards.
-      Score each section and provide an overall assessment.
-
-  - alias: architect
-    backend: claude
-    prompt: |
-      You analyze codebases and produce technical design evaluations.
-      Reference actual modules and patterns, not abstract advice.
-```
-
-These agents work in `default_workdir` by default but can be dispatched to review any file or document. No `workdir` or `workspace` needed.
-
-### Custom Backends
-
-Define CLI-based backends entirely in YAML using `backend_definitions`. Any CLI tool that accepts a prompt and returns text can be wired in without writing Rust code.
-
-**Minimal example** (aider):
-
-```yaml
-backend_definitions:
-  - name: aider
-    command: aider
-    args: ["--message", "{{instruction}}"]
-
-agents:
-  - alias: aider-dev
-    backend: aider
-    prompt: "You implement changes using aider."
-```
-
-**Full example** (with resume, JSON output, custom ping, env stripping):
-
-```yaml
-backend_definitions:
-  - name: my-tool
-    command: /usr/local/bin/my-tool
-    args: ["--prompt", "{{instruction}}", "--model", "{{model}}"]
-    resume:
-      flag: "--resume"
-      session_id_arg: "{{session_id}}"
-    output:
-      format: json              # plaintext (default) | json | jsonl
-      result_field: data.text   # dot-path into JSON response
-      session_id_field: sid     # field to extract session ID for resume
-    ping:
-      command: my-tool
-      args: ["--health"]
-    env_remove:
-      - ANTHROPIC_API_KEY       # strip keys the tool shouldn't see
-```
-
-**Template variables** available in `args`:
-
-| Variable | Description |
-| --- | --- |
-| `{{instruction}}` | The dispatch message / task text |
-| `{{model}}` | Agent's configured `model` (omitted if absent) |
-| `{{session_id}}` | Previous session ID for resume (omitted if absent) |
-
-**Output formats:**
-
-- `plaintext` (default) — raw stdout is the result text
-- `json` — parse stdout as JSON, extract `result_field` for result text and `session_id_field` for session resume
-- `jsonl` — parse the last JSON line, extract fields as above
-
-**Doctor integration:** `compas doctor` checks that each generic backend's `command` exists on PATH and reports missing commands as warnings.
-
-See [`examples/config-generic.yaml`](examples/config-generic.yaml) for a complete example.
+See the [Configuration Reference](docs/guides/configuration.md) for the full schema and all fields, [`examples/config-generic.yaml`](examples/config-generic.yaml) for a commented starter config, and the [Cookbook](docs/guides/cookbook.md) for real-world patterns (multi-project teams, review chains, fan-out, custom backends, and more).
 
 ## How It Works
 
@@ -765,9 +362,12 @@ compas dashboard
 
 ## More Information
 
+- [Configuration Reference](docs/guides/configuration.md) — full schema, agent fields, handoff chains, schedules, hooks, custom backends
+- [Dashboard Guide](docs/guides/dashboard.md) — tabs, keyboard shortcuts, tips
+- [Cookbook](docs/guides/cookbook.md) — multi-project teams, review chains, fan-out, concurrency tuning, and more
 - [Architecture & internals](docs/project/architecture.md)
-- [Development workflow](AGENTS.md)
 - [Design decisions](docs/project/DECISIONS.md)
+- [Development workflow](AGENTS.md)
 
 ## Development
 
