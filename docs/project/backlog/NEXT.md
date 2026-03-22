@@ -19,7 +19,9 @@ Ordered by priority. Work top item when capacity is available.
 5. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
 6. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
 7. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-8. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+8. MCP-2 — `orch_wait_merge` MCP tool (`orch-wait-mcp.md`)
+9. MCP-3 — `orch_commit` MCP tool (`orch-wait-mcp.md`)
+10. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 

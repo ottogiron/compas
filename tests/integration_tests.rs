@@ -1010,23 +1010,27 @@ mod dispatch_tests {
         assert_eq!(msg.to_alias, "focused");
         assert_eq!(msg.intent, "dispatch");
 
-        // Verify next_step contains a ready-to-use CLI wait command.
+        // Verify next_step references orch_wait MCP tool (not CLI).
         let next_step = json["next_step"].as_str().unwrap();
         assert!(
-            next_step.starts_with("compas wait --thread-id "),
-            "next_step should start with wait command prefix, got: {next_step}"
+            !next_step.contains("compas wait"),
+            "next_step should not be a CLI command, got: {next_step}"
+        );
+        assert!(
+            next_step.contains("orch_wait"),
+            "next_step should reference orch_wait, got: {next_step}"
         );
         assert!(
             next_step.contains("t-dispatch-1"),
             "next_step should contain the thread_id, got: {next_step}"
         );
         assert!(
-            next_step.contains(&format!("--since db:{}", message_id)),
-            "next_step should contain --since db:<message_id>, got: {next_step}"
+            next_step.contains(&format!("db:{}", message_id)),
+            "next_step should contain since_reference with message_id, got: {next_step}"
         );
         assert!(
-            next_step.ends_with("--timeout 900"),
-            "next_step should end with --timeout 900, got: {next_step}"
+            next_step.contains("await_chain"),
+            "next_step should mention await_chain, got: {next_step}"
         );
     }
 
@@ -1092,8 +1096,8 @@ mod dispatch_tests {
         );
         let message_id = json["message_id"].as_i64().unwrap();
         assert!(
-            next_step.contains(&format!("--since db:{}", message_id)),
-            "next_step should contain --since db:<message_id>, got: {next_step}"
+            next_step.contains(&format!("db:{}", message_id)),
+            "next_step should contain since_reference with message_id, got: {next_step}"
         );
     }
 

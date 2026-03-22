@@ -14,6 +14,8 @@ Full lifecycle for dispatching implementation work, getting it reviewed, and clo
 
 Do not use for trivial fixes (typo, single-line config) where dispatch overhead exceeds value.
 
+**Default behavior:** After any `orch_dispatch`, immediately call `orch_wait` to wait for the response. Never dispatch without waiting — the agent's work is not useful until you receive and act on the result.
+
 ## Inputs
 
 - Active ticket or batch context (operator must have called `ticket start` before dispatching)
@@ -79,20 +81,20 @@ Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 
 ### Step 3 — Wait for worker response
 
-Use the CLI wait (not MCP `orch_wait` — removed due to stdio transport timeout issues).
+Use `orch_wait` to block until the agent responds:
 
-```bash
-compas wait \
-  --thread-id <thread-id> \
-  --since db:<dispatch-message-id> \
-  --timeout 900
+```text
+orch_wait(
+  thread_id="<thread-id>",
+  since_reference="db:<dispatch-message-id>",
+  timeout_secs=900,
+  await_chain=true
+)
 ```
 
-`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
-
-> **No `--intent` filter by default.** When omitted, the wait matches any non-trigger reply. This is the safest approach. Agents don't manage intents (ADR-015) — all replies get `response` automatically.
+> **`await_chain=true`** blocks until the entire handoff chain settles (including auto-forwarded reviewers). Omit if you only need the first reply.
 >
-> Add `--await-chain` to block until the entire handoff chain settles (including auto-forwarded reviewers).
+> Progress notifications are sent every 10s to keep the connection alive. If `orch_wait` returns `found=false`, re-issue with the same parameters.
 
 ### Step 4 — Contract check
 
@@ -139,16 +141,15 @@ Save the reviewer `thread_id` and `reference`.
 
 ### Step 7 — Wait for reviewer findings
 
-```bash
-compas wait \
-  --thread-id <reviewer-thread-id> \
-  --since db:<reviewer-dispatch-message-id> \
-  --timeout 300
+```text
+orch_wait(
+  thread_id="<reviewer-thread-id>",
+  since_reference="db:<reviewer-dispatch-message-id>",
+  timeout_secs=300
+)
 ```
 
-`--config <path>` is optional if using the default location (`~/.compas/config.yaml`).
-
-> **Why no `--intent` flag here?** Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
+> Reviewers reply with `response` (the default intent). No filter is needed — any reply from the reviewer thread is the findings.
 
 ### Step 8 — Act on findings
 
@@ -169,7 +170,7 @@ Based on reviewer response:
   orch_close(from="operator", thread_id="<worker-thread-id>", status="completed", note="Approved after review")
   ```
 
-  The close response includes `merge_op_id` for worktree threads. Wait for merge completion:
+  The close response includes `merge_op_id` for worktree threads. Wait for merge completion (CLI only — no MCP equivalent):
 
   ```bash
   compas wait-merge --op-id <merge_op_id> --timeout 120
@@ -232,7 +233,7 @@ Based on reviewer response:
   )
   ```
 
-  Then wait again on the reviewer thread with `--since db:<clarification-message-id>`.
+  Then wait again: `orch_wait(thread_id="<reviewer-thread-id>", since_reference="db:<clarification-message-id>")`.
 
 ### Step 9 — Ticket closure
 
@@ -326,8 +327,7 @@ Completion Status: completed / rejected / abandoned
 
 ## Failure Handling
 
-- **CLI wait timeout:** `compas wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
-- **CLI wait error:** `compas wait` exits `2`. Verify worker process + config path, then retry.
+- **Wait timeout:** `orch_wait` returns `found=false`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to re-wait, abandon, or re-dispatch.
 - **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.

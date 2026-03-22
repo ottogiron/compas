@@ -1,0 +1,3 @@
+kind: Changed
+body: orch_dispatch next_step now directs agents to orch_wait MCP tool instead of compas wait CLI
+time: 2026-03-22T22:39:19.290518+01:00

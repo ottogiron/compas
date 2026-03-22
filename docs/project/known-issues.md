@@ -136,6 +136,38 @@ Then close the thread normally.
 
 **Possible fix:** Add an `orch_commit(thread_id, message)` MCP tool that commits all changes in the thread's worktree. This would close the self-service gap for MCP-only agents.
 
+## Dispatch → wait flow needs redesign for MCP agents
+
+**Severity:** Medium
+**Status:** Open
+
+The `orch_dispatch` → `orch_wait` flow has friction for MCP-connected agents:
+
+1. **`next_step` hint is ambiguous** — the natural language hint tells agents to use `orch_wait` with `await_chain=true`, but agents interpret conditional phrasing ("if the agent uses auto-handoff") as "doesn't apply" and skip the wait entirely.
+
+2. **Dispatch and wait are separate calls** — agents must remember to call `orch_wait` after every `orch_dispatch`. The orch-dispatch skill says "always wait after dispatch" but agents without the skill loaded don't know this. A combined `dispatch_and_wait` tool or an auto-wait option on dispatch would eliminate the gap.
+
+3. **`await_chain` requires knowledge the caller doesn't have** — the caller doesn't know if the target agent has handoff config. Making `await_chain=true` the safe default helps but is still a parameter the caller must remember.
+
+4. **Timeout ceiling mismatch** — the `next_step` hint suggests `timeout_secs=900` but `mcp_wait_max_timeout_secs` silently clamps it. Agents don't know their wait was shortened.
+
+**Additional friction reported by Codex operator (2026-03-22):**
+
+- **Agent discovery** — the agent had to guess `compas-worker` and fail before learning aliases. Listing available aliases in the `orch_dispatch` tool description (or a lighter-weight discovery call) would save a round-trip.
+- **Response attribution is surprising** — dispatched to `compas-dev` but the terminal response came from `compas-reviewer` (via handoff chain). With `await_chain=true`, intermediate hops are invisible. A chain trace in the wait result (e.g., `chain: [compas-dev → compas-reviewer]`) would make the flow legible.
+- **Tool loading ceremony** — agent had to ToolSearch twice (dispatch, then wait) with a confirmation round-trip each time. Pre-loading the core `dispatch/wait/status` trio would make the common path smoother.
+
+**Possible fixes:**
+
+- `orch_dispatch_and_wait` combined tool that dispatches and blocks in one call
+- `auto_wait: true` parameter on `orch_dispatch` that makes it block until response
+- Remove `next_step` field entirely — rely on skill instructions and tool descriptions instead
+- Make `await_chain=true` the server-side default (not a caller responsibility)
+- Include available agent aliases in `orch_dispatch` tool description
+- Add `chain_trace` field to `orch_wait` response showing the handoff path
+
+**Design goal:** The basic dispatch → wait → act protocol should work without loading any skill. Tool descriptions, parameter defaults, and response hints should be sufficient for any MCP-connected agent to use compas correctly on first contact. The `orch-dispatch` skill should only add advanced workflows (reviewer loops, ticket lifecycle, merge queue), not basic operational knowledge.
+
 ## Dashboard: No mouse support
 
 **Severity:** Low

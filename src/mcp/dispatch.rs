@@ -20,7 +20,7 @@ use super::server::{err_text, json_text, OrchestratorMcpServer};
 struct DispatchResult {
     thread_id: String,
     message_id: i64,
-    /// Concrete CLI command to wait for the agent's response.
+    /// MCP tool hint for waiting on the agent's response.
     next_step: String,
     /// The scheduled execution time, echoed back when set.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,7 +137,7 @@ impl OrchestratorMcpServer {
         };
 
         let next_step = format!(
-            "compas wait --thread-id {} --since db:{} --timeout 900",
+            "Use orch_wait with thread_id=\"{}\", since_reference=\"db:{}\", and await_chain=true to wait for the response. Omit await_chain only if you need the first intermediate reply.",
             thread_id, message_id
         );
         Ok(json_text(&DispatchResult {
