@@ -339,12 +339,23 @@ impl Store {
     }
 
     /// Create all tables and enable WAL mode.
+    ///
+    /// **PRAGMA note:** `journal_mode=WAL` is a database-level setting that
+    /// persists, so setting it here (on whichever connection the pool hands
+    /// us) is sufficient.  `busy_timeout` is per-connection and should be
+    /// set via `SqliteConnectOptions::pragma()` in pool construction so
+    /// that *every* connection inherits it.  The PRAGMA here is kept as a
+    /// safety net for test helpers and callers that build pools without
+    /// per-connection pragmas.
     pub async fn setup(&self) -> Result<(), sqlx::Error> {
         // WAL mode for concurrent read/write from MCP + worker processes
         sqlx::query("PRAGMA journal_mode=WAL")
             .execute(&self.pool)
             .await?;
-        // Busy timeout: wait up to 5s for locks instead of failing immediately
+        // Busy timeout: wait up to 5s for locks instead of failing immediately.
+        // NOTE: This only applies to the one connection checked out here.
+        // Production callers must also set busy_timeout via
+        // SqliteConnectOptions::pragma() to cover ALL pool connections.
         sqlx::query("PRAGMA busy_timeout=5000")
             .execute(&self.pool)
             .await?;

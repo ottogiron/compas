@@ -102,7 +102,7 @@ pub async fn execute_trigger(
         None => {
             let err = format!("no agent config for alias '{}'", agent_alias);
             tracing::error!(%err);
-            if let Ok(0) = store
+            match store
                 .fail_execution(
                     &exec_id,
                     &err,
@@ -116,7 +116,13 @@ pub async fn execute_trigger(
                 )
                 .await
             {
-                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+                Ok(0) => {
+                    tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+                }
+                Err(e) => {
+                    tracing::error!(exec_id = %exec_id, error = %e, "fail_execution failed");
+                }
+                _ => {}
             }
             return TriggerOutput {
                 execution_id: exec_id,
@@ -141,7 +147,7 @@ pub async fn execute_trigger(
         Err(e) => {
             let err = format!("backend lookup failed: {}", e);
             tracing::error!(%err, agent = %agent_alias);
-            if let Ok(0) = store
+            match store
                 .fail_execution(
                     &exec_id,
                     &err,
@@ -155,7 +161,13 @@ pub async fn execute_trigger(
                 )
                 .await
             {
-                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+                Ok(0) => {
+                    tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+                }
+                Err(e) => {
+                    tracing::error!(exec_id = %exec_id, error = %e, "fail_execution failed");
+                }
+                _ => {}
             }
             return TriggerOutput {
                 execution_id: exec_id,
@@ -419,12 +431,17 @@ pub async fn execute_trigger(
                 }
             }
 
+            // Finalize the execution row in the DB. Retries up to 2 additional
+            // times with backoff to survive transient SQLITE_BUSY errors that
+            // occur when another connection holds the write lock (telemetry
+            // flush, heartbeat, stale checker, MCP server).
+            let output_preview = truncate(&output_text, 4096);
             if result.success {
-                match store
-                    .complete_execution(
+                let finalized = finalize_with_retry(3, || {
+                    store.complete_execution(
                         &exec_id,
                         Some(0),
-                        Some(&truncate(&output_text, 4096)),
+                        Some(&output_preview),
                         parsed_intent.as_deref(),
                         duration_ms,
                         cost_usd,
@@ -432,8 +449,9 @@ pub async fn execute_trigger(
                         tokens_out,
                         num_turns,
                     )
-                    .await
-                {
+                })
+                .await;
+                match finalized {
                     Ok(0) => {
                         tracing::warn!(
                             exec_id = %exec_id,
@@ -441,15 +459,19 @@ pub async fn execute_trigger(
                         );
                     }
                     Err(e) => {
-                        tracing::warn!(exec_id = %exec_id, error = %e, "complete_execution failed");
+                        tracing::error!(
+                            exec_id = %exec_id,
+                            error = %e,
+                            "complete_execution failed after retries — execution stuck in 'executing'"
+                        );
                     }
                     _ => {}
                 }
             } else {
-                match store
-                    .fail_execution(
+                let finalized = finalize_with_retry(3, || {
+                    store.fail_execution(
                         &exec_id,
-                        &truncate(&output_text, 4096),
+                        &output_preview,
                         Some(1),
                         duration_ms,
                         ExecutionStatus::Failed,
@@ -458,8 +480,9 @@ pub async fn execute_trigger(
                         tokens_out,
                         num_turns,
                     )
-                    .await
-                {
+                })
+                .await;
+                match finalized {
                     Ok(0) => {
                         tracing::warn!(
                             exec_id = %exec_id,
@@ -467,7 +490,11 @@ pub async fn execute_trigger(
                         );
                     }
                     Err(e) => {
-                        tracing::warn!(exec_id = %exec_id, error = %e, "fail_execution failed");
+                        tracing::error!(
+                            exec_id = %exec_id,
+                            error = %e,
+                            "fail_execution failed after retries — execution stuck in 'executing'"
+                        );
                     }
                     _ => {}
                 }
@@ -511,21 +538,32 @@ pub async fn execute_trigger(
             } else {
                 Some(crate::backend::classify_error(false, false, &err))
             };
-            if let Ok(0) = store
-                .fail_execution(
+            let finalized = finalize_with_retry(3, || {
+                store.fail_execution(
                     &exec_id,
                     &err,
                     None,
                     duration_ms,
-                    status,
+                    status.clone(),
                     None,
                     None,
                     None,
                     None,
                 )
-                .await
-            {
-                tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+            })
+            .await;
+            match finalized {
+                Ok(0) => {
+                    tracing::warn!(exec_id = %exec_id, "fail_execution was a no-op — already terminal");
+                }
+                Err(e) => {
+                    tracing::error!(
+                        exec_id = %exec_id,
+                        error = %e,
+                        "fail_execution failed after retries — execution stuck in 'executing'"
+                    );
+                }
+                _ => {}
             }
             // Persist error category for diagnostics.
             if let Some(ref cat) = error_category {
@@ -560,6 +598,31 @@ fn truncate(s: &str, max: usize) -> String {
     } else {
         format!("{}...(truncated)", &s[..max])
     }
+}
+
+/// Retry a store finalization call up to `max_attempts` times with
+/// exponential backoff (200ms, 400ms, 800ms, …). Returns the result of
+/// the last attempt. Only retries on `Err`; any `Ok` is returned
+/// immediately.
+async fn finalize_with_retry<F, Fut>(max_attempts: u32, op: F) -> Result<u64, sqlx::Error>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<u64, sqlx::Error>>,
+{
+    let mut last_err = None;
+    for attempt in 0..max_attempts {
+        match op().await {
+            Ok(rows) => return Ok(rows),
+            Err(e) => {
+                last_err = Some(e);
+                if attempt + 1 < max_attempts {
+                    tokio::time::sleep(std::time::Duration::from_millis(200 * (1u64 << attempt)))
+                        .await;
+                }
+            }
+        }
+    }
+    Err(last_err.expect("max_attempts must be >= 1"))
 }
 
 #[cfg(test)]
@@ -604,5 +667,57 @@ mod tests {
         let should_persist =
             !backend_session_id.is_empty() && backend_session_id != internal_session_id;
         assert!(!should_persist, "empty session ID must not be persisted");
+    }
+
+    #[tokio::test]
+    async fn test_finalize_with_retry_succeeds_first_attempt() {
+        let result = finalize_with_retry(3, || async { Ok(1u64) }).await;
+        assert_eq!(result.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_finalize_with_retry_succeeds_after_failures() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+        let result = finalize_with_retry(3, || {
+            let n = attempts.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if n < 2 {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    Ok(1u64)
+                }
+            }
+        })
+        .await;
+        assert_eq!(result.unwrap(), 1);
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_finalize_with_retry_exhausts_all_attempts() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+        let result = finalize_with_retry(3, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Err::<u64, _>(sqlx::Error::PoolTimedOut) }
+        })
+        .await;
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn test_finalize_with_retry_no_retry_on_success() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let attempts = AtomicU32::new(0);
+        let result = finalize_with_retry(3, || {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            async { Ok(0u64) }
+        })
+        .await;
+        // Ok(0) should be returned immediately without retries.
+        assert_eq!(result.unwrap(), 0);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

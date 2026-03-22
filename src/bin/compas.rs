@@ -18,6 +18,7 @@ use compas::worker::{self, WorkerRunner};
 use rmcp::ServiceExt;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing_subscriber::EnvFilter;
@@ -303,11 +304,19 @@ async fn connect_db(
     config: &compas::config::types::OrchestratorConfig,
 ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    // Per-connection PRAGMAs: busy_timeout and journal_mode MUST be set on
+    // every connection in the pool, not just once during setup(). SQLite
+    // PRAGMAs like busy_timeout are per-connection state — without this,
+    // connections checked out from the pool may have busy_timeout=0 (the
+    // default), causing SQLITE_BUSY failures under even minor contention.
+    let connect_options = sqlx::sqlite::SqliteConnectOptions::from_str(&db_url)?
+        .pragma("busy_timeout", "5000")
+        .pragma("journal_mode", "wal");
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(config.database.max_connections)
         .min_connections(config.database.min_connections)
         .acquire_timeout(Duration::from_millis(config.database.acquire_timeout_ms))
-        .connect(&db_url)
+        .connect_with(connect_options)
         .await?;
     let store = compas::store::Store::new(pool.clone());
     store.setup().await?;

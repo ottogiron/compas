@@ -1,0 +1,3 @@
+kind: Fixed
+body: 'Fix execution stuck in ''executing'': set busy_timeout on every pool connection and retry finalization with backoff'
+time: 2026-03-22T20:46:20.98607+01:00
