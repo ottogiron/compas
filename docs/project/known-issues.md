@@ -112,6 +112,28 @@ The Claude CLI process has already exited (no orphaned process). The response is
 
 **Fix:** Set `busy_timeout` via `SqliteConnectOptions::pragma()` so every pool connection inherits it, and added `finalize_with_retry` with exponential backoff as defense-in-depth. Finalization failures now log at `error` level.
 
+## MCP-only agents cannot commit worktree changes
+
+**Severity:** Medium
+**Status:** Open
+
+Agents connected via MCP (e.g., Claude Desktop) can read files, edit files, and call all `orch_*` tools — but they have no shell access. They cannot run `git commit` in their worktree. This means:
+
+- The agent finishes editing files in the worktree
+- `orch_close(status="completed")` triggers auto-merge, but there's nothing to merge (changes are uncommitted)
+- The merge is a no-op; the worktree is flagged dirty and cleanup retries indefinitely
+- The operator must manually commit in the worktree before closing the thread
+
+This breaks the self-service loop for MCP-only agents. CLI-based agents (Claude Code, Codex, OpenCode) don't have this problem — they commit as part of their execution.
+
+**Workaround:** The operator commits on the agent's behalf:
+```bash
+git -C .compas-worktrees/<thread-id> add -A && git -C .compas-worktrees/<thread-id> commit -m "<description>"
+```
+Then close the thread normally.
+
+**Possible fix:** Add an `orch_commit(thread_id, message)` MCP tool that commits all changes in the thread's worktree. This would close the self-service gap for MCP-only agents.
+
 ## Dashboard: No mouse support
 
 **Severity:** Low
