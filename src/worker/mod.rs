@@ -3,6 +3,7 @@
 //! The worker polls the `executions` table for queued work, enforces per-agent
 //! concurrency, and runs backend triggers via `tokio::task::spawn_blocking`.
 
+pub mod circuit_breaker;
 mod executor;
 pub mod guard;
 mod loop_runner;

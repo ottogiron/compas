@@ -706,6 +706,18 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // GAP-1: circuit_breaker_state table for cross-process visibility
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS circuit_breaker_state (
+                backend               TEXT PRIMARY KEY,
+                state                 TEXT NOT NULL DEFAULT 'closed',
+                consecutive_failures  INTEGER NOT NULL DEFAULT 0,
+                updated_at            INTEGER NOT NULL
+            )",
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -2073,6 +2085,26 @@ impl Store {
         Ok(())
     }
 
+    /// Clear backend session IDs for a thread+agent so the next execution starts fresh.
+    ///
+    /// Used when a stale session ID is detected — clears all persisted session IDs
+    /// for the given thread+agent pair so the retry starts a new backend session.
+    pub async fn clear_backend_session_id(
+        &self,
+        thread_id: &str,
+        agent_alias: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE executions SET backend_session_id = NULL
+             WHERE thread_id = ? AND agent_alias = ? AND backend_session_id IS NOT NULL",
+        )
+        .bind(thread_id)
+        .bind(agent_alias)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     // ── Retry support ───────────────────────────────────────────────────
 
     /// Set the error category on an execution after failure classification.
@@ -2087,6 +2119,67 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Re-queue a claimed execution by setting its retry_after timestamp.
+    ///
+    /// Used by the circuit breaker to delay execution when the backend
+    /// circuit is open. Resets the execution to `queued` status and clears
+    /// `picked_up_at` / `started_at` so it can be re-claimed after the delay.
+    pub async fn set_execution_retry_after(
+        &self,
+        execution_id: &str,
+        retry_after: i64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "UPDATE executions
+             SET status = 'queued', retry_after = ?, picked_up_at = NULL, started_at = NULL
+             WHERE id = ?",
+        )
+        .bind(retry_after)
+        .bind(execution_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // ── Circuit breaker persistence ──────────────────────────────────
+
+    /// Upsert circuit breaker state for cross-process visibility.
+    pub async fn set_circuit_breaker_state(
+        &self,
+        backend: &str,
+        state: &str,
+        consecutive_failures: u32,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            "INSERT INTO circuit_breaker_state (backend, state, consecutive_failures, updated_at)
+             VALUES (?, ?, ?, strftime('%s','now'))
+             ON CONFLICT(backend) DO UPDATE SET
+               state = excluded.state,
+               consecutive_failures = excluded.consecutive_failures,
+               updated_at = excluded.updated_at",
+        )
+        .bind(backend)
+        .bind(state)
+        .bind(consecutive_failures)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Get circuit breaker states for all backends.
+    ///
+    /// Returns `(backend, state, consecutive_failures)` tuples.
+    pub async fn get_circuit_breaker_states(
+        &self,
+    ) -> Result<Vec<(String, String, u32)>, sqlx::Error> {
+        let rows: Vec<(String, String, u32)> = sqlx::query_as(
+            "SELECT backend, state, consecutive_failures FROM circuit_breaker_state",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Insert a retry execution for a failed execution.
@@ -5055,5 +5148,126 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all["sched-a"], (1700000120, 2));
         assert_eq!(all["sched-b"], (1700000060, 1));
+    }
+
+    // ── GAP-2b: clear_backend_session_id ────────────────────────────────
+
+    #[tokio::test]
+    async fn test_clear_backend_session_id() {
+        let store = test_store().await;
+
+        // Create thread and two executions with session IDs
+        store
+            .ensure_thread("thread-clear", None, None)
+            .await
+            .unwrap();
+        let exec_id_1 = store
+            .insert_execution("thread-clear", "agent-a")
+            .await
+            .unwrap();
+        store
+            .set_backend_session_id(&exec_id_1, "sid-1")
+            .await
+            .unwrap();
+        let exec_id_2 = store
+            .insert_execution("thread-clear", "agent-a")
+            .await
+            .unwrap();
+        store
+            .set_backend_session_id(&exec_id_2, "sid-2")
+            .await
+            .unwrap();
+
+        // Verify session IDs are set
+        let sid = store
+            .get_last_backend_session_id("thread-clear", "agent-a")
+            .await
+            .unwrap();
+        assert!(sid.is_some());
+
+        // Clear and verify
+        store
+            .clear_backend_session_id("thread-clear", "agent-a")
+            .await
+            .unwrap();
+        let sid_after = store
+            .get_last_backend_session_id("thread-clear", "agent-a")
+            .await
+            .unwrap();
+        assert!(sid_after.is_none(), "session IDs should be cleared");
+    }
+
+    // ── GAP-1: circuit breaker state CRUD ───────────────────────────────
+
+    #[tokio::test]
+    async fn test_circuit_breaker_state_crud() {
+        let store = test_store().await;
+
+        // Initially empty
+        let states = store.get_circuit_breaker_states().await.unwrap();
+        assert!(states.is_empty());
+
+        // Insert
+        store
+            .set_circuit_breaker_state("claude", "open", 3)
+            .await
+            .unwrap();
+        let states = store.get_circuit_breaker_states().await.unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].0, "claude");
+        assert_eq!(states[0].1, "open");
+        assert_eq!(states[0].2, 3);
+
+        // Upsert (update existing)
+        store
+            .set_circuit_breaker_state("claude", "closed", 0)
+            .await
+            .unwrap();
+        let states = store.get_circuit_breaker_states().await.unwrap();
+        assert_eq!(states.len(), 1);
+        assert_eq!(states[0].1, "closed");
+        assert_eq!(states[0].2, 0);
+
+        // Multiple backends
+        store
+            .set_circuit_breaker_state("codex", "half_open", 2)
+            .await
+            .unwrap();
+        let states = store.get_circuit_breaker_states().await.unwrap();
+        assert_eq!(states.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_set_execution_retry_after() {
+        let store = test_store().await;
+
+        store
+            .ensure_thread("thread-retry", None, None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution("thread-retry", "agent-a")
+            .await
+            .unwrap();
+
+        // Claim the execution (marks it picked_up)
+        let claimed = store.claim_next_execution(1).await.unwrap();
+        assert!(claimed.is_some());
+        let claimed = claimed.unwrap();
+        assert_eq!(claimed.id, exec_id);
+
+        // Re-queue with retry_after
+        let future_ts = chrono::Utc::now().timestamp() + 60;
+        store
+            .set_execution_retry_after(&exec_id, future_ts)
+            .await
+            .unwrap();
+
+        // Should not be claimable yet (retry_after in the future)
+        let claimed_again = store.claim_next_execution(1).await.unwrap();
+        assert!(
+            claimed_again.is_none(),
+            "should not claim before retry_after"
+        );
     }
 }

@@ -100,6 +100,8 @@ pub struct AgentsData {
     pub fetched_at: Instant,
     /// Per-agent cost and token breakdown.
     pub cost_by_agent: Vec<AgentCostSummary>,
+    /// Circuit breaker states per backend: `[(backend, state, failures), …]`.
+    pub circuit_states: Vec<(String, String, u32)>,
 }
 
 // ── Executions data ───────────────────────────────────────────────────────────
@@ -490,12 +492,15 @@ impl App {
 
                 let cost_by_agent = store.cost_by_agent().await.unwrap_or_default();
 
+                let circuit_states = store.get_circuit_breaker_states().await.unwrap_or_default();
+
                 Ok::<_, sqlx::Error>(AgentsData {
                     executions_by_agent,
                     active_counts,
                     heartbeat_age_secs,
                     fetched_at: Instant::now(),
                     cost_by_agent,
+                    circuit_states,
                 })
             })
             .await

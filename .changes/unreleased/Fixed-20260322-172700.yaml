@@ -1,0 +1,3 @@
+kind: Fixed
+body: Prevent internal session UUID from being persisted as backend session ID
+time: 2026-03-22T17:27:00.789624+01:00
