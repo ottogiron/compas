@@ -1,8 +1,9 @@
 //! Merge execution engine with temporary worktree isolation.
 //!
 //! All merge operations run in disposable worktrees under
-//! `{repo_root}/.compas-worktrees/merge-{op_id}/` — the operator's main
-//! checkout is never touched.
+//! `{repo_root}/.compas-worktrees/merge-{op_id}/`. After a successful merge,
+//! the operator's working tree is synced via `git reset --keep` when the target
+//! branch is currently checked out.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -140,11 +141,14 @@ impl MergeExecutor {
 
     /// Execute a merge operation in a temporary worktree.
     ///
-    /// The merge happens in `.compas-worktrees/merge-{op.id}` — the operator's
-    /// main checkout is never modified. A temporary branch is used because the
-    /// target branch may already be checked out in the main repo (git forbids
-    /// two worktrees on the same branch). On success the target branch ref is
-    /// updated to the merge result.
+    /// The merge happens in `.compas-worktrees/merge-{op.id}` using a temporary
+    /// branch (git forbids two worktrees on the same branch). On success:
+    ///
+    /// - If the target branch is checked out in the main repo, `git reset --keep`
+    ///   advances the ref, index, and working tree together. Aborts safely if
+    ///   uncommitted changes conflict with merged files.
+    /// - If the target branch is NOT checked out, `git update-ref` moves only
+    ///   the branch pointer (no working tree to sync).
     pub fn execute(op: &MergeOperation, repo_root: &Path) -> Result<MergeResult, String> {
         let worktree_path = repo_root
             .join(".compas-worktrees")
@@ -218,25 +222,89 @@ impl MergeExecutor {
                 .trim()
                 .to_string();
 
-            // Update the target branch ref to the merge result
-            let update_ref = Command::new("git")
-                .args([
-                    "-C",
-                    &repo_str,
-                    "update-ref",
-                    &format!("refs/heads/{}", op.target_branch),
-                    &new_sha,
-                ])
+            // Check if the target branch is currently checked out in the main repo.
+            // This determines which strategy we use to advance the branch:
+            //   - Checked out: `git reset --keep` moves the ref AND syncs the working
+            //     tree + index in one step. --keep aborts if uncommitted changes to
+            //     tracked files would be overwritten (safe default).
+            //   - Not checked out: `git update-ref` moves only the ref (no working
+            //     tree to sync).
+            //   - Detached HEAD: `rev-parse --abbrev-ref` returns "HEAD", which won't
+            //     match any target branch name, so falls through to update-ref.
+            let current_branch = Command::new("git")
+                .args(["-C", &repo_str, "rev-parse", "--abbrev-ref", "HEAD"])
                 .output()
-                .map_err(|e| format!("failed to update target branch ref: {}", e))?;
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    } else {
+                        None
+                    }
+                });
 
-            if !update_ref.status.success() {
-                let stderr = String::from_utf8_lossy(&update_ref.stderr);
-                return Err(format!(
-                    "failed to update '{}' to merge result: {}",
-                    op.target_branch,
-                    stderr.trim()
-                ));
+            if current_branch.as_deref() == Some(&op.target_branch) {
+                // Target branch is checked out — use reset --keep to advance the
+                // ref, index, and working tree together.
+                let reset = Command::new("git")
+                    .args(["-C", &repo_str, "reset", "--keep", &new_sha])
+                    .output()
+                    .map_err(|e| format!("failed to reset working tree: {}", e))?;
+
+                if !reset.status.success() {
+                    let stderr = String::from_utf8_lossy(&reset.stderr);
+                    // Fall back to update-ref so the merge isn't lost, but warn
+                    // that the working tree is out of sync.
+                    tracing::warn!(
+                        target_branch = %op.target_branch,
+                        error = %stderr.trim(),
+                        "reset --keep failed (uncommitted changes conflict with \
+                         merged files); falling back to update-ref — working tree \
+                         will be out of sync; run `git stash && git reset --keep HEAD \
+                         && git stash pop` to sync, or `git reset --hard HEAD` to \
+                         discard local changes"
+                    );
+                    let update_ref = Command::new("git")
+                        .args([
+                            "-C",
+                            &repo_str,
+                            "update-ref",
+                            &format!("refs/heads/{}", op.target_branch),
+                            &new_sha,
+                        ])
+                        .output()
+                        .map_err(|e| format!("failed to update target branch ref: {}", e))?;
+
+                    if !update_ref.status.success() {
+                        let stderr = String::from_utf8_lossy(&update_ref.stderr);
+                        return Err(format!(
+                            "failed to update '{}' to merge result: {}",
+                            op.target_branch,
+                            stderr.trim()
+                        ));
+                    }
+                }
+            } else {
+                // Target branch is NOT checked out — just move the ref.
+                let update_ref = Command::new("git")
+                    .args([
+                        "-C",
+                        &repo_str,
+                        "update-ref",
+                        &format!("refs/heads/{}", op.target_branch),
+                        &new_sha,
+                    ])
+                    .output()
+                    .map_err(|e| format!("failed to update target branch ref: {}", e))?;
+
+                if !update_ref.status.success() {
+                    let stderr = String::from_utf8_lossy(&update_ref.stderr);
+                    return Err(format!(
+                        "failed to update '{}' to merge result: {}",
+                        op.target_branch,
+                        stderr.trim()
+                    ));
+                }
             }
         }
 
@@ -718,6 +786,161 @@ mod tests {
         assert!(result.summary.unwrap().contains("Merged"));
         assert!(result.error.is_none());
         assert!(result.conflict_files.is_none());
+    }
+
+    #[test]
+    fn test_merge_execute_syncs_working_tree() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        // Add a base file on the default branch
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+
+        // Create a source branch with a new file
+        create_source_branch(
+            repo.path(),
+            "compas/sync-thread",
+            "synced.txt",
+            "synced content",
+        );
+
+        let op = make_test_merge_op("sync-ok", "compas/sync-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+
+        assert!(result.success, "merge should succeed");
+
+        // The merged file should exist in the working tree — not just in the git ref
+        let synced_path = repo.path().join("synced.txt");
+        assert!(
+            synced_path.exists(),
+            "merged file should be present in working tree after merge"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&synced_path).unwrap(),
+            "synced content",
+            "working tree file content should match the merged commit"
+        );
+    }
+
+    #[test]
+    fn test_merge_execute_fallback_when_dirty_working_tree() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        let repo_str = repo.path().to_string_lossy().to_string();
+
+        // Add a base file on the default branch
+        commit_file(repo.path(), "shared.txt", "original", "add shared file");
+
+        // Create a source branch that modifies the same file
+        create_source_branch(
+            repo.path(),
+            "compas/dirty-thread",
+            "new-file.txt",
+            "new content",
+        );
+        // Also modify shared.txt on the source branch
+        let source_path = repo.path().to_string_lossy().to_string();
+        let _ = Command::new("git")
+            .args(["-C", &source_path, "checkout", "compas/dirty-thread"])
+            .output()
+            .unwrap();
+        commit_file(
+            repo.path(),
+            "shared.txt",
+            "from source",
+            "modify shared on source",
+        );
+        let _ = Command::new("git")
+            .args(["-C", &source_path, "checkout", "-"])
+            .output()
+            .unwrap();
+
+        // Create uncommitted changes to shared.txt in the working tree
+        // (this will cause reset --keep to fail)
+        std::fs::write(repo.path().join("shared.txt"), "uncommitted local edit").unwrap();
+
+        let op = make_test_merge_op("dirty-ok", "compas/dirty-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+
+        assert!(
+            result.success,
+            "merge should still succeed via update-ref fallback"
+        );
+
+        // The ref should be advanced even though working tree sync failed
+        let rev = Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "rev-parse",
+                &format!("refs/heads/{}", target),
+            ])
+            .output()
+            .unwrap();
+        let ref_sha = String::from_utf8_lossy(&rev.stdout).trim().to_string();
+
+        // Verify the ref points to a commit that contains new-file.txt
+        let show = Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "show",
+                &format!("{}:new-file.txt", ref_sha),
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            show.status.success(),
+            "target branch ref should contain the merged file"
+        );
+    }
+
+    #[test]
+    fn test_merge_execute_syncs_working_tree_rebase() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/rebase-sync",
+            "rebased.txt",
+            "rebased content",
+        );
+
+        let op = make_test_merge_op("rebase-sync", "compas/rebase-sync", &target, "rebase");
+        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+
+        assert!(result.success, "rebase should succeed");
+        let rebased_path = repo.path().join("rebased.txt");
+        assert!(
+            rebased_path.exists(),
+            "rebased file should be present in working tree"
+        );
+    }
+
+    #[test]
+    fn test_merge_execute_syncs_working_tree_squash() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/squash-sync",
+            "squashed.txt",
+            "squashed content",
+        );
+
+        let op = make_test_merge_op("squash-sync", "compas/squash-sync", &target, "squash");
+        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+
+        assert!(result.success, "squash should succeed");
+        let squashed_path = repo.path().join("squashed.txt");
+        assert!(
+            squashed_path.exists(),
+            "squashed file should be present in working tree"
+        );
     }
 
     #[test]
