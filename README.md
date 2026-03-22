@@ -317,7 +317,7 @@ Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a 
 
 | Tool | What it does |
 | --- | --- |
-| `orch_health` | Worker heartbeat + backend health pings |
+| `orch_health` | Worker heartbeat, backend health pings, circuit breaker state (`circuit_state`, `circuit_failures`) |
 | `orch_list_agents` | List configured agents with backend/model info |
 | `orch_session_info` | Current MCP session metadata |
 | `orch_worktrees` | List active git worktrees for agent isolation |

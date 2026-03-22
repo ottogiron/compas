@@ -139,20 +139,45 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
             .find(|c| c.agent_alias == agent.alias)
     });
 
+    // ── Circuit breaker state for this agent's backend ──────────────────────
+    let circuit_info = app.agents_data.as_ref().and_then(|d| {
+        d.circuit_states
+            .iter()
+            .find(|(b, _, _)| *b == agent.backend)
+            .map(|(_, state, _failures)| state.clone())
+    });
+
     // ── Assemble card lines ───────────────────────────────────────────────────
+    let mut row1_spans: Vec<Span<'static>> = vec![
+        Span::from("  "),
+        "● ".fg(health_color),
+        format!("{:<12}", agent.alias).fg(TEXT_BRIGHT).bold(),
+        "│ ".fg(BORDER_DIM),
+        Span::from(format!("backend: {}  ", agent.backend)),
+        "│ ".fg(BORDER_DIM),
+        Span::from(format!("model: {}  ", model_label)),
+        "│ ".fg(BORDER_DIM),
+        Span::from(format!("role: {}", role_label)),
+    ];
+
+    // Append circuit breaker indicator when not closed.
+    if let Some(ref cb_state) = circuit_info {
+        match cb_state.as_str() {
+            "open" => {
+                row1_spans.push("  ".into());
+                row1_spans.push("CB:OPEN".fg(FAILURE).bold());
+            }
+            "half_open" => {
+                row1_spans.push("  ".into());
+                row1_spans.push("CB:PROBE".fg(ACCENT).bold());
+            }
+            _ => {} // "closed" — no indicator
+        }
+    }
+
     let mut lines: Vec<Line> = vec![
-        // Row 1: config summary
-        Line::from(vec![
-            Span::from("  "),
-            "● ".fg(health_color),
-            format!("{:<12}", agent.alias).fg(TEXT_BRIGHT).bold(),
-            "│ ".fg(BORDER_DIM),
-            Span::from(format!("backend: {}  ", agent.backend)),
-            "│ ".fg(BORDER_DIM),
-            Span::from(format!("model: {}  ", model_label)),
-            "│ ".fg(BORDER_DIM),
-            Span::from(format!("role: {}", role_label)),
-        ]),
+        // Row 1: config summary (with optional circuit breaker indicator)
+        Line::from(row1_spans),
         // Row 2: active execution count
         Line::from(vec![
             Span::from("  Active: "),

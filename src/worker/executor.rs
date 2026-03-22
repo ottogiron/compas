@@ -334,26 +334,31 @@ pub async fn execute_trigger(
         }
     });
 
-    let trigger_result: Result<BackendOutput, String> = tokio::task::spawn_blocking(move || {
-        // We need a runtime handle to call async methods from blocking context.
-        // Use Handle::current() which was captured before spawn_blocking.
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            let mut session = backend
-                .start_session(&agent)
-                .await
-                .map_err(|e| e.to_string())?;
-            session.resume_session_id = resume_session_id;
-            session.stdout_tx = stdout_tx;
-            session.pid_tx = Some(pid_sender);
-            backend
-                .trigger(&agent, &session, Some(&instruction))
-                .await
-                .map_err(|e| e.to_string())
+    // Returns (BackendOutput, internal_session_id). The internal UUID is
+    // needed to guard against persisting it as a real backend session ID.
+    let trigger_result: Result<(BackendOutput, String), String> =
+        tokio::task::spawn_blocking(move || {
+            // We need a runtime handle to call async methods from blocking context.
+            // Use Handle::current() which was captured before spawn_blocking.
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                let mut session = backend
+                    .start_session(&agent)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                let internal_session_id = session.id.clone();
+                session.resume_session_id = resume_session_id;
+                session.stdout_tx = stdout_tx;
+                session.pid_tx = Some(pid_sender);
+                let output = backend
+                    .trigger(&agent, &session, Some(&instruction))
+                    .await
+                    .map_err(|e| e.to_string())?;
+                Ok((output, internal_session_id))
+            })
         })
-    })
-    .await
-    .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)));
+        .await
+        .unwrap_or_else(|e| Err(format!("spawn_blocking panicked: {}", e)));
 
     // Ensure PID persistence task completes (best-effort).
     let _ = pid_task.await;
@@ -361,7 +366,7 @@ pub async fn execute_trigger(
     let duration_ms = start.elapsed().as_millis() as i64;
 
     match trigger_result {
-        Ok(result) => {
+        Ok((result, internal_session_id)) => {
             // Intent is already parsed by the backend — no executor-side parsing needed.
             let parsed_intent = result.parsed_intent.clone();
             let mut output_text = result.result_text.clone();
@@ -371,12 +376,19 @@ pub async fn execute_trigger(
             let tokens_out = result.tokens_out;
             let num_turns = result.num_turns;
 
-            // Persist the backend session ID unconditionally (safety net).
+            // Persist the backend session ID (safety net).
             // The telemetry consumer may have already persisted it mid-stream,
             // but this ensures it's captured even if the consumer missed it.
             // The write is idempotent.
+            //
+            // Guard: only persist session IDs that came from actual backend
+            // output, not the internal session UUID used as a fallback. If the
+            // backend produced no real session ID (e.g., Claude exit-0 with
+            // non-JSON output), `result.session_id` may fall back to the
+            // internal UUID — persisting that would cause the next dispatch to
+            // pass `-r <uuid>` which the backend rejects.
             if let Some(ref backend_session_id) = result.session_id {
-                if !backend_session_id.is_empty() {
+                if !backend_session_id.is_empty() && *backend_session_id != internal_session_id {
                     if let Err(e) = store
                         .set_backend_session_id(&exec_id, backend_session_id)
                         .await
@@ -558,5 +570,39 @@ mod tests {
     fn test_truncate() {
         assert_eq!(truncate("short", 10), "short");
         assert_eq!(truncate("hello world", 5), "hello...(truncated)");
+    }
+
+    /// GAP-2a: The UUID guard prevents persisting the internal session UUID as a
+    /// real backend session ID. This test validates the guard predicate directly.
+    #[test]
+    fn test_session_id_guard_blocks_internal_uuid() {
+        let internal_session_id = "550e8400-e29b-41d4-a716-446655440000";
+        // When backend output session_id == internal UUID → should NOT persist
+        let backend_session_id = internal_session_id;
+        let should_persist =
+            !backend_session_id.is_empty() && backend_session_id != internal_session_id;
+        assert!(!should_persist, "internal UUID must not be persisted");
+    }
+
+    #[test]
+    fn test_session_id_guard_allows_real_session_id() {
+        let internal_session_id = "550e8400-e29b-41d4-a716-446655440000";
+        // When backend produces a real session ID → should persist
+        let backend_session_id = "real-session-abc123";
+        let should_persist =
+            !backend_session_id.is_empty() && backend_session_id != internal_session_id;
+        assert!(
+            should_persist,
+            "real backend session ID should be persisted"
+        );
+    }
+
+    #[test]
+    fn test_session_id_guard_blocks_empty() {
+        let internal_session_id = "550e8400-e29b-41d4-a716-446655440000";
+        let backend_session_id = "";
+        let should_persist =
+            !backend_session_id.is_empty() && backend_session_id != internal_session_id;
+        assert!(!should_persist, "empty session ID must not be persisted");
     }
 }

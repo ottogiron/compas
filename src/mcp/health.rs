@@ -78,6 +78,8 @@ impl OrchestratorMcpServer {
             ping_latency_ms: u64,
             ping_detail: Option<String>,
             cached: bool,
+            circuit_state: String,
+            circuit_failures: u32,
         }
 
         #[derive(Serialize)]
@@ -121,11 +123,26 @@ impl OrchestratorMcpServer {
         let ping_timeout = config.orchestration.ping_timeout_secs;
         let cache_ttl = Duration::from_secs(config.orchestration.ping_cache_ttl_secs);
 
+        // Fetch circuit breaker states for all backends.
+        let cb_states: HashMap<String, (String, u32)> = self
+            .store
+            .get_circuit_breaker_states()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(backend, state, failures)| (backend, (state, failures)))
+            .collect();
+
         // Partition agents into cache-hit vs cache-miss.
         let mut agent_health: Vec<AgentHealth> = Vec::with_capacity(agents_to_check.len());
         let mut need_ping: Vec<usize> = Vec::new(); // indices into agents_to_check
 
         for (i, agent_cfg) in agents_to_check.iter().enumerate() {
+            let (circuit_state, circuit_failures) = cb_states
+                .get(&agent_cfg.backend)
+                .cloned()
+                .unwrap_or_else(|| ("closed".to_string(), 0));
+
             if let Some(cached) = self.ping_cache.get(&agent_cfg.alias, cache_ttl) {
                 agent_health.push(AgentHealth {
                     alias: agent_cfg.alias.clone(),
@@ -134,6 +151,8 @@ impl OrchestratorMcpServer {
                     ping_latency_ms: cached.latency_ms,
                     ping_detail: cached.detail,
                     cached: true,
+                    circuit_state,
+                    circuit_failures,
                 });
             } else {
                 // Placeholder; will be filled after parallel pings.
@@ -144,6 +163,8 @@ impl OrchestratorMcpServer {
                     ping_latency_ms: 0,
                     ping_detail: None,
                     cached: false,
+                    circuit_state,
+                    circuit_failures,
                 });
                 need_ping.push(i);
             }

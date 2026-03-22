@@ -19,26 +19,25 @@ Dashboard now uses `tokio::broadcast` event channel for push-based updates. SQLi
 ## Claude: internal UUID may be saved as backend session ID
 
 **Severity:** Low
-**Status:** Open
+**Status:** Fixed (GAP-2a)
 
-If Claude exits 0 but produces non-JSON output (rare — startup failures, rate-limit splash pages), the internal UUID is saved as `backend_session_id`. The next dispatch passes `-r <uuid>` to Claude CLI, which rejects it as a non-existent session, causing execution failure.
-
-**Workaround:** Abandon the thread and re-dispatch. The next execution starts a fresh session.
-
-**Planned fix:** Compare `result.session_id` against the internal `session.id` before persisting — only save IDs that came from actual backend JSON output.
+The executor now compares `result.session_id` against the internal `session.id` before persisting. Only IDs that came from actual backend JSON output are saved. If they match (meaning no real session ID was extracted), the persist is skipped.
 
 ## Stale backend session IDs cause hard execution failures
 
 **Severity:** Low
+**Status:** Fixed (GAP-2b)
+
+Claude stale session errors (`"No conversation found with session ID"`) are now classified as `StaleSession` (retryable). When detected, the worker clears the persisted session ID and retries with a fresh session. Codex self-heals (silently starts fresh), so no fix needed. OpenCode hangs on invalid sessions — see separate issue below.
+
+## OpenCode hangs on invalid session IDs
+
+**Severity:** Low
 **Status:** Open
 
-If a persisted backend session ID has expired or been pruned by the provider (overnight expiry, key rotation, provider-side cleanup), the CLI rejects the resume attempt and the execution fails. There is no automatic "session not found → retry as fresh session" fallback.
+When OpenCode receives an invalid or expired session ID, it hangs indefinitely instead of returning an error. The execution timeout catches this eventually, but the error is classified as `Unknown` (not retryable) rather than `StaleSession` because OpenCode produces no matchable error pattern.
 
-**Affects:** Claude, Codex, OpenCode (all backends with session resume).
-
-**Workaround:** Abandon the thread and re-dispatch, or close and open a new thread for the same task.
-
-**Planned fix:** Per-backend session-not-found detection — if resume fails with a recognizable error pattern, retry as a fresh session automatically.
+**Workaround:** The execution timeout (`execution_timeout_secs`) catches the hang. The thread fails and can be re-dispatched.
 
 ## Worker processes orphaned on dashboard exit
 

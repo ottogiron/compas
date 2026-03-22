@@ -48,6 +48,10 @@ orchestration:
   default_merge_strategy: merge          # Merge strategy: "merge", "rebase", or "squash" (default: "merge")
   default_merge_target: main             # Target branch for auto-merge on close (default: "main")
   mcp_wait_max_timeout_secs: 120         # Max timeout for orch_wait MCP tool calls (default: 120)
+  circuit_breaker:
+    enabled: true                        # Enable per-backend circuit breaker (default: true)
+    failure_threshold: 3                 # Consecutive failures before circuit opens (default: 3)
+    cooldown_secs: 60                    # Seconds in Open state before half-open probe (default: 60)
 
 database:                                # SQLite connection pool (requires restart to change)
   max_connections: 32                    # Pool max connections (default: 32, min: 1)
@@ -137,6 +141,26 @@ Worktrees are created at `{repo_root}/.compas-worktrees/{thread_id}/` on branch 
 ### Retry on Transient Failure
 
 `max_retries` auto-retries transient failures (network blips, rate limits) with exponential backoff. Non-retryable failures (quota exhaustion, auth errors) fail immediately. Each retry creates a new execution entry — check `orch_tasks` for `attempt_number`. The thread stays Active during retries and only fails when all retries are exhausted.
+
+## Circuit Breaker
+
+Per-backend circuit breaker protects the system from cascading failures when a backend is consistently failing. Configured under `orchestration.circuit_breaker`:
+
+```yaml
+orchestration:
+  circuit_breaker:
+    enabled: true            # Enable/disable (default: true)
+    failure_threshold: 3     # Consecutive failures before opening (default: 3)
+    cooldown_secs: 60        # Seconds before half-open probe (default: 60)
+```
+
+**States:**
+
+- **Closed** — normal operation, dispatches proceed
+- **Open** — backend is failing, dispatches are re-queued with `retry_after` until cooldown expires
+- **Half-Open** — cooldown elapsed, one probe execution is allowed; success resets to Closed, failure re-opens
+
+The dashboard shows `CB:OPEN` or `CB:PROBE` indicators on agent cards. `orch_health` includes `circuit_state` and `circuit_failures` per agent.
 
 ## Auto-Handoff Chains
 

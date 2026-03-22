@@ -31,6 +31,8 @@ pub enum ErrorCategory {
     AuthFailure,
     /// Agent-level error (bad output, crash in agent logic). Not retryable.
     AgentError,
+    /// Stale or expired backend session ID. Retryable (retry with fresh session).
+    StaleSession,
     /// Unclassified error. Not retryable (safe default).
     Unknown,
 }
@@ -42,13 +44,14 @@ impl ErrorCategory {
             Self::QuotaExhausted => "quota_exhausted",
             Self::AuthFailure => "auth_failure",
             Self::AgentError => "agent_error",
+            Self::StaleSession => "stale_session",
             Self::Unknown => "unknown",
         }
     }
 
     /// Whether this error category is eligible for retry.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::Transient)
+        matches!(self, Self::Transient | Self::StaleSession)
     }
 }
 
@@ -66,6 +69,7 @@ impl std::str::FromStr for ErrorCategory {
             "quota_exhausted" => Ok(Self::QuotaExhausted),
             "auth_failure" => Ok(Self::AuthFailure),
             "agent_error" => Ok(Self::AgentError),
+            "stale_session" => Ok(Self::StaleSession),
             "unknown" => Ok(Self::Unknown),
             other => Err(format!("unknown error category: '{}'", other)),
         }
@@ -113,9 +117,21 @@ pub fn classify_error(success: bool, has_result_output: bool, error_text: &str) 
     }
 
     // ── Non-retryable: Agent-level errors ──
-    // Agent produced output but it was a failure — the agent itself had an issue
+    // Agent produced output but it was a failure — the agent itself had an issue.
+    // Exception: stale session errors arrive as structured result output from
+    // Claude (is_error: true with result JSON), so check stale session patterns
+    // BEFORE the blanket AgentError classification.
     if has_result_output {
+        // ── Retryable: Stale/expired backend session (Claude-specific) ──
+        if lower.contains("no conversation found with session id") {
+            return ErrorCategory::StaleSession;
+        }
         return ErrorCategory::AgentError;
+    }
+
+    // ── Retryable: Stale/expired backend session (fallback for non-result output) ──
+    if lower.contains("no conversation found with session id") {
+        return ErrorCategory::StaleSession;
     }
 
     // ── Retryable: Transient infrastructure errors ──
@@ -350,8 +366,54 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_error_stale_session() {
+        // Claude-specific stale session error (structured result output)
+        assert_eq!(
+            classify_error(
+                false,
+                true,
+                "No conversation found with session ID: abc-123"
+            ),
+            ErrorCategory::StaleSession
+        );
+        // Also matches without result output (fallback path)
+        assert_eq!(
+            classify_error(
+                false,
+                false,
+                "No conversation found with session ID: abc-123"
+            ),
+            ErrorCategory::StaleSession
+        );
+        // Case-insensitive
+        assert_eq!(
+            classify_error(
+                false,
+                true,
+                "no conversation found with session id: xyz-789"
+            ),
+            ErrorCategory::StaleSession
+        );
+    }
+
+    #[test]
+    fn test_stale_session_is_retryable() {
+        assert!(ErrorCategory::StaleSession.is_retryable());
+    }
+
+    #[test]
+    fn test_error_category_roundtrip_stale_session() {
+        let cat = ErrorCategory::StaleSession;
+        let s = cat.as_str();
+        assert_eq!(s, "stale_session");
+        let parsed: ErrorCategory = s.parse().unwrap();
+        assert_eq!(parsed, ErrorCategory::StaleSession);
+    }
+
+    #[test]
     fn test_error_category_retryable() {
         assert!(ErrorCategory::Transient.is_retryable());
+        assert!(ErrorCategory::StaleSession.is_retryable());
         assert!(!ErrorCategory::QuotaExhausted.is_retryable());
         assert!(!ErrorCategory::AuthFailure.is_retryable());
         assert!(!ErrorCategory::AgentError.is_retryable());
@@ -365,6 +427,7 @@ mod tests {
             ErrorCategory::QuotaExhausted,
             ErrorCategory::AuthFailure,
             ErrorCategory::AgentError,
+            ErrorCategory::StaleSession,
             ErrorCategory::Unknown,
         ] {
             let s = cat.as_str();

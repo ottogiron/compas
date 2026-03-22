@@ -6508,7 +6508,9 @@ mod session_resume_tests {
 
         async fn start_session(&self, agent: &Agent) -> OrchResult<Session> {
             Ok(Session {
-                id: self.session_id.clone(),
+                // Internal session ID must differ from the backend session ID
+                // so the executor's GAP-2a guard doesn't block persistence.
+                id: uuid::Uuid::new_v4().to_string(),
                 agent_alias: agent.alias.clone(),
                 backend: "claude".to_string(),
                 started_at: chrono::Utc::now(),
@@ -6549,7 +6551,7 @@ mod session_resume_tests {
                 success: true,
                 result_text: result_text.clone(),
                 parsed_intent: None,
-                session_id: Some(session.id.clone()),
+                session_id: Some(self.session_id.clone()),
                 raw_output: result_text,
                 error_category: None,
                 pid: None,

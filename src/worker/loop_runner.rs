@@ -14,7 +14,7 @@
 //! 6. Emits `OrchestratorEvent`s on all state transitions
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::Semaphore;
@@ -25,6 +25,7 @@ use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::merge::MergeExecutor;
 use crate::store::{MergeOperationStatus, Store};
+use crate::worker::circuit_breaker::{CircuitBreakerRegistry, CircuitState};
 use crate::worktree::WorktreeManager;
 
 use super::executor::{execute_trigger, TriggerOutput};
@@ -54,6 +55,7 @@ pub struct WorkerRunner {
     worker_id: String,
     event_bus: EventBus,
     worktree_manager: Arc<WorktreeManager>,
+    circuit_breaker: Arc<Mutex<CircuitBreakerRegistry>>,
 }
 
 impl WorkerRunner {
@@ -73,6 +75,7 @@ impl WorkerRunner {
             worker_id,
             event_bus,
             worktree_manager: Arc::new(worktree_manager),
+            circuit_breaker: Arc::new(Mutex::new(CircuitBreakerRegistry::new())),
         }
     }
 
@@ -426,9 +429,50 @@ impl WorkerRunner {
                         .map(|a| a.backend.clone())
                         .unwrap_or_default();
 
+                    // ── Circuit breaker check ──
+                    // If the backend's circuit is Open, re-queue with a delay
+                    // instead of burning tokens on a known-failing backend.
+                    let cb_config = &trigger_config.orchestration.circuit_breaker;
+                    if cb_config.enabled && !backend_name.is_empty() {
+                        let cb_state = {
+                            let mut cb = self
+                                .circuit_breaker
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            cb.check(&backend_name, cb_config.cooldown_secs)
+                        };
+                        if cb_state == CircuitState::Open {
+                            tracing::warn!(
+                                exec_id = %execution.id,
+                                backend = %backend_name,
+                                agent = %execution.agent_alias,
+                                "circuit breaker OPEN — re-queuing execution with delay"
+                            );
+                            // Re-queue: set retry_after to now + cooldown_secs
+                            let retry_after =
+                                chrono::Utc::now().timestamp() + cb_config.cooldown_secs as i64;
+                            let _ = store
+                                .set_execution_retry_after(&execution.id, retry_after)
+                                .await;
+                            // Release permit so other work can proceed
+                            drop(permit);
+                            continue;
+                        }
+                        // HalfOpen or Closed: proceed normally
+                    }
+
                     let worktree_manager = self.worktree_manager.clone();
                     let default_workdir = trigger_config.default_workdir.clone();
                     let worktree_override_dir = trigger_config.worktree_dir.clone();
+
+                    // Clone circuit breaker + config for post-execution recording.
+                    let cb = self.circuit_breaker.clone();
+                    let cb_enabled = trigger_config.orchestration.circuit_breaker.enabled;
+                    let cb_threshold = trigger_config
+                        .orchestration
+                        .circuit_breaker
+                        .failure_threshold;
+                    let trigger_backend_name = backend_name.clone();
 
                     // Create telemetry channel for real-time stdout line forwarding.
                     let (stdout_tx, stdout_rx) = std::sync::mpsc::sync_channel::<String>(128);
@@ -529,7 +573,17 @@ impl WorkerRunner {
 
                         // Post-execution: insert reply message, emit events, and
                         // potentially enqueue a retry for transient failures.
-                        handle_trigger_output(&store, &event_bus, &output, &agent_configs).await;
+                        handle_trigger_output(
+                            &store,
+                            &event_bus,
+                            &output,
+                            &agent_configs,
+                            &cb,
+                            cb_enabled,
+                            cb_threshold,
+                            &trigger_backend_name,
+                        )
+                        .await;
                     });
                 }
                 Ok(None) => {
@@ -1101,11 +1155,16 @@ async fn consume_telemetry(
 /// For failed executions with transient errors: if the agent config allows
 /// retries and the attempt limit hasn't been reached, enqueue a retry
 /// execution with exponential backoff instead of marking the thread Failed.
+#[allow(clippy::too_many_arguments)]
 async fn handle_trigger_output(
     store: &Store,
     event_bus: &EventBus,
     output: &TriggerOutput,
     agent_configs: &[AgentConfig],
+    circuit_breaker: &Arc<Mutex<CircuitBreakerRegistry>>,
+    cb_enabled: bool,
+    cb_threshold: u32,
+    backend_name: &str,
 ) {
     // Fetch thread summary for richer notifications/hooks.
     let thread_summary = store
@@ -1124,6 +1183,62 @@ async fn handle_trigger_output(
         duration_ms: output.duration_ms,
         thread_summary,
     });
+
+    // ── Circuit breaker recording ──
+    // Record success/failure for the backend's circuit breaker.
+    // StaleSession errors that will be retried are NOT counted as failures
+    // (the retry may succeed, proving the backend is healthy).
+    //
+    // The lock is scoped to avoid holding it across .await points.
+    if cb_enabled && !backend_name.is_empty() {
+        let will_retry = should_retry_execution(output, agent_configs);
+        let is_stale_session_retry = !output.success
+            && will_retry
+            && output.error_category.as_ref() == Some(&crate::backend::ErrorCategory::StaleSession);
+
+        if output.success {
+            let state_changed = {
+                let mut cb = circuit_breaker.lock().unwrap_or_else(|e| e.into_inner());
+                let prev = cb.state_of(backend_name);
+                cb.record_success(backend_name);
+                prev != CircuitState::Closed
+            };
+            if state_changed {
+                tracing::info!(
+                    backend = %backend_name,
+                    "circuit breaker reset to CLOSED after successful execution"
+                );
+                let _ = store
+                    .set_circuit_breaker_state(backend_name, "closed", 0)
+                    .await;
+            }
+        } else if !is_stale_session_retry {
+            // Only record failure for terminal failures (not retryable stale sessions)
+            if !will_retry {
+                let (new_state, failures) = {
+                    let mut cb = circuit_breaker.lock().unwrap_or_else(|e| e.into_inner());
+                    let state = cb.record_failure(backend_name, cb_threshold);
+                    let f = cb
+                        .states()
+                        .into_iter()
+                        .find(|(n, _, _)| n == backend_name)
+                        .map(|(_, _, f)| f)
+                        .unwrap_or(0);
+                    (state, f)
+                };
+                if new_state == CircuitState::Open {
+                    tracing::warn!(
+                        backend = %backend_name,
+                        threshold = cb_threshold,
+                        "circuit breaker OPENED — backend consistently failing"
+                    );
+                    let _ = store
+                        .set_circuit_breaker_state(backend_name, "open", failures)
+                        .await;
+                }
+            }
+        }
+    }
 
     if output.success {
         // ── Success path ──
@@ -1283,6 +1398,20 @@ async fn handle_trigger_output(
         let should_retry = should_retry_execution(output, agent_configs);
 
         if should_retry {
+            // If this is a stale session error, clear the backend session ID
+            // so the retry starts a fresh session instead of re-using the stale one.
+            if output.error_category.as_ref() == Some(&crate::backend::ErrorCategory::StaleSession)
+            {
+                tracing::warn!(
+                    thread_id = %output.thread_id,
+                    agent = %output.agent_alias,
+                    "stale session detected — clearing backend_session_id for fresh retry"
+                );
+                let _ = store
+                    .clear_backend_session_id(&output.thread_id, &output.agent_alias)
+                    .await;
+            }
+
             // Enqueue retry execution with exponential backoff.
             let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
             let backoff_secs = agent_config.map(|a| a.retry_backoff_secs).unwrap_or(30);
@@ -1379,7 +1508,7 @@ async fn handle_trigger_output(
 /// Determine if a failed execution should be retried.
 ///
 /// Criteria:
-/// - Error category is retryable (Transient only)
+/// - Error category is retryable (Transient or StaleSession)
 /// - Execution did not time out (timed out = hung backend, not retried)
 /// - Agent config allows retries (max_retries > 0)
 /// - Current attempt is under the limit
@@ -2142,6 +2271,30 @@ mod tests {
         assert!(!should_retry_execution(&output, &configs));
     }
 
+    #[test]
+    fn test_should_retry_stale_session_with_retries() {
+        let configs = vec![test_agent_config("worker-a", 3)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::StaleSession),
+            0,
+            false,
+        );
+        assert!(should_retry_execution(&output, &configs));
+    }
+
+    #[test]
+    fn test_should_not_retry_stale_session_no_retries() {
+        let configs = vec![test_agent_config("worker-a", 0)];
+        let output = failed_trigger_output(
+            "worker-a",
+            Some(crate::backend::ErrorCategory::StaleSession),
+            0,
+            false,
+        );
+        assert!(!should_retry_execution(&output, &configs));
+    }
+
     #[tokio::test]
     async fn test_handle_trigger_output_retries_transient_error() {
         let store = test_store().await;
@@ -2180,7 +2333,17 @@ mod tests {
             timed_out: false,
         };
 
-        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+        handle_trigger_output(
+            &store,
+            &event_bus,
+            &output,
+            &configs,
+            &Arc::new(Mutex::new(CircuitBreakerRegistry::new())),
+            false,
+            3,
+            "claude",
+        )
+        .await;
 
         // Thread should still be Active (not Failed)
         let status = store.get_thread_status("t-retry").await.unwrap();
@@ -2244,7 +2407,17 @@ mod tests {
             timed_out: false,
         };
 
-        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+        handle_trigger_output(
+            &store,
+            &event_bus,
+            &output,
+            &configs,
+            &Arc::new(Mutex::new(CircuitBreakerRegistry::new())),
+            false,
+            3,
+            "claude",
+        )
+        .await;
 
         // Thread should be Failed
         let status = store.get_thread_status("t-term").await.unwrap();
@@ -2292,7 +2465,17 @@ mod tests {
             timed_out: false,
         };
 
-        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+        handle_trigger_output(
+            &store,
+            &event_bus,
+            &output,
+            &configs,
+            &Arc::new(Mutex::new(CircuitBreakerRegistry::new())),
+            false,
+            3,
+            "claude",
+        )
+        .await;
 
         // Thread should be Failed — max retries exceeded
         let status = store.get_thread_status("t-max").await.unwrap();
@@ -2343,7 +2526,17 @@ mod tests {
             timed_out: false,
         };
 
-        handle_trigger_output(&store, &event_bus, &output, &configs).await;
+        handle_trigger_output(
+            &store,
+            &event_bus,
+            &output,
+            &configs,
+            &Arc::new(Mutex::new(CircuitBreakerRegistry::new())),
+            false,
+            3,
+            "claude",
+        )
+        .await;
 
         // The reply message should have intent "response", not "status-update"
         let messages = store.get_thread_messages("t-default-intent").await.unwrap();
@@ -2491,5 +2684,249 @@ mod tests {
         assert_eq!(count, 0, "schedule at max_runs should not fire");
         // Cache should remain unchanged.
         assert_eq!(cache["capped-sched"].1, 2);
+    }
+
+    // ── Circuit breaker integration tests (GAP-1) ────────────────────────
+
+    #[tokio::test]
+    async fn test_circuit_breaker_opens_after_threshold_failures() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let configs = vec![test_agent_config("worker-a", 0)]; // no retries
+        let cb = Arc::new(Mutex::new(CircuitBreakerRegistry::new()));
+
+        // Three consecutive non-retryable failures should open the circuit.
+        for i in 0..3u32 {
+            let thread_id = format!("t-cb-{}", i);
+            store.ensure_thread(&thread_id, None, None).await.unwrap();
+            let msg_id = store
+                .insert_message(
+                    &thread_id, "operator", "worker-a", "dispatch", "task", None, None,
+                )
+                .await
+                .unwrap();
+            let exec_id = store
+                .insert_execution_with_dispatch(&thread_id, "worker-a", Some(msg_id), None)
+                .await
+                .unwrap()
+                .unwrap();
+
+            let output = TriggerOutput {
+                execution_id: exec_id,
+                thread_id: thread_id.clone(),
+                agent_alias: "worker-a".to_string(),
+                success: false,
+                output: Some("backend error".to_string()),
+                exit_code: Some(1),
+                duration_ms: 100,
+                parsed_intent: None,
+                error_category: Some(crate::backend::ErrorCategory::AgentError),
+                attempt_number: 0,
+                dispatch_message_id: Some(msg_id),
+                timed_out: false,
+            };
+
+            handle_trigger_output(
+                &store, &event_bus, &output, &configs, &cb, true, // cb_enabled
+                3, "claude",
+            )
+            .await;
+        }
+
+        // Circuit should now be Open.
+        let state = cb.lock().unwrap().state_of("claude");
+        assert_eq!(
+            state,
+            CircuitState::Open,
+            "circuit should be open after 3 failures"
+        );
+
+        // Verify state was persisted to store.
+        let stored = store.get_circuit_breaker_states().await.unwrap();
+        let claude_entry = stored.iter().find(|(b, _, _)| b == "claude");
+        assert!(
+            claude_entry.is_some(),
+            "circuit breaker state should be persisted"
+        );
+        assert_eq!(claude_entry.unwrap().1, "open");
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_success_resets_to_closed() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let configs = vec![test_agent_config("worker-a", 0)];
+        let cb = Arc::new(Mutex::new(CircuitBreakerRegistry::new()));
+
+        // Open the circuit by recording failures directly.
+        {
+            let mut guard = cb.lock().unwrap();
+            for _ in 0..3 {
+                guard.record_failure("claude", 3);
+            }
+        }
+        assert_eq!(cb.lock().unwrap().state_of("claude"), CircuitState::Open);
+
+        // A successful execution should reset to Closed.
+        store.ensure_thread("t-cb-reset", None, None).await.unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-cb-reset",
+                "operator",
+                "worker-a",
+                "dispatch",
+                "task",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-cb-reset", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-cb-reset".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: true,
+            output: Some("all good".to_string()),
+            exit_code: Some(0),
+            duration_ms: 100,
+            parsed_intent: None,
+            error_category: None,
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(
+            &store, &event_bus, &output, &configs, &cb, true, 3, "claude",
+        )
+        .await;
+
+        assert_eq!(
+            cb.lock().unwrap().state_of("claude"),
+            CircuitState::Closed,
+            "circuit should reset to closed after success"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_stale_session_not_counted_when_retrying() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let configs = vec![test_agent_config("worker-a", 3)]; // retries enabled
+        let cb = Arc::new(Mutex::new(CircuitBreakerRegistry::new()));
+
+        store.ensure_thread("t-cb-stale", None, None).await.unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-cb-stale",
+                "operator",
+                "worker-a",
+                "dispatch",
+                "task",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-cb-stale", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // StaleSession error with retries available → should NOT count as CB failure.
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-cb-stale".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: false,
+            output: Some("session not found".to_string()),
+            exit_code: Some(1),
+            duration_ms: 100,
+            parsed_intent: None,
+            error_category: Some(crate::backend::ErrorCategory::StaleSession),
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(
+            &store, &event_bus, &output, &configs, &cb, true, 3, "claude",
+        )
+        .await;
+
+        // Circuit should still be Closed — StaleSession retry is exempt.
+        let states = cb.lock().unwrap().states();
+        let claude = states.iter().find(|(n, _, _)| n == "claude");
+        if let Some((_, state, failures)) = claude {
+            assert_eq!(*state, CircuitState::Closed);
+            assert_eq!(
+                *failures, 0,
+                "StaleSession retry should not increment failure count"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_circuit_breaker_stale_session_counted_when_no_retries() {
+        let store = test_store().await;
+        let event_bus = EventBus::new();
+        let configs = vec![test_agent_config("worker-a", 0)]; // no retries
+        let cb = Arc::new(Mutex::new(CircuitBreakerRegistry::new()));
+
+        store
+            .ensure_thread("t-cb-stale-nr", None, None)
+            .await
+            .unwrap();
+        let msg_id = store
+            .insert_message(
+                "t-cb-stale-nr",
+                "operator",
+                "worker-a",
+                "dispatch",
+                "task",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution_with_dispatch("t-cb-stale-nr", "worker-a", Some(msg_id), None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        // StaleSession error with max_retries=0 → SHOULD count as CB failure.
+        let output = TriggerOutput {
+            execution_id: exec_id,
+            thread_id: "t-cb-stale-nr".to_string(),
+            agent_alias: "worker-a".to_string(),
+            success: false,
+            output: Some("session not found".to_string()),
+            exit_code: Some(1),
+            duration_ms: 100,
+            parsed_intent: None,
+            error_category: Some(crate::backend::ErrorCategory::StaleSession),
+            attempt_number: 0,
+            dispatch_message_id: Some(msg_id),
+            timed_out: false,
+        };
+
+        handle_trigger_output(
+            &store, &event_bus, &output, &configs, &cb, true, 3, "claude",
+        )
+        .await;
+
+        // Circuit should have 1 failure recorded (StaleSession not retried).
+        let states = cb.lock().unwrap().states();
+        let claude = states.iter().find(|(n, _, _)| n == "claude");
+        assert!(claude.is_some(), "failure should be recorded");
+        assert_eq!(claude.unwrap().2, 1, "should have 1 failure counted");
     }
 }

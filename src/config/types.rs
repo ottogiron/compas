@@ -164,6 +164,42 @@ fn default_db_acquire_timeout_ms() -> u64 {
     30000
 }
 
+/// Circuit breaker configuration for per-backend failure protection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerConfig {
+    /// Whether the circuit breaker is enabled (default: true).
+    #[serde(default = "default_cb_enabled")]
+    pub enabled: bool,
+    /// Number of consecutive failures before the circuit opens (default: 3).
+    #[serde(default = "default_cb_failure_threshold")]
+    pub failure_threshold: u32,
+    /// Seconds to wait before transitioning from Open to Half-Open (default: 60).
+    #[serde(default = "default_cb_cooldown_secs")]
+    pub cooldown_secs: u64,
+}
+
+impl Default for CircuitBreakerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_cb_enabled(),
+            failure_threshold: default_cb_failure_threshold(),
+            cooldown_secs: default_cb_cooldown_secs(),
+        }
+    }
+}
+
+fn default_cb_enabled() -> bool {
+    true
+}
+
+fn default_cb_failure_threshold() -> u32 {
+    3
+}
+
+fn default_cb_cooldown_secs() -> u64 {
+    60
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestrationConfig {
     #[serde(default = "default_trigger_intents")]
@@ -207,6 +243,9 @@ pub struct OrchestrationConfig {
     /// Maximum timeout (seconds) for orch_wait MCP tool calls (default 120).
     #[serde(default = "default_mcp_wait_max_timeout_secs")]
     pub mcp_wait_max_timeout_secs: u64,
+    /// Per-backend circuit breaker configuration.
+    #[serde(default)]
+    pub circuit_breaker: CircuitBreakerConfig,
 }
 
 impl Default for OrchestrationConfig {
@@ -224,6 +263,7 @@ impl Default for OrchestrationConfig {
             default_merge_strategy: default_merge_strategy(),
             default_merge_target: default_merge_target(),
             mcp_wait_max_timeout_secs: default_mcp_wait_max_timeout_secs(),
+            circuit_breaker: CircuitBreakerConfig::default(),
         }
     }
 }
@@ -535,4 +575,46 @@ pub struct PingConfig {
     /// Arguments for the ping command.
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_circuit_breaker_defaults() {
+        let yaml = r#"
+            default_workdir: /tmp
+            state_dir: /tmp/state
+            agents:
+              - alias: dev
+                backend: claude
+        "#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        let cb = &config.orchestration.circuit_breaker;
+        assert!(cb.enabled);
+        assert_eq!(cb.failure_threshold, 3);
+        assert_eq!(cb.cooldown_secs, 60);
+    }
+
+    #[test]
+    fn test_config_circuit_breaker_explicit_values() {
+        let yaml = r#"
+            default_workdir: /tmp
+            state_dir: /tmp/state
+            orchestration:
+              circuit_breaker:
+                enabled: false
+                failure_threshold: 5
+                cooldown_secs: 120
+            agents:
+              - alias: dev
+                backend: claude
+        "#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        let cb = &config.orchestration.circuit_breaker;
+        assert!(!cb.enabled);
+        assert_eq!(cb.failure_threshold, 5);
+        assert_eq!(cb.cooldown_secs, 120);
+    }
 }
