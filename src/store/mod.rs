@@ -862,7 +862,7 @@ impl Store {
         path: &std::path::Path,
         repo_root: &std::path::Path,
     ) -> Result<(), String> {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE threads SET worktree_path = ?, worktree_repo_root = ? WHERE thread_id = ?",
         )
         .bind(path.to_string_lossy().as_ref())
@@ -871,6 +871,13 @@ impl Store {
         .execute(&self.pool)
         .await
         .map_err(|e| format!("set_thread_worktree_path failed: {}", e))?;
+
+        if result.rows_affected() == 0 {
+            return Err(format!(
+                "set_thread_worktree_path: no thread found for '{}'",
+                thread_id
+            ));
+        }
         Ok(())
     }
 

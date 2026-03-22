@@ -204,11 +204,35 @@ pub async fn execute_trigger(
         match wt_result {
             Ok(Some(path)) => {
                 worktree_path_for_status = Some(path.clone());
-                if let Err(e) = store
-                    .set_thread_worktree_path(&execution.thread_id, &path, &agent_workdir)
-                    .await
-                {
-                    tracing::warn!(error = %e, "failed to store worktree path");
+                let mut stored = false;
+                for attempt in 0..3u64 {
+                    match store
+                        .set_thread_worktree_path(&execution.thread_id, &path, &agent_workdir)
+                        .await
+                    {
+                        Ok(()) => {
+                            stored = true;
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                attempt = attempt,
+                                thread_id = %execution.thread_id,
+                                "failed to store worktree path, retrying"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                100 * (attempt + 1),
+                            ))
+                            .await;
+                        }
+                    }
+                }
+                if !stored {
+                    tracing::error!(
+                        thread_id = %execution.thread_id,
+                        "worktree path not persisted after 3 attempts — auto-merge will not trigger for this thread"
+                    );
                 }
                 Some(path)
             }
