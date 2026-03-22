@@ -12,8 +12,7 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — po
 
 ## Prerequisites
 
-- **Rust** toolchain (`cargo`)
-- At least one backend CLI installed and authenticated:
+At least one backend CLI installed and authenticated:
 
 | Backend | Install | Authenticate |
 | --- | --- | --- |
@@ -24,35 +23,49 @@ Works with Claude Code, Codex, Gemini CLI, and OpenCode. Project-agnostic — po
 
 ## Install
 
-Add this to your ~/.cargo/config.toml:
-
-```toml
-[net]
-git-fetch-with-cli = true
-```
-
-Then run
+**Homebrew (macOS / Linux):**
 
 ```bash
-# you will be asked for github authentication in this step
+brew install ottogiron/tap/compas
+```
+
+**Pre-built binary:**
+
+Download the archive for your platform from the [latest release](https://github.com/ottogiron/compas/releases/latest), extract it, and place `compas` on your PATH.
+
+**cargo-binstall:**
+
+```bash
+cargo binstall --git-url https://github.com/ottogiron/compas compas
+```
+
+> Note: `--git-url` is required because compas is not published on crates.io.
+
+**From source (cargo install):**
+
+```bash
 cargo install --git https://github.com/ottogiron/compas --tag v0.3.0
 ```
 
-This installs a stable release and puts `compas` on your PATH.
-
-> **Pinning:** Always install from a tagged release. The `main` branch is under active development and may contain incomplete features. Check the [CHANGELOG](CHANGELOG.md) for the latest version.
-
-Or build from source:
+**Build from source:**
 
 ```bash
 git clone git@github.com:ottogiron/compas.git
 cd compas
-git checkout v0.2.0   # or the latest tag
+git checkout v0.3.0   # or the latest tag
 cargo build --release
 # Binary at target/release/compas — add to PATH or use the full path below
 ```
 
+> **Pinning:** Always install from a tagged release. The `main` branch is under active development and may contain incomplete features. Check the [CHANGELOG](CHANGELOG.md) for the latest version.
+
 ### Upgrading
+
+```bash
+brew upgrade compas
+```
+
+Or, if installed via cargo:
 
 ```bash
 cargo install --git https://github.com/ottogiron/compas --tag <new-version> --force
@@ -63,8 +76,19 @@ After upgrading, run `compas doctor` to verify your setup is compatible with the
 ### Uninstalling
 
 ```bash
+brew uninstall compas
+```
+
+Or, if installed via cargo:
+
+```bash
 cargo uninstall compas
-rm -rf ~/.compas          # remove config and state
+```
+
+To remove config and state:
+
+```bash
+rm -rf ~/.compas
 ```
 
 ## Quick Start

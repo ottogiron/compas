@@ -1,0 +1,240 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Create a draft release (no Homebrew update)"
+        required: false
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.93.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            method: native
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            method: cross
+          # NOTE: macos-13 (Intel) is being deprecated by GitHub.
+          # Track migration timeline and switch to a supported runner
+          # when GitHub removes macos-13.
+          - target: x86_64-apple-darwin
+            runner: macos-13
+            method: native
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            method: native
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross (aarch64-linux only)
+        if: matrix.method == 'cross'
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: matrix.method == 'native'
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.method == 'cross'
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Package binary
+        run: |
+          tar czf "compas-v${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz" \
+            -C "target/${{ matrix.target }}/release" compas
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: compas-${{ matrix.target }}
+          path: "compas-v${{ steps.version.outputs.version }}-${{ matrix.target }}.tar.gz"
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum compas-v*.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "version=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=v0.0.0-dev-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          draft: ${{ inputs.dry_run == true }}
+          files: |
+            artifacts/compas-v*.tar.gz
+            artifacts/checksums.txt
+          body: |
+            See [CHANGELOG.md](https://github.com/ottogiron/compas/blob/main/CHANGELOG.md) for details.
+
+            ## Install
+
+            **Homebrew (macOS / Linux):**
+            ```bash
+            brew install ottogiron/tap/compas
+            ```
+
+            **Pre-built binary:**
+            Download the archive for your platform below, extract, and place `compas` on your PATH.
+
+            **cargo-binstall:**
+            ```bash
+            cargo binstall --git-url https://github.com/ottogiron/compas compas
+            ```
+
+            **From source:**
+            ```bash
+            cargo install --git https://github.com/ottogiron/compas --tag ${{ steps.version.outputs.version }}
+            ```
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    if: inputs.dry_run != true
+    continue-on-error: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+          else
+            VERSION="0.0.0-dev-$(git rev-parse --short HEAD)"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute SHA256 values
+        id: sha
+        run: |
+          cd artifacts
+          echo "x86_64_linux=$(sha256sum compas-v*-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "aarch64_linux=$(sha256sum compas-v*-aarch64-unknown-linux-gnu.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "x86_64_macos=$(sha256sum compas-v*-x86_64-apple-darwin.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "aarch64_macos=$(sha256sum compas-v*-aarch64-apple-darwin.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.version }}"
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ottogiron/homebrew-tap.git" homebrew-tap
+          cd homebrew-tap
+
+          cat > Formula/compas.rb << 'FORMULA_EOF'
+          class Compas < Formula
+            desc "Multi-agent orchestrator for AI-assisted software development"
+            homepage "https://github.com/ottogiron/compas"
+            license any_of: ["MIT", "Apache-2.0"]
+          FORMULA_EOF
+
+          cat >> Formula/compas.rb << FORMULA_EOF
+            version "${VERSION}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/ottogiron/compas/releases/download/v${VERSION}/compas-v${VERSION}-aarch64-apple-darwin.tar.gz"
+                sha256 "${{ steps.sha.outputs.aarch64_macos }}"
+              else
+                url "https://github.com/ottogiron/compas/releases/download/v${VERSION}/compas-v${VERSION}-x86_64-apple-darwin.tar.gz"
+                sha256 "${{ steps.sha.outputs.x86_64_macos }}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/ottogiron/compas/releases/download/v${VERSION}/compas-v${VERSION}-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${{ steps.sha.outputs.aarch64_linux }}"
+              else
+                url "https://github.com/ottogiron/compas/releases/download/v${VERSION}/compas-v${VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${{ steps.sha.outputs.x86_64_linux }}"
+              end
+            end
+
+            def install
+              bin.install "compas"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/compas --version")
+            end
+          end
+          FORMULA_EOF
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/compas.rb
+          git commit -m "compas ${VERSION}"
+          git push

@@ -116,6 +116,10 @@ When tagging a new release:
 3. Update the version in `Cargo.toml` to match
 4. Update the install tag in `README.md` (`--tag vX.Y.Z` in both the install and build-from-source commands)
 5. Commit, tag (`git tag vX.Y.Z`), push with tags (`git push origin main --tags`)
+6. Verify the release workflow completed: check GitHub Actions for the `Release` workflow run
+7. Verify the Homebrew tap was auto-updated: check `ottogiron/homebrew-tap` for a new commit with the version
+
+> **Dry-run releases:** Use `workflow_dispatch` with `dry_run: true` to test the release pipeline before real tags. This creates a draft GitHub Release without updating the Homebrew tap.
 
 ## Impact Update Matrix
 

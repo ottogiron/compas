@@ -1,0 +1,3 @@
+kind: Added
+body: Release workflow with Homebrew tap auto-update, cargo-binstall metadata, and pre-built binary install paths
+time: 2026-03-22T17:26:47.997305+01:00
