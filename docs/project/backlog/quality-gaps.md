@@ -63,7 +63,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
   - Unit test: simulate N failures, verify circuit opens, verify cooldown resets
   - Integration test: configure a backend with a failing command, verify circuit behavior
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Todo
+- Status: Done
 - Complexity: S-M
 - Risk: Low
 - Notes: The deprecated `aster-orchestrator` had a circuit breaker (3 failures, 60s cooldown). Restore with the new architecture.
@@ -91,10 +91,10 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Verification:
   - Unit test: mock backend stderr with stale session patterns, verify retry logic
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
-- Notes: Fixes two known issues from `known-issues.md`. Error patterns need empirical validation against each backend.
+- Notes: Fixes two known issues from `known-issues.md`. Probe (2026-03-22) showed Claude sessions expire under 27 hours. Codex self-heals. OpenCode hangs (timeout catches it). Fix is Claude-specific: match "No conversation found with session ID" pattern.
 
 ## Ticket GAP-3 — Cost Budget and Model Routing Controls
 
@@ -240,7 +240,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
   - CI: release workflow succeeds on tag push, artifacts attached
   - Manual: test `brew install` on macOS, verify `compas --version` and `compas doctor`
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Todo
+- Status: Done
 - Complexity: M
 - Risk: Low
 - Notes: Standard package manager installation is expected for CLI tools targeting broad adoption. `cargo install --git` with a Rust toolchain requirement limits trial adoption.

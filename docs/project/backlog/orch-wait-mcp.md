@@ -43,7 +43,7 @@ Created: 2026-03-22
 - Verification:
   - `make verify` passes (fmt-check + clippy + test + lint-md)
   - Manual: dispatch work via MCP, call `orch_wait`, confirm found response with full message body
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
