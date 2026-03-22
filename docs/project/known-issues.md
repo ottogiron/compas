@@ -127,9 +127,11 @@ Agents connected via MCP (e.g., Claude Desktop) can read files, edit files, and 
 This breaks the self-service loop for MCP-only agents. CLI-based agents (Claude Code, Codex, OpenCode) don't have this problem — they commit as part of their execution.
 
 **Workaround:** The operator commits on the agent's behalf:
+
 ```bash
 git -C .compas-worktrees/<thread-id> add -A && git -C .compas-worktrees/<thread-id> commit -m "<description>"
 ```
+
 Then close the thread normally.
 
 **Possible fix:** Add an `orch_commit(thread_id, message)` MCP tool that commits all changes in the thread's worktree. This would close the self-service gap for MCP-only agents.

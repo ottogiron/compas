@@ -102,18 +102,9 @@ Wait for the full chain to settle from a script or CLI:
 compas wait --thread-id <id> --await-chain --timeout 900
 ```
 
-## Problems Solved
-
-- **Worktree isolation** — concurrent agents work in separate git worktrees so they never conflict on files
-- **Auto-handoff chains** — agents route work to reviewers automatically, no manual copy-paste between sessions
-- **Merge queue** — completed worktree branches merge back safely with conflict detection
-- **Cost and token tracking** — per-execution token counts and cost breakdowns, visible in the dashboard and via `orch_tool_stats`
-- **Circuit breaker and retry** — failing backends trip a circuit breaker instead of cascading; transient failures retry automatically
-- **Scheduled automation** — cron-based recurring dispatches run without manual intervention
-
-Requires at least one AI coding CLI (Claude Code, Codex, Gemini CLI, or OpenCode). [Details →](#prerequisites)
-
 ## Quick Start
+
+> Requires at least one AI coding CLI installed and authenticated. [Details →](#prerequisites)
 
 ### 1. Create a config
 
@@ -200,9 +191,7 @@ agents:
     prompt: "Review for correctness and test coverage. Do not implement."
 ```
 
-Key configuration areas: **agents** (backend, model, prompt, workspace isolation, retry, auto-handoff chains), **schedules** (cron-based recurring dispatches), and **hooks/notifications** (shell scripts and desktop alerts on lifecycle events).
-
-The worker hot-reloads agents, schedules, hooks, and notification settings without restart.
+Key configuration areas: **agents** (backend, model, prompt, workspace isolation, retry, auto-handoff chains) and **schedules** (cron-based recurring dispatches). The worker hot-reloads configuration without restart.
 
 Handoff chains support fan-out to multiple reviewers — see the [Cookbook](docs/guides/cookbook.md).
 
