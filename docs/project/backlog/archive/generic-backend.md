@@ -1,6 +1,6 @@
 # Config-Driven Generic Backend
 
-Status: Active
+Status: Closed
 Owner: operator
 Created: 2026-03-21
 
@@ -33,7 +33,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for deserialization and validation
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket GBE-2 — GenericBackend implementation
 
@@ -68,7 +68,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests with stub commands (`echo`, `cat`)
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket GBE-3 — Registry integration and documentation
 

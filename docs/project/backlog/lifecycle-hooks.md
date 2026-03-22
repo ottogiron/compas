@@ -35,7 +35,7 @@ Created: 2026-03-21
 - Verification:
   - Unit tests for HookRunner with stub scripts
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket HOOKS-2 — EventBus integration
 
@@ -68,7 +68,7 @@ Created: 2026-03-21
 - Verification:
   - Integration test: stub hook script writes event JSON to file, verify contents
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket HOOKS-3 — Documentation and examples
 
@@ -88,7 +88,7 @@ Created: 2026-03-21
 - Verification:
   - Manual: configure a hook, trigger an execution, verify hook fires
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Ticket HOOKS-4 — Declarative hook filters
 

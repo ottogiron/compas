@@ -1,6 +1,6 @@
 # Worktree Default Placement
 
-Status: Active
+Status: Closed
 Owner: operator
 Created: 2026-03-21
 
