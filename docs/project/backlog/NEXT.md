@@ -29,7 +29,7 @@ Ordered by priority. Work top item when capacity is available.
 
 ## Backlog
 
-Unordered. Pick when queue is empty. See `backlog-consolidation-guide.md` for tier rationale.
+Unordered. Pick when queue is empty. See `docs/project/backlog-consolidation-guide.md` for tier rationale.
 
 - MFE-1, MFE-2, MFE-3 — Multi-frontend service layer (`multi-frontend.md`)
 - MPR-1, MPR-2, MPR-3, MPR-4 — Multi-project support (`multi-project.md`)

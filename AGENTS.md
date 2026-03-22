@@ -60,7 +60,17 @@ make mcp-server     # run MCP server
 
 ## Ticket Workflow
 
-This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for backlog governance.
+### Backlog structure
+
+- `docs/project/backlog/NEXT.md` — priority queue. Check here for what to work on next.
+- `docs/project/backlog/*.md` — individual backlog files with ticket details, ACs, and dependencies.
+- `docs/project/backlog/template.md` — template for new backlog files (used by `backlog-setup` skill).
+
+> **Principle:** Agents read the queue; the operator writes the queue. Agents should NOT update `NEXT.md` when completing tickets — the operator maintains it during grooming sessions.
+
+### Session tracking
+
+This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for session tracking.
 
 ```bash
 ticket start <ticket-id>           # start a ticket session
