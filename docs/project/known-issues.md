@@ -95,26 +95,22 @@ When a thread is closed but its worktree has uncommitted changes, the worker cle
 ## Execution stuck in "executing" after agent completes (v0.4.0)
 
 **Severity:** Medium
-**Status:** Open
+**Status:** Fixed
 
 Observed on thread `01KMBF0AR215Q733NA0APTD9AC` (compas-architect). The agent completed its response (telemetry shows `turn_complete` with `subtype: success`), the response message was inserted into the thread (db:1830), but the execution row was never finalized — `status` remains `executing`, `finished_at` is NULL.
 
 The Claude CLI process has already exited (no orphaned process). The response is not lost — it's in the thread. But the execution is permanently stuck, blocking health/task reporting.
 
 **Symptoms:**
+
 - `orch_tasks` shows execution as `executing` indefinitely
 - `orch_diagnose` says "execution in progress"
 - `orch_poll` returns the response message (work is done)
 - No Claude process running for the execution
 
-**Suspected cause:** The post-execution finalization path in `handle_trigger_output()` (loop_runner.rs) failed silently after inserting the response message but before calling `store.mark_execution_completed()`. Possible causes:
-- New circuit breaker integration (GAP-1, v0.4.0) panicking or erroring in the success path
-- A store write error being swallowed
-- Race condition between telemetry consumer and executor finalization
+**Root cause:** `PRAGMA busy_timeout` is a per-connection SQLite setting but was only set on one connection during `store.setup()`. The pool has up to 32 connections; the other 31 used the default `busy_timeout=0`, causing immediate `SQLITE_BUSY` errors under any write contention (telemetry flush, heartbeat, stale checker, MCP server). The `Err` from `complete_execution` was logged at `warn` level and silently swallowed, leaving the execution row permanently stuck.
 
-**Workaround:** Manually update the execution row: `UPDATE executions SET status = 'completed', finished_at = unixepoch() WHERE id = '<exec_id>'`
-
-**Investigation:** Check `handle_trigger_output()` success path for any new code (circuit breaker state update, DB persist) that could fail silently after response insertion.
+**Fix:** Set `busy_timeout` via `SqliteConnectOptions::pragma()` so every pool connection inherits it, and added `finalize_with_retry` with exponential backoff as defense-in-depth. Finalization failures now log at `error` level.
 
 ## Dashboard: No mouse support
 
