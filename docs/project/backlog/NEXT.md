@@ -12,17 +12,14 @@ No tickets currently in-flight.
 
 Ordered by priority. Work top item when capacity is available.
 
-1. GAP-2 — Stale session recovery (`quality-gaps.md`)
-2. GAP-1 — Circuit breaker for backend failures (`quality-gaps.md`)
-3. WAIT-AX-1 — Fan-out settlement metadata (`orch-wait-ax.md`)
-4. HOOKS-4 — Declarative hook filters (`lifecycle-hooks.md`)
-5. GAP-7 — Distribution — brew/binstall (`quality-gaps.md`)
-6. GAP-5 — TUI mouse support (`quality-gaps.md`)
-7. EVO-16 — Session resume after crash (`orch-evolution.md`)
-8. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
-9. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-10. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-11. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+1. WAIT-AX-1 — Fan-out settlement metadata (`orch-wait-ax.md`)
+2. HOOKS-4 — Declarative hook filters (`lifecycle-hooks.md`)
+3. GAP-5 — TUI mouse support (`quality-gaps.md`)
+4. EVO-16 — Session resume after crash (`orch-evolution.md`)
+5. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+6. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
+7. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
+8. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 
