@@ -9,7 +9,7 @@ use std::sync::Arc;
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, Peer, RoleServer, ServerHandler};
 use serde::Serialize;
 
 use crate::backend::registry::BackendRegistry;
@@ -78,7 +78,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_dispatch",
-        description = "Send a message to an agent. Creates or continues a thread. Supports delayed execution via `scheduled_for` (ISO 8601 timestamp, e.g. '2026-03-21T20:00:00Z') — the agent won't be triggered until that time. After dispatch, wait for the response using CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 900` (blocking). The response includes a `next_step` command for direct responses; add `--await-chain` if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
+        description = "Send a message to an agent. Creates or continues a thread. Supports delayed execution via `scheduled_for` (ISO 8601 timestamp, e.g. '2026-03-21T20:00:00Z') — the agent won't be triggered until that time. After dispatch, use orch_wait to block for the response (sends progress notifications to prevent transport timeouts). Use await_chain=true if the agent uses auto-handoff. Do not poll in a loop — use orch_poll only for non-blocking status checks."
     )]
     async fn orch_dispatch(
         &self,
@@ -150,13 +150,26 @@ impl OrchestratorMcpServer {
         self.tool_stats_impl(params).await
     }
 
-    // orch_wait removed from MCP surface — stdio transport timeouts make it
-    // unreliable. Use `compas wait` CLI subcommand instead.
-    // The wait_impl method is preserved for potential future use.
+    #[tool(
+        name = "orch_wait",
+        description = "Block until a matching message arrives on a thread, or timeout. \
+            Returns the full message body on success. Sends progress notifications every 10s \
+            to prevent transport timeouts. Use await_chain=true to wait for entire handoff/fan-out \
+            chain to settle. For non-blocking checks use orch_poll instead."
+    )]
+    async fn orch_wait(
+        &self,
+        Parameters(params): Parameters<WaitParams>,
+        peer: Peer<RoleServer>,
+        meta: Meta,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let progress_token = meta.get_progress_token();
+        self.wait_impl(params, Some(peer), progress_token).await
+    }
 
     #[tool(
         name = "orch_poll",
-        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting. For blocking waits on agent responses, use CLI `compas wait` instead — poll is for quick status checks or diagnosing timeouts. When neither intent nor since_reference is provided, trigger intents are auto-excluded."
+        description = "Non-blocking check of thread state. Returns current status, matching messages, and recent events immediately without waiting. For blocking waits on agent responses, use orch_wait instead — poll is for quick status checks or diagnosing timeouts. When neither intent nor since_reference is provided, trigger intents are auto-excluded."
     )]
     async fn orch_poll(
         &self,
@@ -318,9 +331,12 @@ impl ServerHandler for OrchestratorMcpServer {
             .with_instructions(
                 "Compas MCP server. Exposes dispatch, status, \
                  metrics, and diagnostic tools for multi-agent coordination. \
-                 After dispatching work via orch_dispatch, wait for the response \
-                 using CLI `compas wait` (blocking). Do NOT use orch_poll \
-                 in a loop to wait — poll is for instant status checks only."
+                 After dispatching work via orch_dispatch, use orch_wait to block \
+                 for the response (sends progress notifications to prevent transport \
+                 timeouts). If orch_wait returns found=false, re-issue with the same \
+                 parameters. Use await_chain=true when the agent uses auto-handoff \
+                 and you want the terminal result. Use orch_poll for instant status \
+                 checks only, not for waiting."
                     .to_string(),
             )
     }

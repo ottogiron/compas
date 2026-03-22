@@ -2696,6 +2696,7 @@ mod wait_tests {
                     since_reference: None,
                     strict_new: None,
                     timeout_secs: Some(1),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -2737,6 +2738,7 @@ mod wait_tests {
                     since_reference: None,
                     strict_new: None,
                     timeout_secs: Some(1),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -2793,6 +2795,7 @@ mod wait_tests {
                     since_reference: None,
                     strict_new: None,
                     timeout_secs: Some(1),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -2825,6 +2828,7 @@ mod wait_tests {
                     since_reference: None,
                     strict_new: None,
                     timeout_secs: Some(1),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -2871,6 +2875,7 @@ mod wait_tests {
                     since_reference: Some(format!("db:{}", id1)),
                     strict_new: None,
                     timeout_secs: Some(1),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -2930,6 +2935,7 @@ mod wait_tests {
                     since_reference: None,
                     strict_new: None,
                     timeout_secs: Some(5),
+                    await_chain: None,
                 },
                 None,
                 None,
@@ -5546,6 +5552,119 @@ mod await_chain_wait_tests {
             "expected queued execution + untriggered handoff on fan-out child, got {}",
             pending
         );
+    }
+
+    #[tokio::test]
+    async fn test_wait_timeout_clamped_to_config_max() {
+        let store = test_store().await;
+        let mut config = test_config();
+        // Set config cap to 2 seconds
+        config.orchestration.mcp_wait_max_timeout_secs = 2;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        // Insert a dispatch message — waiting for status-update will timeout
+        server
+            .store
+            .insert_message("t-clamp", "op", "focused", "dispatch", "work", None, None)
+            .await
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let result = server
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-clamp".to_string(),
+                    intent: Some("status-update".to_string()),
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(60), // Requests 60s, but config max is 2s
+                    await_chain: None,
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+
+        let json = extract_json(&result);
+        assert_eq!(json["found"], false);
+        // Should have been clamped to 2s, not 60s
+        assert_eq!(json["timeout_secs"], 2);
+        assert!(
+            elapsed.as_secs() < 5,
+            "expected timeout in ~2s, took {}s",
+            elapsed.as_secs()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_timeout_chain_pending_true() {
+        let store = test_store().await;
+        store
+            .ensure_thread("t-chain-pend", None, None)
+            .await
+            .unwrap();
+
+        // Insert a response message so the wait loop finds a match
+        store
+            .insert_message(
+                "t-chain-pend",
+                "implementer",
+                "operator",
+                "response",
+                "impl done",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Insert a handoff message (simulates pending chain work)
+        let handoff_msg_id = store
+            .insert_message(
+                "t-chain-pend",
+                "implementer",
+                "reviewer",
+                "handoff",
+                "review needed",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Insert a queued execution linked to the handoff (pending work)
+        store
+            .insert_execution_with_dispatch("t-chain-pend", "reviewer", Some(handoff_msg_id), None)
+            .await
+            .unwrap();
+
+        // Wait with await_chain=true and a very short timeout — should timeout with chain_pending=true
+        let req = WaitRequest {
+            thread_id: "t-chain-pend".to_string(),
+            intent: Some("response".to_string()),
+            since_reference: None,
+            strict_new: false,
+            timeout: Duration::from_secs(1),
+            trigger_intents: vec![],
+            await_chain: true,
+        };
+
+        let outcome = wait::wait_for_message(&store, &req).await.unwrap();
+        match outcome {
+            WaitOutcome::Timeout { chain_pending, .. } => {
+                assert!(
+                    chain_pending,
+                    "expected chain_pending=true when chain has pending work"
+                );
+            }
+            WaitOutcome::Found(_) => {
+                panic!("expected timeout, not found (chain should be pending)")
+            }
+        }
     }
 }
 

@@ -47,6 +47,7 @@ orchestration:
   merge_timeout_secs: 30                 # Timeout for merge operations (default: 30)
   default_merge_strategy: merge          # Merge strategy: "merge", "rebase", or "squash" (default: "merge")
   default_merge_target: main             # Target branch for auto-merge on close (default: "main")
+  mcp_wait_max_timeout_secs: 120         # Max timeout for orch_wait MCP tool calls (default: 120)
 
 database:                                # SQLite connection pool (requires restart to change)
   max_connections: 32                    # Pool max connections (default: 32, min: 1)
@@ -171,7 +172,7 @@ Fan-out creates batch-linked threads. Use `orch_batch_status` to check aggregate
 
 **Depth limit:** `max_chain_depth` (default: 3, range: 1..=20) caps consecutive auto-handoffs. At the limit, a review-request is inserted for the operator.
 
-**Waiting:** `compas wait --thread-id <id> --await-chain` blocks until the entire chain settles.
+**Waiting:** `orch_wait` with `await_chain=true` (MCP) or `compas wait --thread-id <id> --await-chain` (CLI) blocks until the entire chain settles.
 
 **Viewing:** Press `c` on a thread in the dashboard Ops tab, or use `orch_transcript` from your CLI.
 
@@ -222,7 +223,7 @@ Define CLI-based backends in YAML via `backend_definitions`. See the [Custom Bac
 
 ## Live Reload
 
-The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`.
+The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `mcp_wait_max_timeout_secs`.
 
 These fields require a worker restart: `default_workdir`, `state_dir`, `database`, `max_concurrent_triggers`, `default_merge_target`, `worktree_dir`.
 

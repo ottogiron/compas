@@ -229,9 +229,9 @@ See the [Dashboard Guide](docs/guides/dashboard.md) for full keyboard shortcuts,
 
 ## MCP Tools
 
-For blocking waits, use the CLI: `compas wait --thread-id <id> --since db:<msg-id> --timeout 300`. The `--since` cursor ensures you only match replies after your dispatch message. Add `--await-chain` to wait for all threads in the chain to settle (useful after fan-out handoffs). The MCP transport is unsuitable for long-blocking calls. The `orch_dispatch` response includes a `next_step` field with a ready-to-use wait command.
+After dispatching work, use `orch_wait` to block until the agent responds. It sends progress notifications every 10s to prevent transport timeouts. Use `await_chain=true` to wait for the entire handoff/fan-out chain to settle. If `orch_wait` returns `found=false`, re-issue with the same parameters. For non-MCP or scripted-shell workflows, use `compas wait` (CLI equivalent).
 
-**`compas wait` flags:**
+**`compas wait` CLI flags:**
 
 | Flag | Description |
 | --- | --- |

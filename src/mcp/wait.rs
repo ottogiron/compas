@@ -1,8 +1,8 @@
-//! Wait implementation — preserved for potential future MCP re-exposure.
+//! `orch_wait` MCP tool handler and progress notification logic.
 //!
-//! Currently not registered as an MCP tool (removed due to stdio transport
-//! timeout unreliability). Blocking waits use the CLI: `compas wait`.
-//! Sends MCP progress notifications at regular intervals when used via MCP.
+//! Registered as `orch_wait` in `server.rs`. Blocks until a matching message
+//! arrives on a thread, or timeout. Sends MCP progress notifications at
+//! regular intervals to prevent transport timeouts.
 
 use std::time::Duration;
 
@@ -28,7 +28,8 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
-        let timeout_secs = params.timeout_secs.unwrap_or(120);
+        let max = config.orchestration.mcp_wait_max_timeout_secs;
+        let timeout_secs = params.timeout_secs.unwrap_or(60).min(max);
         let thread_id_for_progress = params.thread_id.clone();
 
         let req = WaitRequest {
@@ -38,7 +39,7 @@ impl OrchestratorMcpServer {
             strict_new: params.strict_new.unwrap_or(false),
             timeout: Duration::from_secs(timeout_secs),
             trigger_intents: config.orchestration.trigger_intents.clone(),
-            await_chain: false,
+            await_chain: params.await_chain.unwrap_or(false),
         };
 
         // Spawn a background task that sends progress notifications at regular
@@ -126,6 +127,7 @@ impl OrchestratorMcpServer {
                 thread_id,
                 timeout_secs,
                 intent_filter,
+                chain_pending,
             }) => {
                 #[derive(Serialize)]
                 struct WaitTimeout {
@@ -133,6 +135,7 @@ impl OrchestratorMcpServer {
                     thread_id: String,
                     timeout_secs: u64,
                     intent_filter: Option<String>,
+                    chain_pending: bool,
                 }
 
                 Ok(json_text(&WaitTimeout {
@@ -140,6 +143,7 @@ impl OrchestratorMcpServer {
                     thread_id,
                     timeout_secs,
                     intent_filter,
+                    chain_pending,
                 }))
             }
             Err(e) => Ok(err_text(e)),

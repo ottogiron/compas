@@ -762,12 +762,16 @@ async fn run_wait(
             thread_id,
             timeout_secs,
             intent_filter,
+            chain_pending,
         }) => {
             println!("found=false");
             println!("thread_id={}", thread_id);
             println!("timeout_secs={}", timeout_secs);
             if let Some(intent) = intent_filter {
                 println!("intent_filter={}", intent);
+            }
+            if chain_pending {
+                println!("chain_pending=true");
             }
             ExitCode::from(1)
         }

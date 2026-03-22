@@ -32,6 +32,7 @@ pub enum WaitOutcome {
         thread_id: String,
         timeout_secs: u64,
         intent_filter: Option<String>,
+        chain_pending: bool,
     },
 }
 
@@ -94,6 +95,7 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
                             thread_id: req.thread_id.clone(),
                             timeout_secs: req.timeout.as_secs(),
                             intent_filter: req.intent.clone(),
+                            chain_pending: true,
                         });
                     }
                     tokio::time::sleep(Duration::from_millis(POLL_INTERVAL_MS)).await;
@@ -114,6 +116,7 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
                 thread_id: req.thread_id.clone(),
                 timeout_secs: req.timeout.as_secs(),
                 intent_filter: req.intent.clone(),
+                chain_pending: false,
             });
         }
 
