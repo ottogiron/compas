@@ -174,7 +174,6 @@ Standard git workflow. Commit, push, PR. See [CONTRIBUTING.md](CONTRIBUTING.md) 
 
 Available skills in `skills/`:
 
-- `dev-workflow` — Ticket-driven development lifecycle
 - `backlog-setup` — Create backlog artifacts before implementation
 - `orch-dispatch` — Operator dispatch-review-complete loop for delegating work via the orchestrator. **Load before any dispatch workflow.**
 - `stop-and-think` — Behavioral guardrail (always active)

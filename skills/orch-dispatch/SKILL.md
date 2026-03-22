@@ -14,11 +14,9 @@ Full lifecycle for dispatching implementation work, getting it reviewed, and clo
 
 Do not use for trivial fixes (typo, single-line config) where dispatch overhead exceeds value.
 
-Ticket lifecycle (`ticket start`, `ticket done`, branch, merge) is owned by `/dev-workflow`.
-
 ## Inputs
 
-- Active ticket or batch context from `/dev-workflow`
+- Active ticket or batch context (operator must have called `ticket start` before dispatching)
 - Target worker alias (routing: `compas-implementer` for compas development work)
 - Reviewer alias: `compas-reviewer` (configured in the production orch config). Verify with `orch_list_agents()`.
 - Task description with acceptance criteria
@@ -235,6 +233,23 @@ Based on reviewer response:
   ```
 
   Then wait again on the reviewer thread with `--since db:<clarification-message-id>`.
+
+### Step 9 — Ticket closure
+
+After merge confirmation (`wait-merge` succeeds):
+
+1. Update ticket status in the backlog file:
+   - Change `- Status: Todo` (or `In Progress`) to `- Status: Done` for the completed ticket(s)
+
+2. Update execution metrics (same backlog file):
+   - Fill in Start, End, Duration from orch timestamps
+   - Add Notes if relevant (e.g., "required 2 review rounds")
+
+3. Close ticket session:
+   - `ticket done <ticket-id>`
+   - Or `ticket done <batch-id> --batch` if all tickets in the batch are done
+
+Step 9 runs only on the happy path (merge succeeded). On rejection or abandonment, the ticket stays as-is.
 
 ---
 

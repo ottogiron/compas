@@ -1,3 +1,0 @@
-kind: Added
-body: 'Per-backend circuit breaker: stops dispatching to consistently failing backends (3 failures, 60s cooldown, configurable)'
-time: 2026-03-22T17:26:55.900302+01:00
