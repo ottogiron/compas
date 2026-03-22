@@ -11,6 +11,8 @@
 //! `BROADCAST_CAPACITY` events behind will receive `RecvError::Lagged` and must
 //! recover (typically: refresh from SQLite).
 
+// Smoke test: merge queue E2E validation — 2026-03-22
+
 use tokio::sync::broadcast;
 
 /// Capacity of the internal broadcast channel.
