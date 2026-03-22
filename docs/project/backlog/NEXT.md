@@ -23,9 +23,10 @@ Ordered by priority. Work top item when capacity is available.
 5. GAP-7 — Distribution — brew/binstall (`quality-gaps.md`)
 6. GAP-5 — TUI mouse support (`quality-gaps.md`)
 7. EVO-16 — Session resume after crash (`orch-evolution.md`)
-8. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-9. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-10. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+8. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+9. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
+10. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
+11. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 
@@ -37,3 +38,5 @@ Unordered. Pick when queue is empty. See `docs/project/backlog-consolidation-gui
 - GAP-4 — Governance audit trail (`quality-gaps.md`)
 - GAP-6 — Shared context store (`quality-gaps.md`)
 - EVO-14 — Thread dependencies (`orch-evolution.md`)
+- ISESS-1/2/3/4 — Interactive sessions Phase 1: tmux batch mode (`interactive-sessions.md`)
+- ISESS-5/6/7/8 — Interactive sessions Phase 2: interactive mode (`interactive-sessions.md`)
