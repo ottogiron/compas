@@ -90,11 +90,40 @@ Created: 2026-03-21
   - `make verify`
 - Status: In Progress
 
+## Ticket HOOKS-4 — Declarative hook filters
+
+- Goal: Add an optional `filter` field to `HookEntry` so hooks can be scoped by payload fields (e.g., agent alias) without requiring script-level filtering
+- In scope:
+  - `filter: Option<HashMap<String, String>>` on `HookEntry` in `src/config/types.rs`
+  - Before running a hook, check each filter key against the JSON payload; skip the hook if any value doesn't match
+  - Filters are simple string equality against top-level payload fields (`agent_alias`, `event`, `success`, `new_status`, etc.)
+  - Filter keys that don't exist in the payload never match (hook is skipped) — explicit, predictable behavior for thread events that lack `agent_alias`
+  - Example config: hook with `filter: { agent_alias: compas-dev }` fires only for that agent; hook without filter fires for all
+  - Config validation: warn if filter references a field not present in any known payload schema
+  - README: document filter field with examples
+  - Changelog fragment
+- Out of scope:
+  - Regex or glob matching (equality only)
+  - Nested field matching (top-level only)
+  - Per-agent hooks on `AgentConfig` (rejected by architect — see thread `01KM9DVT6EYACRJ11PYZQ1PRXD`)
+- Dependencies: none (HOOKS-1/2/3 already shipped)
+- Acceptance criteria:
+  - Hook with `filter.agent_alias: compas-dev` fires only for compas-dev executions
+  - Hook without filter fires for all events (backward compatible)
+  - Filter on `agent_alias` applied to thread events (which lack it) causes hook to be skipped — no error
+  - `make verify` passes
+- Verification:
+  - Unit test: hook with matching filter runs, non-matching filter skips
+  - Unit test: filter on missing payload key skips hook
+  - `make verify`
+- Status: Todo
+
 ## Execution Order
 
-1. HOOKS-1
-2. HOOKS-2
-3. HOOKS-3
+1. ~~HOOKS-1~~ (done)
+2. ~~HOOKS-2~~ (done)
+3. ~~HOOKS-3~~ (done)
+4. HOOKS-4
 
 ## Tracking Notes
 
@@ -104,6 +133,7 @@ Created: 2026-03-21
 - Prior art: Buildkite agent hooks (config-defined CLI commands, JSON on stdin, fire-and-forget).
 - GBE and HOOKS backlogs are fully independent — can be developed in parallel.
 - Phase 2 extensions (deferred): `on_thread_abandoned`, `on_execution_retrying`, blocking hooks, per-hook `workdir` override.
+- HOOKS-4 (filter): architect rejected per-agent hooks on `AgentConfig` (thread `01KM9DVT6EYACRJ11PYZQ1PRXD`). Declarative filters on `HookEntry` are the recommended alternative — keeps hooks in one config section, no layering violation, degrades gracefully for thread events.
 
 ## Execution Metrics
 
