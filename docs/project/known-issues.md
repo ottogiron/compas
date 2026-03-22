@@ -92,6 +92,30 @@ When a thread is closed but its worktree has uncommitted changes, the worker cle
 
 **Planned fix:** Add `force_cleanup: bool` to `orch_close` to allow operators to override the guard explicitly when they know the changes can be discarded.
 
+## Execution stuck in "executing" after agent completes (v0.4.0)
+
+**Severity:** Medium
+**Status:** Open
+
+Observed on thread `01KMBF0AR215Q733NA0APTD9AC` (compas-architect). The agent completed its response (telemetry shows `turn_complete` with `subtype: success`), the response message was inserted into the thread (db:1830), but the execution row was never finalized — `status` remains `executing`, `finished_at` is NULL.
+
+The Claude CLI process has already exited (no orphaned process). The response is not lost — it's in the thread. But the execution is permanently stuck, blocking health/task reporting.
+
+**Symptoms:**
+- `orch_tasks` shows execution as `executing` indefinitely
+- `orch_diagnose` says "execution in progress"
+- `orch_poll` returns the response message (work is done)
+- No Claude process running for the execution
+
+**Suspected cause:** The post-execution finalization path in `handle_trigger_output()` (loop_runner.rs) failed silently after inserting the response message but before calling `store.mark_execution_completed()`. Possible causes:
+- New circuit breaker integration (GAP-1, v0.4.0) panicking or erroring in the success path
+- A store write error being swallowed
+- Race condition between telemetry consumer and executor finalization
+
+**Workaround:** Manually update the execution row: `UPDATE executions SET status = 'completed', finished_at = unixepoch() WHERE id = '<exec_id>'`
+
+**Investigation:** Check `handle_trigger_output()` success path for any new code (circuit breaker state update, DB persist) that could fail silently after response insertion.
+
 ## Dashboard: No mouse support
 
 **Severity:** Low
