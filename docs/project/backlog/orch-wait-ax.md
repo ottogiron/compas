@@ -27,7 +27,7 @@ Created: 2026-03-17
 - Verification:
   - `make verify`
   - Manual: dispatch to fan-out agent, run `--await-chain`, confirm metadata appears in output
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -38,3 +38,15 @@ Created: 2026-03-17
 - Backlog-first governance applies.
 - Implementation commits should reference ticket IDs.
 - Discovered during ADR-014 Phase 2 smoke test: operator (agent) misread `created_at` as the exit timestamp and incorrectly concluded `--await-chain` returned early.
+
+## Execution Metrics
+- Ticket: WAIT-AX-1
+- Owner: compas-dev (Opus 4.6)
+- Complexity: Low
+- Risk: Low
+- Start: 2026-03-25 21:33 UTC
+- End: 2026-03-25 21:56 UTC
+- Duration: 00:23:01
+- Notes: Single dispatch, reviewer approved with no blocking issues. Worker left changes uncommitted — manual commit + orch_merge required.
+
+
