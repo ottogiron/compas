@@ -53,6 +53,7 @@ Created: 2026-03-25
 - Discovered during WAIT-AX-1 smoke testing: `orch_wait(timeout_secs=900)` was silently clamped to 120s, requiring 3+ re-waits.
 
 ## Execution Metrics
+
 - Ticket: WAIT-TIMEOUT-1
 - Owner: compas-dev (Opus 4.6)
 - Complexity: Medium
@@ -61,5 +62,3 @@ Created: 2026-03-25
 - End: 2026-03-25 23:16 UTC
 - Duration: 00:17:46
 - Notes: Single dispatch, reviewer approved with minor suggestion (missing await_chain=true integration test). Architect design review in thread 01KMKJVV421WADH2WQNY1HYAA1.
-
-
