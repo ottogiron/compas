@@ -149,7 +149,7 @@ The `orch_dispatch` → `orch_wait` flow has friction for MCP-connected agents:
 
 3. **`await_chain` requires knowledge the caller doesn't have** — the caller doesn't know if the target agent has handoff config. Making `await_chain=true` the safe default helps but is still a parameter the caller must remember.
 
-4. **Timeout ceiling mismatch** — the `next_step` hint suggests `timeout_secs=900` but `mcp_wait_max_timeout_secs` silently clamps it. Agents don't know their wait was shortened.
+4. ~~**Timeout ceiling mismatch**~~ — **Resolved.** The wait ceiling is now derived from `execution_timeout_secs` (non-chain: `exec + 30`, chain: `exec * 3 + 30`). Clamped requests include `clamped`, `effective_timeout_secs`, `requested_timeout_secs`, and a `hint` in the response so agents know their wait was shortened.
 
 **Additional friction reported by Codex operator (2026-03-22):**
 

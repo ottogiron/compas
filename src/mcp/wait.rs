@@ -19,6 +19,30 @@ use crate::wait::{self, WaitOutcome, WaitRequest};
 /// Interval between progress notifications sent to the MCP client.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
 
+/// Padding added to `execution_timeout_secs` when deriving the wait ceiling.
+const CEILING_PADDING_SECS: u64 = 30;
+
+/// Derive the maximum wait timeout from `execution_timeout_secs`.
+///
+/// - Non-chain: `exec_timeout + 30`
+/// - Chain (`await_chain=true`): `exec_timeout * 3 + 30`
+pub(crate) fn compute_wait_ceiling(exec_timeout_secs: u64, await_chain: bool) -> u64 {
+    if await_chain {
+        exec_timeout_secs * 3 + CEILING_PADDING_SECS
+    } else {
+        exec_timeout_secs + CEILING_PADDING_SECS
+    }
+}
+
+/// Resolve the effective timeout for an `orch_wait` call.
+///
+/// Returns `(effective_timeout_secs, clamped)`.
+pub(crate) fn resolve_wait_timeout(requested: Option<u64>, ceiling: u64) -> (u64, bool) {
+    let effective = requested.unwrap_or(ceiling).min(ceiling);
+    let clamped = requested.is_some_and(|r| r > ceiling);
+    (effective, clamped)
+}
+
 impl OrchestratorMcpServer {
     pub async fn wait_impl(
         &self,
@@ -28,8 +52,11 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
-        let max = config.orchestration.mcp_wait_max_timeout_secs;
-        let timeout_secs = params.timeout_secs.unwrap_or(60).min(max);
+        let await_chain = params.await_chain.unwrap_or(false);
+        let ceiling =
+            compute_wait_ceiling(config.orchestration.execution_timeout_secs, await_chain);
+        let requested = params.timeout_secs;
+        let (timeout_secs, clamped) = resolve_wait_timeout(requested, ceiling);
         let thread_id_for_progress = params.thread_id.clone();
 
         let req = WaitRequest {
@@ -39,7 +66,7 @@ impl OrchestratorMcpServer {
             strict_new: params.strict_new.unwrap_or(false),
             timeout: Duration::from_secs(timeout_secs),
             trigger_intents: config.orchestration.trigger_intents.clone(),
-            await_chain: params.await_chain.unwrap_or(false),
+            await_chain,
         };
 
         // Spawn a background task that sends progress notifications at regular
@@ -146,6 +173,14 @@ impl OrchestratorMcpServer {
                     timeout_secs: u64,
                     intent_filter: Option<String>,
                     chain_pending: bool,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    effective_timeout_secs: Option<u64>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    requested_timeout_secs: Option<u64>,
+                    #[serde(skip_serializing_if = "std::ops::Not::not")]
+                    clamped: bool,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    hint: Option<String>,
                 }
 
                 Ok(json_text(&WaitTimeout {
@@ -154,9 +189,72 @@ impl OrchestratorMcpServer {
                     timeout_secs,
                     intent_filter,
                     chain_pending,
+                    effective_timeout_secs: if clamped { Some(timeout_secs) } else { None },
+                    requested_timeout_secs: if clamped { requested } else { None },
+                    clamped,
+                    hint: if clamped {
+                        Some(format!(
+                            "Requested timeout {}s was clamped to server ceiling {}s \
+                             (derived from execution_timeout_secs). \
+                             Re-issue orch_wait to continue waiting.",
+                            requested.unwrap_or(0),
+                            ceiling
+                        ))
+                    } else {
+                        None
+                    },
                 }))
             }
             Err(e) => Ok(err_text(e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_compute_wait_ceiling_non_chain() {
+        assert_eq!(compute_wait_ceiling(600, false), 630);
+        assert_eq!(compute_wait_ceiling(0, false), 30);
+        assert_eq!(compute_wait_ceiling(1, false), 31);
+        assert_eq!(compute_wait_ceiling(1800, false), 1830);
+    }
+
+    #[test]
+    fn test_compute_wait_ceiling_chain() {
+        assert_eq!(compute_wait_ceiling(600, true), 1830);
+        assert_eq!(compute_wait_ceiling(0, true), 30);
+        assert_eq!(compute_wait_ceiling(1, true), 33);
+        assert_eq!(compute_wait_ceiling(1800, true), 5430);
+    }
+
+    #[test]
+    fn test_resolve_wait_timeout_under_ceiling() {
+        let (effective, clamped) = resolve_wait_timeout(Some(300), 630);
+        assert_eq!(effective, 300);
+        assert!(!clamped);
+    }
+
+    #[test]
+    fn test_resolve_wait_timeout_over_ceiling() {
+        let (effective, clamped) = resolve_wait_timeout(Some(5000), 630);
+        assert_eq!(effective, 630);
+        assert!(clamped);
+    }
+
+    #[test]
+    fn test_resolve_wait_timeout_at_ceiling() {
+        let (effective, clamped) = resolve_wait_timeout(Some(630), 630);
+        assert_eq!(effective, 630);
+        assert!(!clamped);
+    }
+
+    #[test]
+    fn test_resolve_wait_timeout_none_defaults_to_ceiling() {
+        let (effective, clamped) = resolve_wait_timeout(None, 630);
+        assert_eq!(effective, 630);
+        assert!(!clamped);
     }
 }

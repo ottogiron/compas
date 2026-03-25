@@ -240,9 +240,6 @@ pub struct OrchestrationConfig {
     /// Default target branch for auto-merge on close (default: "main").
     #[serde(default = "default_merge_target")]
     pub default_merge_target: String,
-    /// Maximum timeout (seconds) for orch_wait MCP tool calls (default 120).
-    #[serde(default = "default_mcp_wait_max_timeout_secs")]
-    pub mcp_wait_max_timeout_secs: u64,
     /// Per-backend circuit breaker configuration.
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
@@ -262,7 +259,6 @@ impl Default for OrchestrationConfig {
             merge_timeout_secs: default_merge_timeout_secs(),
             default_merge_strategy: default_merge_strategy(),
             default_merge_target: default_merge_target(),
-            mcp_wait_max_timeout_secs: default_mcp_wait_max_timeout_secs(),
             circuit_breaker: CircuitBreakerConfig::default(),
         }
     }
@@ -310,10 +306,6 @@ fn default_merge_strategy() -> String {
 
 fn default_merge_target() -> String {
     "main".to_string()
-}
-
-fn default_mcp_wait_max_timeout_secs() -> u64 {
-    120
 }
 
 /// Agent role determines worker behavior.

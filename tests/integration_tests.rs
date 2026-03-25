@@ -5612,16 +5612,69 @@ mod await_chain_wait_tests {
     }
 
     #[tokio::test]
-    async fn test_wait_timeout_clamped_to_config_max() {
+    async fn test_wait_timeout_derived_ceiling_under_honored() {
         let store = test_store().await;
-        let mut config = test_config();
-        // Set config cap to 2 seconds
-        config.orchestration.mcp_wait_max_timeout_secs = 2;
+        let config = test_config();
+        // Default execution_timeout_secs=600 → ceiling = 630 for non-chain.
+        // A 1s request is well under ceiling and will be honored.
         let mut registry = BackendRegistry::new();
         registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
         let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
 
-        // Insert a dispatch message — waiting for status-update will timeout
+        server
+            .store
+            .insert_message("t-ceil", "op", "focused", "dispatch", "work", None, None)
+            .await
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let result = server
+            .wait_impl(
+                WaitParams {
+                    thread_id: "t-ceil".to_string(),
+                    intent: Some("status-update".to_string()),
+                    since_reference: None,
+                    strict_new: None,
+                    timeout_secs: Some(1),
+                    await_chain: None,
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let elapsed = start.elapsed();
+        let json = extract_json(&result);
+        assert_eq!(json["found"], false);
+        assert_eq!(json["timeout_secs"], 1);
+        // No clamp transparency fields on happy path
+        assert!(
+            json.get("clamped").is_none(),
+            "clamped should be absent when not clamped"
+        );
+        assert!(json.get("effective_timeout_secs").is_none());
+        assert!(json.get("requested_timeout_secs").is_none());
+        assert!(json.get("hint").is_none());
+        assert!(
+            elapsed.as_secs() < 5,
+            "expected timeout in ~1s, took {}s",
+            elapsed.as_secs()
+        );
+    }
+
+    /// Verify that requesting a timeout above the derived ceiling clamps and
+    /// populates transparency fields (clamped, effective_timeout_secs, hint).
+    ///
+    /// Uses exec_timeout=2 → ceiling=32. The test waits the full 32s ceiling.
+    #[tokio::test]
+    async fn test_wait_timeout_derived_ceiling_clamped() {
+        let store = test_store().await;
+        let mut config = test_config();
+        config.orchestration.execution_timeout_secs = 2; // ceiling = 2 + 30 = 32
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
         server
             .store
             .insert_message("t-clamp", "op", "focused", "dispatch", "work", None, None)
@@ -5636,7 +5689,7 @@ mod await_chain_wait_tests {
                     intent: Some("status-update".to_string()),
                     since_reference: None,
                     strict_new: None,
-                    timeout_secs: Some(60), // Requests 60s, but config max is 2s
+                    timeout_secs: Some(5000), // way over ceiling of 32
                     await_chain: None,
                 },
                 None,
@@ -5645,14 +5698,20 @@ mod await_chain_wait_tests {
             .await
             .unwrap();
         let elapsed = start.elapsed();
-
         let json = extract_json(&result);
         assert_eq!(json["found"], false);
-        // Should have been clamped to 2s, not 60s
-        assert_eq!(json["timeout_secs"], 2);
+        assert_eq!(json["timeout_secs"], 32);
+        assert_eq!(json["clamped"], true);
+        assert_eq!(json["effective_timeout_secs"], 32);
+        assert_eq!(json["requested_timeout_secs"], 5000);
+        assert!(json["hint"].as_str().unwrap().contains("clamped"));
+        assert!(json["hint"]
+            .as_str()
+            .unwrap()
+            .contains("execution_timeout_secs"));
         assert!(
-            elapsed.as_secs() < 5,
-            "expected timeout in ~2s, took {}s",
+            elapsed.as_secs() < 40,
+            "expected timeout in ~32s, took {}s",
             elapsed.as_secs()
         );
     }

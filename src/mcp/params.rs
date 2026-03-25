@@ -111,7 +111,7 @@ pub struct WaitParams {
     pub since_reference: Option<String>,
     /// If true, only consider messages newer than the cursor/call start.
     pub strict_new: Option<bool>,
-    /// Timeout in seconds (default 60, clamped to config max)
+    /// Timeout in seconds (defaults to derived ceiling from execution_timeout_secs; clamped to ceiling)
     pub timeout_secs: Option<u64>,
     /// If true, wait until entire handoff/fan-out chain settles (default false).
     pub await_chain: Option<bool>,
