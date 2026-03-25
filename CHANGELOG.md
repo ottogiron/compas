@@ -4,6 +4,16 @@ All notable changes to Compas are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [v0.4.3] - 2026-03-26
+
+### Added
+
+- Add fanout_children_awaited and settled_at metadata to --await-chain output
+
+### Changed
+
+- Derive orch_wait timeout ceiling from execution_timeout_secs; remove mcp_wait_max_timeout_secs config
+
 ## [v0.4.2] - 2026-03-22
 
 ### Fixed
