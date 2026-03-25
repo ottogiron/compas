@@ -1157,6 +1157,21 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Count the total number of fan-out child threads for a given source thread.
+    ///
+    /// This returns all children regardless of execution status — it is the total
+    /// fan-out count, not just pending ones. Used for settlement metadata in
+    /// `--await-chain` output.
+    pub async fn count_fanout_children(&self, thread_id: &str) -> Result<u32, String> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM threads WHERE source_thread_id = ?1")
+                .bind(thread_id)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| format!("count_fanout_children failed: {}", e))?;
+        Ok(row.0 as u32)
+    }
+
     /// Atomically check chain depth and insert a handoff message if under the limit.
     ///
     /// Returns:

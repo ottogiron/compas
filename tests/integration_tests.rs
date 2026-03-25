@@ -5103,9 +5103,22 @@ mod await_chain_wait_tests {
 
         let outcome = wait::wait_for_message(&store, &req).await.unwrap();
         match outcome {
-            WaitOutcome::Found(msg) => {
+            WaitOutcome::Found {
+                message: msg,
+                fanout_children_awaited,
+                settled_at,
+            } => {
                 assert_eq!(msg.from_alias, "reviewer");
                 assert_eq!(msg.body, "review done");
+                // No fan-out occurred — metadata should be absent.
+                assert!(
+                    fanout_children_awaited.is_none(),
+                    "expected no fanout metadata when chain was never pending"
+                );
+                assert!(
+                    settled_at.is_none(),
+                    "expected no settled_at when chain was never pending"
+                );
             }
             WaitOutcome::Timeout { .. } => panic!("should not timeout"),
         }
@@ -5191,10 +5204,20 @@ mod await_chain_wait_tests {
 
         let outcome = wait::wait_for_message(&store, &req).await.unwrap();
         match outcome {
-            WaitOutcome::Found(msg) => {
+            WaitOutcome::Found {
+                message: msg,
+                fanout_children_awaited,
+                settled_at,
+            } => {
                 // Should return the reviewer's reply, not the implementer's
                 assert_eq!(msg.from_alias, "reviewer");
                 assert_eq!(msg.body, "review done");
+                // Chain was pending (handoff execution), but no fan-out children.
+                assert_eq!(fanout_children_awaited, Some(0));
+                assert!(
+                    settled_at.is_some(),
+                    "settled_at should be set after chain settlement"
+                );
             }
             WaitOutcome::Timeout { .. } => panic!("should not timeout"),
         }
@@ -5232,9 +5255,16 @@ mod await_chain_wait_tests {
 
         let outcome = wait::wait_for_message(&store, &req).await.unwrap();
         match outcome {
-            WaitOutcome::Found(msg) => {
+            WaitOutcome::Found {
+                message: msg,
+                fanout_children_awaited,
+                settled_at,
+            } => {
                 assert_eq!(msg.from_alias, "orchestrator");
                 assert!(msg.body.contains("depth limit"));
+                // No pending chain work was ever observed.
+                assert!(fanout_children_awaited.is_none());
+                assert!(settled_at.is_none());
             }
             WaitOutcome::Timeout { .. } => panic!("should not timeout"),
         }
@@ -5364,11 +5394,34 @@ mod await_chain_wait_tests {
             await_chain: true,
         };
 
+        let before_wait = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
         let outcome = wait::wait_for_message(&store, &req).await.unwrap();
         match outcome {
-            WaitOutcome::Found(msg) => {
+            WaitOutcome::Found {
+                message: msg,
+                fanout_children_awaited,
+                settled_at,
+            } => {
                 assert_eq!(msg.from_alias, "implementer");
                 assert_eq!(msg.body, "impl done");
+                // Two fan-out children were created and awaited.
+                assert_eq!(
+                    fanout_children_awaited,
+                    Some(2),
+                    "expected 2 fan-out children awaited"
+                );
+                // settled_at should be a valid timestamp >= when we started waiting.
+                let ts = settled_at.expect("settled_at should be present after fan-out settlement");
+                assert!(
+                    ts >= before_wait,
+                    "settled_at ({}) should be >= wait start time ({})",
+                    ts,
+                    before_wait
+                );
             }
             WaitOutcome::Timeout { .. } => panic!("should not timeout — fan-out should settle"),
         }
@@ -5665,7 +5718,7 @@ mod await_chain_wait_tests {
                     "expected chain_pending=true when chain has pending work"
                 );
             }
-            WaitOutcome::Found(_) => {
+            WaitOutcome::Found { .. } => {
                 panic!("expected timeout, not found (chain should be pending)")
             }
         }

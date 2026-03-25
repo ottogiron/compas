@@ -3,7 +3,7 @@
 //! Polls the store at 200ms intervals for a matching message on a thread.
 //! Used by the `compas wait` CLI subcommand.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::store::{self, MessageRow, Store};
 
@@ -26,7 +26,15 @@ pub struct WaitRequest {
 /// Outcome of a wait operation.
 pub enum WaitOutcome {
     /// A matching message was found.
-    Found(MessageRow),
+    Found {
+        message: MessageRow,
+        /// Number of fan-out child threads that were awaited.
+        /// Present only when `await_chain=true` and fan-out children existed.
+        fanout_children_awaited: Option<u32>,
+        /// Wall-clock Unix timestamp (seconds) when the wait settled.
+        /// Present only when `await_chain=true` and settlement required blocking.
+        settled_at: Option<i64>,
+    },
     /// Timed out without finding a match.
     Timeout {
         thread_id: String,
@@ -62,6 +70,10 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
     // When pending drops to 0, we re-fetch messages once to capture any that
     // arrived between the messages query and the pending-work check (TOCTOU fix).
     let mut chain_was_pending = false;
+
+    // Settlement metadata captured when fan-out settles (pending drops to 0
+    // after chain_was_pending was true). Carried across the re-fetch iteration.
+    let mut settled_metadata: Option<(u32, i64)> = None;
 
     loop {
         let messages = store
@@ -102,13 +114,31 @@ pub async fn wait_for_message(store: &Store, req: &WaitRequest) -> Result<WaitOu
                     continue;
                 }
                 if chain_was_pending {
-                    // Chain just settled — re-fetch to capture messages that
-                    // arrived between the messages query and the pending check.
+                    // Chain just settled — capture settlement metadata, then
+                    // re-fetch to capture messages that arrived between the
+                    // messages query and the pending check.
+                    let fanout_count = store
+                        .count_fanout_children(&req.thread_id)
+                        .await
+                        .map_err(|e| format!("fanout child count failed: {}", e))?;
+                    let now_ts = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs() as i64;
+                    settled_metadata = Some((fanout_count, now_ts));
                     chain_was_pending = false;
                     continue;
                 }
             }
-            return Ok(WaitOutcome::Found(msg.clone()));
+            let (fanout_children_awaited, settled_at) = match settled_metadata {
+                Some((count, ts)) => (Some(count), Some(ts)),
+                None => (None, None),
+            };
+            return Ok(WaitOutcome::Found {
+                message: msg.clone(),
+                fanout_children_awaited,
+                settled_at,
+            });
         }
 
         if tokio::time::Instant::now() >= deadline {

@@ -97,7 +97,11 @@ impl OrchestratorMcpServer {
         }
 
         match result {
-            Ok(WaitOutcome::Found(msg)) => {
+            Ok(WaitOutcome::Found {
+                message: msg,
+                fanout_children_awaited,
+                settled_at,
+            }) => {
                 #[derive(Serialize)]
                 struct WaitResult {
                     found: bool,
@@ -109,6 +113,10 @@ impl OrchestratorMcpServer {
                     body: String,
                     thread_id: String,
                     created_at: i64,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    fanout_children_awaited: Option<u32>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    settled_at: Option<i64>,
                 }
 
                 Ok(json_text(&WaitResult {
@@ -121,6 +129,8 @@ impl OrchestratorMcpServer {
                     body: msg.body,
                     thread_id: msg.thread_id,
                     created_at: msg.created_at,
+                    fanout_children_awaited,
+                    settled_at,
                 }))
             }
             Ok(WaitOutcome::Timeout {

@@ -750,7 +750,11 @@ async fn run_wait(
     };
 
     match wait::wait_for_message(&store, &req).await {
-        Ok(WaitOutcome::Found(msg)) => {
+        Ok(WaitOutcome::Found {
+            message: msg,
+            fanout_children_awaited,
+            settled_at,
+        }) => {
             println!("found=true");
             println!("thread_id={}", msg.thread_id);
             println!("message_id={}", msg.id);
@@ -762,6 +766,12 @@ async fn run_wait(
                 println!("batch={}", batch);
             }
             println!("created_at={}", msg.created_at);
+            if let Some(count) = fanout_children_awaited {
+                println!("fanout_children_awaited={}", count);
+            }
+            if let Some(ts) = settled_at {
+                println!("settled_at={}", ts);
+            }
             // Body last — may be multiline. Delimited for easy parsing.
             println!("---BODY---");
             println!("{}", msg.body);
