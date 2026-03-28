@@ -4,12 +4,10 @@
 //! surfaces (for example, dashboard actions) can share exactly the same
 //! transition behavior and error contracts.
 
-use std::path::PathBuf;
-
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::store::{MergeOperation, Store, ThreadStatus};
+use crate::store::{Store, ThreadStatus};
 
 #[derive(Debug, Error)]
 pub enum LifecycleError {
@@ -26,20 +24,10 @@ pub enum LifecycleError {
     },
 }
 
-/// Merge intent bundled with a close operation.
-#[derive(Debug, Clone)]
-pub struct MergeIntent {
-    pub target_branch: String,
-    pub strategy: String,
-    pub repo_root: PathBuf,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct CloseOutcome {
     pub thread_id: String,
     pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub merge_op_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,7 +69,6 @@ impl LifecycleService {
         from: &str,
         status: CloseStatus,
         note: Option<&str>,
-        merge_intent: Option<MergeIntent>,
     ) -> Result<CloseOutcome, LifecycleError> {
         self.ensure_thread(thread_id).await?;
 
@@ -94,87 +81,40 @@ impl LifecycleService {
             CloseStatus::Failed => (ThreadStatus::Failed, "failure", "thread closed as failed"),
         };
 
-        // If merge is requested, validate strategy and check branch exists
-        // BEFORE closing. This way we fail early without changing thread state.
-        let merge_op = if let Some(ref mi) = merge_intent {
-            if !["merge", "rebase", "squash"].contains(&mi.strategy.as_str()) {
-                return Err(LifecycleError::InvalidTransition {
-                    message: format!(
-                        "invalid merge strategy '{}' — must be one of: merge, rebase, squash",
-                        mi.strategy
-                    ),
-                });
-            }
-
-            let source_branch = format!("compas/{}", thread_id);
-
-            // Check no pending merge for same thread+target (cheap DB query first)
-            if self
+        // Merge-before-close gate: completed worktree threads require a
+        // completed merge operation before they can be closed.
+        if matches!(status, CloseStatus::Completed) {
+            let has_worktree = self
                 .store
-                .has_pending_merge_for_thread(thread_id, &mi.target_branch)
+                .get_thread_worktree_info(thread_id)
                 .await
                 .map_err(|e| LifecycleError::StorageFailure {
-                    context: "failed to check pending merges",
+                    context: "failed to check worktree info",
                     message: e,
                 })?
-            {
-                return Err(LifecycleError::InvalidTransition {
-                    message: format!(
-                        "a merge operation for thread {} → {} is already queued or executing",
-                        thread_id, mi.target_branch
-                    ),
-                });
+                .is_some();
+
+            if has_worktree {
+                let has_completed_merge = self
+                    .store
+                    .has_completed_merge_for_thread(thread_id)
+                    .await
+                    .map_err(|e| LifecycleError::StorageFailure {
+                        context: "failed to check merge status",
+                        message: e,
+                    })?;
+
+                if !has_completed_merge {
+                    return Err(LifecycleError::InvalidTransition {
+                        message: format!(
+                            "thread '{}' is a worktree thread with no completed merge \
+                             — call orch_merge first, then close after the merge completes",
+                            thread_id
+                        ),
+                    });
+                }
             }
-
-            // Check branch exists (spawns git subprocess)
-            let repo_root = mi.repo_root.clone();
-            let branch_check = source_branch.clone();
-            let branch_exists = tokio::task::spawn_blocking(move || {
-                std::process::Command::new("git")
-                    .args(["rev-parse", "--verify", &branch_check])
-                    .current_dir(&repo_root)
-                    .output()
-                    .map(|o| o.status.success())
-                    .unwrap_or(false)
-            })
-            .await
-            .map_err(|e| LifecycleError::StorageFailure {
-                context: "branch check task failed",
-                message: e.to_string(),
-            })?;
-
-            if !branch_exists {
-                return Err(LifecycleError::InvalidTransition {
-                    message: format!(
-                        "source branch '{}' does not exist in repository",
-                        source_branch
-                    ),
-                });
-            }
-
-            let op_id = ulid::Ulid::new().to_string();
-            let now = chrono::Utc::now().timestamp();
-            Some(MergeOperation {
-                id: op_id,
-                thread_id: thread_id.to_string(),
-                source_branch,
-                target_branch: mi.target_branch.clone(),
-                merge_strategy: mi.strategy.clone(),
-                requested_by: from.to_string(),
-                status: "queued".to_string(),
-                push_requested: false,
-                queued_at: now,
-                claimed_at: None,
-                started_at: None,
-                finished_at: None,
-                duration_ms: None,
-                result_summary: None,
-                error_detail: None,
-                conflict_files: None,
-            })
-        } else {
-            None
-        };
+        }
 
         // Close the thread
         self.store
@@ -184,21 +124,6 @@ impl LifecycleService {
                 context: "failed to close thread",
                 message: e.to_string(),
             })?;
-
-        // Insert the merge op immediately after close — cleanup guard is now active
-        let merge_op_id = if let Some(op) = merge_op {
-            let id = op.id.clone();
-            self.store
-                .insert_merge_op(&op)
-                .await
-                .map_err(|e| LifecycleError::StorageFailure {
-                    context: "thread closed but merge op insert failed — call orch_merge manually",
-                    message: e.to_string(),
-                })?;
-            Some(id)
-        } else {
-            None
-        };
 
         let body = note.unwrap_or(fallback_note);
 
@@ -213,7 +138,6 @@ impl LifecycleService {
         Ok(CloseOutcome {
             thread_id: thread_id.to_string(),
             status: thread_status.as_str().to_string(),
-            merge_op_id,
         })
     }
 
@@ -319,18 +243,12 @@ mod tests {
         store.ensure_thread("t-1", None, None).await.unwrap();
         let svc = LifecycleService::new(store.clone());
 
+        // Non-worktree thread closes without merge
         let out = svc
-            .close(
-                "t-1",
-                "operator",
-                CloseStatus::Completed,
-                Some("done"),
-                None,
-            )
+            .close("t-1", "operator", CloseStatus::Completed, Some("done"))
             .await
             .unwrap();
         assert_eq!(out.status, "Completed");
-        assert!(out.merge_op_id.is_none());
 
         let status = store.get_thread_status("t-1").await.unwrap().unwrap();
         assert_eq!(status, "Completed");
@@ -369,80 +287,150 @@ mod tests {
         let svc = LifecycleService::new(store);
 
         let err = svc
-            .close("missing", "operator", CloseStatus::Failed, None, None)
+            .close("missing", "operator", CloseStatus::Failed, None)
             .await
             .unwrap_err();
         assert!(matches!(err, LifecycleError::ThreadNotFound { .. }));
     }
 
     #[tokio::test]
-    async fn test_service_close_with_merge_invalid_strategy_rejects_before_close() {
+    async fn test_close_completed_worktree_requires_merge() {
         let store = test_store().await;
-        store.ensure_thread("t-merge-1", None, None).await.unwrap();
+        store.ensure_thread("t-wt-1", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-wt-1",
+                std::path::Path::new("/tmp/wt"),
+                std::path::Path::new("/tmp/repo"),
+            )
+            .await
+            .unwrap();
         let svc = LifecycleService::new(store.clone());
 
         let err = svc
-            .close(
-                "t-merge-1",
-                "operator",
-                CloseStatus::Completed,
-                None,
-                Some(MergeIntent {
-                    target_branch: "main".to_string(),
-                    strategy: "cherry-pick".to_string(),
-                    repo_root: std::path::PathBuf::from("/nonexistent"),
-                }),
-            )
+            .close("t-wt-1", "operator", CloseStatus::Completed, None)
             .await
             .unwrap_err();
 
-        // Strategy validation fires before close
-        assert!(err.to_string().contains("invalid merge strategy"));
-
-        // Thread should still be Active (close was not applied)
-        let status = store.get_thread_status("t-merge-1").await.unwrap().unwrap();
-        assert_eq!(status, "Active");
-    }
-
-    #[tokio::test]
-    async fn test_service_close_with_merge_missing_branch_rejects_before_close() {
-        let store = test_store().await;
-        store.ensure_thread("t-merge-2", None, None).await.unwrap();
-        let svc = LifecycleService::new(store.clone());
-
-        let err = svc
-            .close(
-                "t-merge-2",
-                "operator",
-                CloseStatus::Completed,
-                None,
-                Some(MergeIntent {
-                    target_branch: "main".to_string(),
-                    strategy: "merge".to_string(),
-                    repo_root: std::path::PathBuf::from("/nonexistent"),
-                }),
-            )
-            .await
-            .unwrap_err();
-
-        // Branch check fires before close
-        assert!(err.to_string().contains("does not exist"));
+        assert!(err.to_string().contains("no completed merge"));
+        assert!(err.to_string().contains("orch_merge"));
 
         // Thread should still be Active
-        let status = store.get_thread_status("t-merge-2").await.unwrap().unwrap();
+        let status = store.get_thread_status("t-wt-1").await.unwrap().unwrap();
         assert_eq!(status, "Active");
     }
 
     #[tokio::test]
-    async fn test_service_close_with_merge_duplicate_rejects_before_close() {
+    async fn test_close_completed_worktree_with_completed_merge_succeeds() {
         let store = test_store().await;
-        store.ensure_thread("t-merge-3", None, None).await.unwrap();
+        store.ensure_thread("t-wt-2", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-wt-2",
+                std::path::Path::new("/tmp/wt"),
+                std::path::Path::new("/tmp/repo"),
+            )
+            .await
+            .unwrap();
 
-        // Insert a pending merge op for this thread
+        // Insert a completed merge op
         let op = crate::store::MergeOperation {
-            id: "existing-op".to_string(),
-            thread_id: "t-merge-3".to_string(),
-            source_branch: "compas/t-merge-3".to_string(),
+            id: "m-ok".to_string(),
+            thread_id: "t-wt-2".to_string(),
+            source_branch: "compas/t-wt-2".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "completed".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        let svc = LifecycleService::new(store.clone());
+        let out = svc
+            .close(
+                "t-wt-2",
+                "operator",
+                CloseStatus::Completed,
+                Some("merged and done"),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(out.status, "Completed");
+        let status = store.get_thread_status("t-wt-2").await.unwrap().unwrap();
+        assert_eq!(status, "Completed");
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_worktree_with_failed_merge_refuses() {
+        let store = test_store().await;
+        store.ensure_thread("t-wt-3", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-wt-3",
+                std::path::Path::new("/tmp/wt"),
+                std::path::Path::new("/tmp/repo"),
+            )
+            .await
+            .unwrap();
+
+        // Insert a failed merge op (not completed)
+        let op = crate::store::MergeOperation {
+            id: "m-fail".to_string(),
+            thread_id: "t-wt-3".to_string(),
+            source_branch: "compas/t-wt-3".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "failed".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        let svc = LifecycleService::new(store.clone());
+        let err = svc
+            .close("t-wt-3", "operator", CloseStatus::Completed, None)
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("no completed merge"));
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_worktree_with_pending_merge_refuses() {
+        let store = test_store().await;
+        store.ensure_thread("t-wt-4", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-wt-4",
+                std::path::Path::new("/tmp/wt"),
+                std::path::Path::new("/tmp/repo"),
+            )
+            .await
+            .unwrap();
+
+        // Insert a queued merge op (still pending, not completed)
+        let op = crate::store::MergeOperation {
+            id: "m-pending".to_string(),
+            thread_id: "t-wt-4".to_string(),
+            source_branch: "compas/t-wt-4".to_string(),
             target_branch: "main".to_string(),
             merge_strategy: "merge".to_string(),
             requested_by: "operator".to_string(),
@@ -461,103 +449,51 @@ mod tests {
 
         let svc = LifecycleService::new(store.clone());
         let err = svc
-            .close(
-                "t-merge-3",
-                "operator",
-                CloseStatus::Completed,
-                None,
-                Some(MergeIntent {
-                    target_branch: "main".to_string(),
-                    strategy: "merge".to_string(),
-                    repo_root: std::path::PathBuf::from("/nonexistent"),
-                }),
-            )
+            .close("t-wt-4", "operator", CloseStatus::Completed, None)
             .await
             .unwrap_err();
 
-        assert!(err.to_string().contains("already queued or executing"));
-
-        // Thread should still be Active
-        let status = store.get_thread_status("t-merge-3").await.unwrap().unwrap();
-        assert_eq!(status, "Active");
+        assert!(err.to_string().contains("no completed merge"));
     }
 
     #[tokio::test]
-    async fn test_service_close_with_merge_success_path() {
+    async fn test_close_failed_worktree_no_merge_required() {
         let store = test_store().await;
-        let thread_id = "t-merge-ok";
-        store.ensure_thread(thread_id, None, None).await.unwrap();
-
-        // Create a temp git repo with the expected branch
-        let tmp = tempfile::tempdir().unwrap();
-        let repo = tmp.path();
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(repo)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args([
-                "-c",
-                "user.email=test@test",
-                "-c",
-                "user.name=test",
-                "commit",
-                "--allow-empty",
-                "-m",
-                "init",
-            ])
-            .current_dir(repo)
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["branch", &format!("compas/{}", thread_id)])
-            .current_dir(repo)
-            .output()
-            .unwrap();
-
-        let svc = LifecycleService::new(store.clone());
-        let out = svc
-            .close(
-                thread_id,
-                "operator",
-                CloseStatus::Completed,
-                Some("done with merge"),
-                Some(MergeIntent {
-                    target_branch: "main".to_string(),
-                    strategy: "merge".to_string(),
-                    repo_root: repo.to_path_buf(),
-                }),
+        store.ensure_thread("t-wt-5", None, None).await.unwrap();
+        store
+            .set_thread_worktree_path(
+                "t-wt-5",
+                std::path::Path::new("/tmp/wt"),
+                std::path::Path::new("/tmp/repo"),
             )
             .await
             .unwrap();
+        let svc = LifecycleService::new(store.clone());
 
-        // Thread is Completed
-        assert_eq!(out.status, "Completed");
-
-        // Merge op was created
-        assert!(out.merge_op_id.is_some());
-
-        // Thread status in store
-        let status = store.get_thread_status(thread_id).await.unwrap().unwrap();
-        assert_eq!(status, "Completed");
-
-        // Merge op exists in store
-        assert!(store
-            .has_pending_merge_for_thread(thread_id, "main")
+        // Failed close on worktree thread — no merge required
+        let out = svc
+            .close(
+                "t-wt-5",
+                "operator",
+                CloseStatus::Failed,
+                Some("failed work"),
+            )
             .await
-            .unwrap());
-
-        // Merge op has correct fields
-        let op = store
-            .get_merge_op(out.merge_op_id.as_ref().unwrap())
-            .await
-            .unwrap()
             .unwrap();
-        assert_eq!(op.thread_id, thread_id);
-        assert_eq!(op.target_branch, "main");
-        assert_eq!(op.merge_strategy, "merge");
-        assert_eq!(op.status, "queued");
-        assert_eq!(op.source_branch, format!("compas/{}", thread_id));
+        assert_eq!(out.status, "Failed");
+    }
+
+    #[tokio::test]
+    async fn test_close_completed_non_worktree_no_merge_required() {
+        let store = test_store().await;
+        store.ensure_thread("t-shared", None, None).await.unwrap();
+        let svc = LifecycleService::new(store.clone());
+
+        // Non-worktree thread — no merge gate
+        let out = svc
+            .close("t-shared", "operator", CloseStatus::Completed, Some("done"))
+            .await
+            .unwrap();
+        assert_eq!(out.status, "Completed");
     }
 }

@@ -85,7 +85,7 @@ Created: 2026-03-22
 - Dependencies: None
 - Acceptance criteria:
   - MCP-only agent can call `orch_commit(thread_id="<id>", message="description")` and get a commit SHA back
-  - Subsequent `orch_close(status="completed")` triggers auto-merge with the committed changes
+  - Subsequent `orch_merge` + `orch_close(status="completed")` works with the committed changes
   - Error if thread has no worktree or no uncommitted changes
   - `make verify` passes
 - Verification:

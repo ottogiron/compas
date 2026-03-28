@@ -46,7 +46,7 @@ orchestration:
   log_retention_count: 100               # Max execution log files to retain (default: 100)
   merge_timeout_secs: 30                 # Timeout for merge operations (default: 30)
   default_merge_strategy: merge          # Merge strategy: "merge", "rebase", or "squash" (default: "merge")
-  default_merge_target: main             # Target branch for auto-merge on close (default: "main")
+  default_merge_target: main             # Default target branch for orch_merge operations (default: "main")
   circuit_breaker:
     enabled: true                        # Enable per-backend circuit breaker (default: true)
     failure_threshold: 3                 # Consecutive failures before circuit opens (default: 3)
