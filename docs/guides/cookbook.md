@@ -242,6 +242,27 @@ hooks:
 - `notify-slack.sh` — posts formatted messages to a Slack incoming webhook (requires `SLACK_WEBHOOK_URL` env var)
 - `log-to-file.sh` — appends timestamped JSON lines to a log file (default: `/tmp/compas-hooks.log`)
 
+**Declarative filters** scope hooks to specific events without script-level filtering. Add a `filter` map — the hook runs only when all key-value pairs match the event payload. Missing payload fields cause the hook to be skipped (no error). Non-string values (booleans, numbers) are stringified for comparison (`true` → `"true"`, `5000` → `"5000"`).
+
+```yaml
+hooks:
+  on_execution_completed:
+    # Only notify for the "compas-dev" agent
+    - command: ./examples/hooks/notify-slack.sh
+      filter:
+        agent_alias: compas-dev
+      env:
+        SLACK_WEBHOOK_URL: https://hooks.slack.com/services/T.../B.../xxx
+
+    # Only alert on failures
+    - command: ./scripts/alert-pagerduty.sh
+      filter:
+        success: "false"
+
+    # No filter — runs for all completion events
+    - command: ./examples/hooks/log-to-file.sh
+```
+
 **Behavior:** Multiple hooks per point run sequentially in declaration order. `timeout_secs` (default: 10) sets the SIGTERM deadline; a 5-second grace period follows before SIGKILL (effective ceiling: `timeout_secs + 5s`). Hooks are hot-reloaded — add or remove them without restarting the worker. For webhooks beyond Slack, write `curl` in your hook script.
 
 ---

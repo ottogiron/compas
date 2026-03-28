@@ -226,7 +226,9 @@ Shell scripts fired on execution lifecycle events. See the [Lifecycle Hooks cook
 | `on_thread_closed` | Thread transitions to Completed |
 | `on_thread_failed` | Thread transitions to Failed |
 
-Each hook entry takes: `command` (required), `args` (optional), `timeout_secs` (default: 10, effective ceiling: timeout + 5s grace before SIGKILL), and `env` (optional). All hook-point keys are optional — omit any you don't use.
+Each hook entry takes: `command` (required), `args` (optional), `timeout_secs` (default: 10, effective ceiling: timeout + 5s grace before SIGKILL), `env` (optional), and `filter` (optional). All hook-point keys are optional — omit any you don't use.
+
+**`filter`** — optional map of key-value pairs matched against the event payload. The hook runs only when all filter keys match. Missing payload fields cause the hook to be skipped (no error). Non-string payload values are stringified for comparison (`true` → `"true"`, `5000` → `"5000"`).
 
 Hooks receive JSON event data on stdin. `thread_summary` may be null. Multiple hooks per point run sequentially. Failures are logged as warnings only. Hooks are hot-reloaded.
 

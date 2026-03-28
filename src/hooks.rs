@@ -35,13 +35,22 @@ impl HookRunner {
         }
     }
 
-    /// Run multiple hooks sequentially in declaration order.
+    /// Run multiple hooks sequentially in declaration order, applying declarative filters.
     ///
-    /// A failure in one hook is logged but does not prevent subsequent hooks
-    /// from running.
-    pub fn run_hooks(hooks: &[HookEntry], event_json: &str, workdir: &Path) {
+    /// Each hook's optional `filter` is checked against the payload before execution.
+    /// Non-matching hooks are skipped with a debug log. A failure in one hook is
+    /// logged but does not prevent subsequent hooks from running.
+    pub fn run_hooks(hooks: &[HookEntry], payload: &serde_json::Value, workdir: &Path) {
+        let event_json = serde_json::to_string(payload).unwrap_or_else(|_| "{}".to_string());
         for hook in hooks {
-            Self::run_hook(hook, event_json, workdir);
+            if !matches_filter(hook, payload) {
+                tracing::debug!(
+                    command = %hook.command,
+                    "hook skipped by declarative filter"
+                );
+                continue;
+            }
+            Self::run_hook(hook, &event_json, workdir);
         }
     }
 
@@ -109,6 +118,44 @@ impl HookRunner {
     }
 }
 
+/// Convert a JSON value to a string for filter comparison.
+///
+/// Strings are returned as-is. Booleans, numbers, and null are stringified
+/// (`true` → `"true"`, `5000` → `"5000"`, `null` → `"null"`). Arrays and
+/// objects are serialized to compact JSON.
+fn value_to_filter_string(val: &serde_json::Value) -> String {
+    match val {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Check whether a hook's declarative filter matches the event payload.
+///
+/// Returns `true` if the hook has no filter (`None` or empty map) or if every
+/// key-value pair in the filter matches the corresponding top-level field in the
+/// payload. A missing payload field causes the hook to be skipped (`false`).
+fn matches_filter(hook: &HookEntry, payload: &serde_json::Value) -> bool {
+    let filter = match &hook.filter {
+        Some(f) if !f.is_empty() => f,
+        _ => return true,
+    };
+    for (key, expected) in filter {
+        match payload.get(key) {
+            Some(val) => {
+                if value_to_filter_string(val) != *expected {
+                    return false;
+                }
+            }
+            None => return false,
+        }
+    }
+    true
+}
+
 /// Spawn a long-lived task that subscribes to the [`crate::events::EventBus`] and fires
 /// lifecycle hooks on matching events.
 ///
@@ -158,10 +205,8 @@ pub fn spawn_hook_consumer(
                                     "agent_alias": agent_alias,
                                     "timestamp": timestamp,
                                 });
-                                let event_json = serde_json::to_string(&payload)
-                                    .unwrap_or_else(|_| "{}".to_string());
                                 tokio::task::spawn_blocking(move || {
-                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                    HookRunner::run_hooks(&hooks, &payload, &workdir);
                                 });
                             }
                         }
@@ -187,10 +232,8 @@ pub fn spawn_hook_consumer(
                                     "thread_summary": thread_summary,
                                     "timestamp": timestamp,
                                 });
-                                let event_json = serde_json::to_string(&payload)
-                                    .unwrap_or_else(|_| "{}".to_string());
                                 tokio::task::spawn_blocking(move || {
-                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                    HookRunner::run_hooks(&hooks, &payload, &workdir);
                                 });
                             }
                         }
@@ -206,10 +249,8 @@ pub fn spawn_hook_consumer(
                                     "new_status": new_status,
                                     "timestamp": timestamp,
                                 });
-                                let event_json = serde_json::to_string(&payload)
-                                    .unwrap_or_else(|_| "{}".to_string());
                                 tokio::task::spawn_blocking(move || {
-                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                    HookRunner::run_hooks(&hooks, &payload, &workdir);
                                 });
                             }
                         }
@@ -225,10 +266,8 @@ pub fn spawn_hook_consumer(
                                     "new_status": new_status,
                                     "timestamp": timestamp,
                                 });
-                                let event_json = serde_json::to_string(&payload)
-                                    .unwrap_or_else(|_| "{}".to_string());
                                 tokio::task::spawn_blocking(move || {
-                                    HookRunner::run_hooks(&hooks, &event_json, &workdir);
+                                    HookRunner::run_hooks(&hooks, &payload, &workdir);
                                 });
                             }
                         }
@@ -256,6 +295,7 @@ mod tests {
             args,
             timeout_secs,
             env: None,
+            filter: None,
         }
     }
 
@@ -279,6 +319,7 @@ mod tests {
             ]),
             timeout_secs: 10,
             env: None,
+            filter: None,
         };
         HookRunner::run_hook(&hook, r#"{"event":"started"}"#, dir.path());
         let content = std::fs::read_to_string(&out_file).unwrap();
@@ -301,6 +342,7 @@ mod tests {
             args: Some(vec!["60".to_string()]),
             timeout_secs: 1,
             env: None,
+            filter: None,
         };
         // Should complete without panic after the timeout kills the subprocess.
         HookRunner::run_hook(&hook, "{}", dir.path());
@@ -319,6 +361,7 @@ mod tests {
                 ]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             },
             HookEntry {
                 command: "sh".to_string(),
@@ -328,9 +371,11 @@ mod tests {
                 ]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             },
         ];
-        HookRunner::run_hooks(&hooks, "{}", dir.path());
+        let payload = serde_json::json!({});
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
         let content = std::fs::read_to_string(&out_file).unwrap();
         let first_pos = content.find("first").expect("first line missing");
         let second_pos = content.find("second").expect("second line missing");
@@ -355,9 +400,11 @@ mod tests {
                 ]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             },
         ];
-        HookRunner::run_hooks(&hooks, "{}", dir.path());
+        let payload = serde_json::json!({});
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
         assert!(
             sentinel.exists(),
             "second hook should have run after first failed"
@@ -381,6 +428,7 @@ mod tests {
             ]),
             timeout_secs: 10,
             env: Some(env),
+            filter: None,
         };
         HookRunner::run_hook(&hook, "{}", dir.path());
         let content = std::fs::read_to_string(&out_file).unwrap();
@@ -424,24 +472,28 @@ mod tests {
                 args: Some(vec![started_file.to_string_lossy().to_string()]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             }],
             on_execution_completed: vec![HookEntry {
                 command: script.clone(),
                 args: Some(vec![completed_file.to_string_lossy().to_string()]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             }],
             on_thread_closed: vec![HookEntry {
                 command: script.clone(),
                 args: Some(vec![closed_file.to_string_lossy().to_string()]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             }],
             on_thread_failed: vec![HookEntry {
                 command: script.clone(),
                 args: Some(vec![failed_file.to_string_lossy().to_string()]),
                 timeout_secs: 10,
                 env: None,
+                filter: None,
             }],
         };
 
@@ -567,6 +619,7 @@ mod tests {
             ]),
             timeout_secs: 10,
             env: None,
+            filter: None,
         };
         HookRunner::run_hook(&hook, "{}", dir.path());
         let content = std::fs::read_to_string(&out_file).unwrap();
@@ -576,6 +629,196 @@ mod tests {
         assert_eq!(
             canonical_reported, canonical_expected,
             "hook ran in wrong workdir"
+        );
+    }
+
+    // ── Declarative filter tests ────────────────────────────────────────
+
+    #[test]
+    fn test_hook_filter_matching_runs_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "worker-a".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        let payload = serde_json::json!({
+            "event": "execution_started",
+            "agent_alias": "worker-a",
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            sentinel.exists(),
+            "hook should have run for matching filter"
+        );
+    }
+
+    #[test]
+    fn test_hook_filter_non_matching_skips_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "worker-b".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        let payload = serde_json::json!({
+            "event": "execution_started",
+            "agent_alias": "worker-a",
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            !sentinel.exists(),
+            "hook should have been skipped for non-matching filter"
+        );
+    }
+
+    #[test]
+    fn test_hook_filter_missing_key_skips_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "x".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        // Thread event has no agent_alias field
+        let payload = serde_json::json!({
+            "event": "thread_closed",
+            "thread_id": "t-1",
+            "new_status": "Completed",
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            !sentinel.exists(),
+            "hook should be skipped when filter key is missing from payload"
+        );
+    }
+
+    #[test]
+    fn test_hook_no_filter_runs_for_all() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: None,
+        }];
+        let payload = serde_json::json!({"event": "execution_started"});
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(sentinel.exists(), "hook with no filter should always run");
+    }
+
+    #[test]
+    fn test_hook_filter_boolean_value_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("success".to_string(), "true".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        let payload = serde_json::json!({
+            "event": "execution_completed",
+            "success": true,
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            sentinel.exists(),
+            "filter success=true should match payload success: true"
+        );
+    }
+
+    #[test]
+    fn test_hook_filter_multiple_keys_all_must_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "worker-a".to_string());
+        filter.insert("success".to_string(), "true".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        // agent_alias matches but success is false → should NOT run
+        let payload = serde_json::json!({
+            "event": "execution_completed",
+            "agent_alias": "worker-a",
+            "success": false,
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            !sentinel.exists(),
+            "hook should be skipped when not all filter keys match"
+        );
+    }
+
+    #[test]
+    fn test_hook_filter_multiple_keys_all_match_runs_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let sentinel = dir.path().join("ran");
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "worker-a".to_string());
+        filter.insert("success".to_string(), "true".to_string());
+        let hooks = vec![HookEntry {
+            command: "sh".to_string(),
+            args: Some(vec![
+                "-c".to_string(),
+                format!("touch {}", sentinel.display()),
+            ]),
+            timeout_secs: 10,
+            env: None,
+            filter: Some(filter),
+        }];
+        let payload = serde_json::json!({
+            "event": "execution_completed",
+            "agent_alias": "worker-a",
+            "success": true,
+        });
+        HookRunner::run_hooks(&hooks, &payload, dir.path());
+        assert!(
+            sentinel.exists(),
+            "hook should run when all filter keys match"
         );
     }
 }

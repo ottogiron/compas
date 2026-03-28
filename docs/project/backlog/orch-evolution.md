@@ -482,8 +482,8 @@ Created: 2026-03-14
 13. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
 14. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
 15. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
-15. ~~ORCH-EVO-8 (HTTP API — superseded by MFE-2 in multi-frontend.md)~~
-16. ~~ORCH-EVO-9 (Web Dashboard — superseded, deferred in multi-frontend.md)~~
+16. ~~ORCH-EVO-8 (HTTP API — superseded by MFE-2 in multi-frontend.md)~~
+17. ~~ORCH-EVO-9 (Web Dashboard — superseded, deferred in multi-frontend.md)~~
 
 ## Tracking Notes
 
