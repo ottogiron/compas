@@ -463,7 +463,7 @@ Created: 2026-03-14
   - Integration test: dispatch with `skip_handoff=true` to agent with handoff config, verify no handoff thread created
   - Integration test: dispatch without flag, verify handoff still triggers
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -499,6 +499,15 @@ Created: 2026-03-14
 - **Batch promotion (future ticket):** Create a `batches` table with description, status (active/paused/completed), created_at/completed_at, and tags. Auto-created on first dispatch. `orch_batch_create`/`orch_batch_close` for explicit lifecycle. Not yet scheduled — defer until cost tracking (TEAM-1) or multi-project (TEAM-6) work begins.
 
 ## Execution Metrics
+
+- Ticket: ORCH-EVO-17
+- Owner: compas-dev
+- Complexity: S
+- Risk: Low
+- Start: 2026-03-28 20:03 UTC
+- End: 2026-03-28 20:22 UTC
+- Duration: ~00:19:00
+- Notes: Messages-only storage approach. Worker + reviewer chain completed in one pass. Operator fixed changelog + README per reviewer findings.
 
 - Ticket: ORCH-EVO-1
 - Owner: orch-dev
