@@ -351,6 +351,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -401,6 +402,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -444,6 +446,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 

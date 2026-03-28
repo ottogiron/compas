@@ -64,6 +64,8 @@ struct MergeOpDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     conflict_files: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    commit_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     suggested_actions: Option<Vec<String>>,
 }
 
@@ -133,6 +135,7 @@ fn op_to_detail(op: &MergeOperation) -> MergeOpDetail {
         result_summary: op.result_summary.clone(),
         error_detail: op.error_detail.clone(),
         conflict_files,
+        commit_message: op.commit_message.clone(),
         suggested_actions,
     }
 }
@@ -196,6 +199,12 @@ impl OrchestratorMcpServer {
         let op_id = ulid::Ulid::new().to_string();
         let now = chrono::Utc::now().timestamp();
 
+        // Look up the thread summary for use as the merge commit message
+        let commit_message = match self.store.get_thread(&params.thread_id).await {
+            Ok(Some(thread)) => thread.summary,
+            _ => None,
+        };
+
         let op = MergeOperation {
             id: op_id.clone(),
             thread_id: params.thread_id.clone(),
@@ -213,6 +222,7 @@ impl OrchestratorMcpServer {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message,
         };
 
         if let Err(e) = self.store.insert_merge_op(&op).await {
