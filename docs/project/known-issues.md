@@ -115,26 +115,9 @@ The Claude CLI process has already exited (no orphaned process). The response is
 ## MCP-only agents cannot commit worktree changes
 
 **Severity:** Medium
-**Status:** Open
+**Status:** Resolved (MCP-3)
 
-Agents connected via MCP (e.g., Claude Desktop) can read files, edit files, and call all `orch_*` tools — but they have no shell access. They cannot run `git commit` in their worktree. This means:
-
-- The agent finishes editing files in the worktree
-- `orch_merge` produces a no-op merge (changes are uncommitted, so there's nothing to merge)
-- `orch_close(status="completed")` is then refused because no completed merge exists (merge-before-close gate)
-- The operator must manually commit in the worktree before merging and closing the thread
-
-This breaks the self-service loop for MCP-only agents. CLI-based agents (Claude Code, Codex, OpenCode) don't have this problem — they commit as part of their execution.
-
-**Workaround:** The operator commits on the agent's behalf:
-
-```bash
-git -C .compas-worktrees/<thread-id> add -A && git -C .compas-worktrees/<thread-id> commit -m "<description>"
-```
-
-Then close the thread normally.
-
-**Possible fix:** Add an `orch_commit(thread_id, message)` MCP tool that commits all changes in the thread's worktree. This would close the self-service gap for MCP-only agents.
+Resolved by the `orch_commit` MCP tool. MCP-only agents can now call `orch_commit(thread_id, message)` to stage and commit all changes in their worktree without shell access. The tool returns the commit SHA and files changed count.
 
 ## Dispatch → wait flow needs redesign for MCP agents
 

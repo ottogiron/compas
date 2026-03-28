@@ -1,6 +1,7 @@
 pub mod params;
 pub mod server;
 
+mod commit;
 mod dispatch;
 mod health;
 mod lifecycle;

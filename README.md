@@ -198,6 +198,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | --- | --- |
 | `orch_close` | Close a thread as completed or failed |
 | `orch_merge` | Queue a merge of a worktree thread's branch (Active, Completed, or Failed) |
+| `orch_commit` | Commit all uncommitted changes in a thread's worktree (for MCP-only agents) |
 | `orch_abandon` | Cancel a thread and its active executions |
 
 #### Debug
@@ -208,7 +209,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | `orch_diagnose` | Thread diagnostics with suggested next actions |
 
 <details>
-<summary><b>All 24 tools — complete reference</b></summary>
+<summary><b>All 25 tools — complete reference</b></summary>
 
 #### Core (lifecycle)
 
@@ -217,6 +218,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary`, `scheduled_for` (ISO 8601) for delayed execution, and `skip_handoff` to suppress auto-handoff on the response |
 | `orch_wait` | Block until a matching message arrives or timeout; sends progress notifications every 10s |
 | `orch_close` | Close a thread as `completed` or `failed`. Completed worktree threads require a completed `orch_merge` first |
+| `orch_commit` | Commit all uncommitted changes in a thread's worktree. For MCP-only agents that cannot run git directly |
 | `orch_abandon` | Cancel a thread and its active executions |
 | `orch_reopen` | Reopen a closed/failed/abandoned thread |
 

@@ -335,6 +335,17 @@ impl OrchestratorMcpServer {
         self.wait_merge_impl(params, Some(peer), progress_token)
             .await
     }
+
+    #[tool(
+        name = "orch_commit",
+        description = "Commit all uncommitted changes in a thread's worktree. For MCP-only agents that cannot run git directly. Stages all changes (git add -A) and creates a commit with the given message. Returns commit SHA and files changed count."
+    )]
+    async fn orch_commit(
+        &self,
+        Parameters(params): Parameters<CommitParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.commit_impl(params).await
+    }
 }
 
 // ---------------------------------------------------------------------------

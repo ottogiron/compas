@@ -208,3 +208,11 @@ pub struct WaitMergeParams {
     /// Timeout in seconds (default 120)
     pub timeout_secs: Option<u64>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CommitParams {
+    /// Thread ID whose worktree to commit in
+    pub thread_id: String,
+    /// Commit message
+    pub message: String,
+}
