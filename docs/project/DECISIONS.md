@@ -303,7 +303,7 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 
 **No push in v1.** Push requires a complete auth story (SSH agent forwarding, credential helpers, tokens). v1 merges only; the operator pushes after review. This keeps v1 focused and avoids encoding an auth model before it is well understood.
 
-**Completed and Failed threads eligible for merge.** Not Active (agent may still be writing commits) or Abandoned (explicit operator abandonment signals no merge intent).
+**Active, Completed, and Failed threads eligible for merge.** Only Abandoned threads are rejected (explicit operator abandonment signals no merge intent). Active threads are allowed to support the merge-before-close workflow where the operator merges while the thread is still open, then closes after the merge completes.
 
 **Merge timeout 30s** (not 300s). Git operations are fast; a merge taking longer than 30 seconds indicates a hung process or filesystem problem, not a long-running operation. Long-running ops at the merge stage signal a bug.
 

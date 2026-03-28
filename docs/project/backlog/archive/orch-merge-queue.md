@@ -116,7 +116,7 @@ Created: 2026-03-21
   - Batch merge operations
 - Dependencies: MERGE-1, MERGE-2
 - Acceptance criteria:
-  - `orch_merge` rejects Active/Abandoned threads, missing branches, dirty worktrees, duplicate requests
+  - `orch_merge` rejects Abandoned threads, missing branches, dirty worktrees, duplicate requests
   - `orch_merge` returns op_id and next_step wait command
   - `orch_merge_status` shows queue overview and per-op detail with conflict_files
   - `orch_merge_cancel` only cancels queued ops

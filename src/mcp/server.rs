@@ -287,7 +287,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_merge",
-        description = "Queue a merge operation for a completed thread's branch. Runs preflight validation (thread status, branch existence, clean worktree, no duplicate). After queuing, wait for completion using CLI: `compas wait-merge --op-id <id> --timeout 120`."
+        description = "Queue a merge operation for a thread's branch. Accepts Active, Completed, or Failed threads (rejects Abandoned). Runs preflight validation (thread status, branch existence, clean worktree, no duplicate). After queuing, wait for completion using CLI: `compas wait-merge --op-id <id> --timeout 120`."
     )]
     async fn orch_merge(
         &self,
