@@ -153,9 +153,27 @@ fn capped_batches(batches: &[BatchProgress]) -> &[BatchProgress] {
 /// Active: queued, claimed, executing.
 /// Recent terminal: completed/failed/cancelled within time window.
 /// Failed ops use a longer persistence window (30 min) vs other terminal (10 min).
+///
+/// Supersession: a failed op is excluded when a completed op with the same
+/// `(thread_id, target_branch)` has a `finished_at` >= the failed op's
+/// `finished_at`. This only considers the slice passed in — the caller is
+/// responsible for providing a representative window of ops.
 fn filter_merge_ops(ops: &[MergeOperation], now_unix: i64) -> Vec<&MergeOperation> {
     let mut out: Vec<&MergeOperation> = Vec::new();
     let mut terminal: Vec<&MergeOperation> = Vec::new();
+
+    // Build a lookup of the latest completed finished_at per (thread_id, target_branch).
+    let mut completed_times: HashMap<(&str, &str), i64> = HashMap::new();
+    for op in ops {
+        if op.status.as_str() == "completed" {
+            let finished = op.finished_at.unwrap_or(op.queued_at);
+            let key = (op.thread_id.as_str(), op.target_branch.as_str());
+            let entry = completed_times.entry(key).or_insert(finished);
+            if finished > *entry {
+                *entry = finished;
+            }
+        }
+    }
 
     for op in ops {
         match op.status.as_str() {
@@ -163,7 +181,14 @@ fn filter_merge_ops(ops: &[MergeOperation], now_unix: i64) -> Vec<&MergeOperatio
             "failed" => {
                 let finished = op.finished_at.unwrap_or(op.queued_at);
                 if (now_unix - finished) < MERGE_FAILED_WINDOW_SECS {
-                    terminal.push(op);
+                    // Superseded: a completed op for the same pair finished at or after this failure.
+                    let key = (op.thread_id.as_str(), op.target_branch.as_str());
+                    let superseded = completed_times
+                        .get(&key)
+                        .is_some_and(|&completed_t| completed_t >= finished);
+                    if !superseded {
+                        terminal.push(op);
+                    }
                 }
             }
             "completed" | "cancelled" => {
@@ -1774,11 +1799,21 @@ mod tests {
     }
 
     fn make_merge_op(id: &str, status: &str, finished_at: Option<i64>) -> MergeOperation {
+        make_merge_op_for(id, status, finished_at, &format!("thread-{}", id), "main")
+    }
+
+    fn make_merge_op_for(
+        id: &str,
+        status: &str,
+        finished_at: Option<i64>,
+        thread_id: &str,
+        target_branch: &str,
+    ) -> MergeOperation {
         MergeOperation {
             id: id.to_string(),
-            thread_id: format!("thread-{}", id),
-            source_branch: format!("compas/thread-{}", id),
-            target_branch: "main".to_string(),
+            thread_id: thread_id.to_string(),
+            source_branch: format!("compas/{}", thread_id),
+            target_branch: target_branch.to_string(),
             merge_strategy: "merge".to_string(),
             requested_by: "operator".to_string(),
             status: status.to_string(),
@@ -1872,6 +1907,72 @@ mod tests {
         assert!(ids.contains(&"recent"));
         assert!(!ids.contains(&"old")); // too old
         assert!(ids.contains(&"failed-recent"));
+    }
+
+    #[test]
+    fn test_filter_merge_ops_superseded_by_completed() {
+        let now_unix = 1000;
+        // Failed at t=400, then a successful retry completed at t=500 — same pair.
+        let failed = make_merge_op_for("f1", "failed", Some(400), "thr-A", "main");
+        let completed = make_merge_op_for("c1", "completed", Some(500), "thr-A", "main");
+
+        let ops = vec![failed, completed];
+        let visible = filter_merge_ops(&ops, now_unix);
+        let ids: Vec<&str> = visible.iter().map(|o| o.id.as_str()).collect();
+
+        assert!(!ids.contains(&"f1"), "failed op should be superseded");
+        assert!(ids.contains(&"c1"), "completed op should still show");
+    }
+
+    #[test]
+    fn test_filter_merge_ops_multiple_failures_superseded() {
+        let now_unix = 1000;
+        // Two failures before a success — all for the same (thread_id, target_branch).
+        let fail1 = make_merge_op_for("f1", "failed", Some(300), "thr-A", "main");
+        let fail2 = make_merge_op_for("f2", "failed", Some(400), "thr-A", "main");
+        let success = make_merge_op_for("c1", "completed", Some(500), "thr-A", "main");
+
+        let ops = vec![fail1, fail2, success];
+        let visible = filter_merge_ops(&ops, now_unix);
+        let ids: Vec<&str> = visible.iter().map(|o| o.id.as_str()).collect();
+
+        assert!(!ids.contains(&"f1"), "first failure should be superseded");
+        assert!(!ids.contains(&"f2"), "second failure should be superseded");
+        assert!(ids.contains(&"c1"), "completed op should still show");
+    }
+
+    #[test]
+    fn test_filter_merge_ops_different_target_branch_independent() {
+        let now_unix = 1000;
+        // Success on main does NOT suppress failure on release/v2.
+        let fail_release = make_merge_op_for("f1", "failed", Some(400), "thr-A", "release/v2");
+        let success_main = make_merge_op_for("c1", "completed", Some(500), "thr-A", "main");
+
+        let ops = vec![fail_release, success_main];
+        let visible = filter_merge_ops(&ops, now_unix);
+        let ids: Vec<&str> = visible.iter().map(|o| o.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"f1"),
+            "failure on release/v2 should NOT be superseded by success on main"
+        );
+        assert!(ids.contains(&"c1"));
+    }
+
+    #[test]
+    fn test_filter_merge_ops_not_superseded_without_retry() {
+        let now_unix = 1000;
+        // Failed op within 30-min window, no completed pair exists — must still show.
+        let failed = make_merge_op_for("f1", "failed", Some(500), "thr-A", "main");
+
+        let ops = vec![failed];
+        let visible = filter_merge_ops(&ops, now_unix);
+        let ids: Vec<&str> = visible.iter().map(|o| o.id.as_str()).collect();
+
+        assert!(
+            ids.contains(&"f1"),
+            "failed op with no retry should still be visible"
+        );
     }
 
     #[test]
