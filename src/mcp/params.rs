@@ -2,6 +2,36 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
+// Lenient deserialization helpers
+// ---------------------------------------------------------------------------
+
+/// Deserialize an `Option<u64>` that accepts both numeric (`120`) and
+/// string-encoded (`"120"`) representations.  Some MCP transports serialize
+/// JSON-RPC number parameters as strings; this helper tolerates either form.
+fn deserialize_option_u64_lenient<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrU64 {
+        U64(u64),
+        String(String),
+    }
+
+    Option::<StringOrU64>::deserialize(deserializer).and_then(|opt| match opt {
+        None => Ok(None),
+        Some(StringOrU64::U64(v)) => Ok(Some(v)),
+        Some(StringOrU64::String(s)) => s
+            .parse::<u64>()
+            .map(Some)
+            .map_err(|_| de::Error::custom(format!("invalid u64 string: {s}"))),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // MCP tool parameter structs
 // ---------------------------------------------------------------------------
 
@@ -103,6 +133,7 @@ pub struct WaitParams {
     /// If true, only consider messages newer than the cursor/call start.
     pub strict_new: Option<bool>,
     /// Timeout in seconds (defaults to derived ceiling from execution_timeout_secs; clamped to ceiling)
+    #[serde(default, deserialize_with = "deserialize_option_u64_lenient")]
     pub timeout_secs: Option<u64>,
     /// If true, wait until entire handoff/fan-out chain settles (default false).
     pub await_chain: Option<bool>,
@@ -160,8 +191,10 @@ pub struct ReadLogParams {
     /// Execution ID whose log to read
     pub execution_id: String,
     /// Line offset (0-based, default 0). Ignored when tail=true.
+    #[serde(default, deserialize_with = "deserialize_option_u64_lenient")]
     pub offset: Option<u64>,
     /// Max lines to return (default 200, max 1000)
+    #[serde(default, deserialize_with = "deserialize_option_u64_lenient")]
     pub limit: Option<u64>,
     /// When true, return the last `limit` lines instead of starting from offset
     pub tail: Option<bool>,
@@ -206,6 +239,7 @@ pub struct WaitMergeParams {
     /// Merge operation ULID to wait on
     pub op_id: String,
     /// Timeout in seconds (default 120)
+    #[serde(default, deserialize_with = "deserialize_option_u64_lenient")]
     pub timeout_secs: Option<u64>,
 }
 
@@ -215,4 +249,98 @@ pub struct CommitParams {
     pub thread_id: String,
     /// Commit message
     pub message: String,
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_wait_merge_params_timeout_as_integer() {
+        let params: WaitMergeParams =
+            serde_json::from_value(json!({"op_id": "abc", "timeout_secs": 120})).unwrap();
+        assert_eq!(params.timeout_secs, Some(120));
+    }
+
+    #[test]
+    fn test_wait_merge_params_timeout_as_string() {
+        let params: WaitMergeParams =
+            serde_json::from_value(json!({"op_id": "abc", "timeout_secs": "120"})).unwrap();
+        assert_eq!(params.timeout_secs, Some(120));
+    }
+
+    #[test]
+    fn test_wait_merge_params_timeout_null() {
+        let params: WaitMergeParams =
+            serde_json::from_value(json!({"op_id": "abc", "timeout_secs": null})).unwrap();
+        assert_eq!(params.timeout_secs, None);
+    }
+
+    #[test]
+    fn test_wait_merge_params_timeout_missing() {
+        let params: WaitMergeParams = serde_json::from_value(json!({"op_id": "abc"})).unwrap();
+        assert_eq!(params.timeout_secs, None);
+    }
+
+    #[test]
+    fn test_wait_merge_params_timeout_invalid_string() {
+        let result = serde_json::from_value::<WaitMergeParams>(
+            json!({"op_id": "abc", "timeout_secs": "not_a_number"}),
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("invalid u64 string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_wait_params_timeout_as_string() {
+        let params: WaitParams = serde_json::from_value(json!({
+            "thread_id": "t1",
+            "timeout_secs": "300"
+        }))
+        .unwrap();
+        assert_eq!(params.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_wait_params_timeout_as_integer() {
+        let params: WaitParams = serde_json::from_value(json!({
+            "thread_id": "t1",
+            "timeout_secs": 300
+        }))
+        .unwrap();
+        assert_eq!(params.timeout_secs, Some(300));
+    }
+
+    #[test]
+    fn test_read_log_params_u64_fields_as_strings() {
+        let params: ReadLogParams = serde_json::from_value(json!({
+            "execution_id": "e1",
+            "offset": "10",
+            "limit": "500"
+        }))
+        .unwrap();
+        assert_eq!(params.offset, Some(10));
+        assert_eq!(params.limit, Some(500));
+    }
+
+    #[test]
+    fn test_read_log_params_u64_fields_as_integers() {
+        let params: ReadLogParams = serde_json::from_value(json!({
+            "execution_id": "e1",
+            "offset": 10,
+            "limit": 500
+        }))
+        .unwrap();
+        assert_eq!(params.offset, Some(10));
+        assert_eq!(params.limit, Some(500));
+    }
 }
