@@ -4,7 +4,6 @@
 //! Opened with `c` from the Ops or History tab, closed with Esc. Follow the log viewer
 //! pattern: full-screen overlay that replaces the tab bar.
 
-use chrono::{TimeZone, Utc};
 use pulldown_cmark::{Event, HeadingLevel, Tag, TagEnd};
 use ratatui::{
     layout::Rect,
@@ -16,7 +15,7 @@ use ratatui::{
 };
 
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::format_duration_ms;
+use crate::dashboard::views::{format_duration_ms, format_timestamp};
 use crate::store::{ExecutionRow, MessageRow};
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -161,20 +160,6 @@ fn build_items<'a>(
 }
 
 // ── Formatting helpers ────────────────────────────────────────────────────────
-
-/// Format a Unix timestamp (seconds) as "HH:MM UTC" for today or "Mon DD HH:MM" for older.
-fn format_timestamp(ts_secs: i64) -> String {
-    let dt = match Utc.timestamp_opt(ts_secs, 0) {
-        chrono::LocalResult::Single(dt) => dt,
-        _ => return "-".to_string(),
-    };
-    let today = Utc::now().date_naive();
-    if dt.date_naive() == today {
-        dt.format("%H:%M UTC").to_string()
-    } else {
-        dt.format("%b %d %H:%M").to_string()
-    }
-}
 
 /// Color for message badge — based on source (operator/agent/system), not intent.
 fn message_color(from: &str, intent: &str) -> Color {

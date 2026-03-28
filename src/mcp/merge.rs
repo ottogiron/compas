@@ -1,18 +1,29 @@
-//! orch_merge, orch_merge_status, orch_merge_cancel implementations.
+//! orch_merge, orch_merge_status, orch_merge_cancel, orch_wait_merge implementations.
 //!
 //! Exposes merge queue operations to operators via MCP tools. Merge
 //! execution itself happens in the worker — these tools only queue,
-//! query, and cancel operations.
+//! query, and cancel operations. `orch_wait_merge` blocks until a
+//! merge operation reaches a terminal status.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
-use rmcp::model::CallToolResult;
+use rmcp::model::{CallToolResult, NumberOrString, ProgressNotificationParam, ProgressToken};
+use rmcp::{Peer, RoleServer};
 use serde::Serialize;
+use tracing::debug;
 
-use super::params::{MergeCancelParams, MergeParams, MergeStatusParams};
+use super::params::{MergeCancelParams, MergeParams, MergeStatusParams, WaitMergeParams};
 use super::server::{err_text, json_text, OrchestratorMcpServer};
 use crate::merge::MergeExecutor;
 use crate::store::MergeOperation;
+use crate::wait_merge::{self, WaitMergeOutcome, WaitMergeRequest};
+
+/// Interval between progress notifications sent to the MCP client during wait-merge.
+const WAIT_MERGE_PROGRESS_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Default timeout for wait-merge operations (seconds).
+const WAIT_MERGE_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 // ── orch_merge result ────────────────────────────────────────────────────
 
@@ -216,7 +227,10 @@ impl OrchestratorMcpServer {
             }
         };
 
-        let next_step = format!("compas wait-merge --op-id {} --timeout 120", op_id);
+        let next_step = format!(
+            "orch_wait_merge(op_id=\"{}\") or CLI: compas wait-merge --op-id {} --timeout 120",
+            op_id, op_id
+        );
 
         Ok(json_text(&MergeQueuedResult {
             op_id,
@@ -308,6 +322,136 @@ impl OrchestratorMcpServer {
                 )))
             }
             Err(e) => Ok(err_text(format!("failed to cancel merge op: {}", e))),
+        }
+    }
+
+    // ── orch_wait_merge ─────────────────────────────────────────────────
+
+    pub async fn wait_merge_impl(
+        &self,
+        params: WaitMergeParams,
+        peer: Option<Peer<RoleServer>>,
+        client_progress_token: Option<ProgressToken>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let timeout_secs = params
+            .timeout_secs
+            .unwrap_or(WAIT_MERGE_DEFAULT_TIMEOUT_SECS);
+        let op_id_for_progress = params.op_id.clone();
+
+        let req = WaitMergeRequest {
+            op_id: params.op_id,
+            timeout: Duration::from_secs(timeout_secs),
+        };
+
+        // Spawn a background task that sends progress notifications at regular
+        // intervals. This keeps the MCP client from timing out the tool call
+        // while we wait for the merge to complete.
+        let progress_handle = if let Some(peer) = peer {
+            let token = client_progress_token.unwrap_or_else(|| {
+                ProgressToken(NumberOrString::String(
+                    format!("orch-wait-merge-{}", op_id_for_progress).into(),
+                ))
+            });
+            debug!(
+                op_id = %op_id_for_progress,
+                token = ?token,
+                "starting progress reporter for orch_wait_merge"
+            );
+            Some(tokio::spawn(async move {
+                let mut elapsed = 0u64;
+                loop {
+                    tokio::time::sleep(WAIT_MERGE_PROGRESS_INTERVAL).await;
+                    elapsed += WAIT_MERGE_PROGRESS_INTERVAL.as_secs();
+
+                    let param = ProgressNotificationParam::new(token.clone(), elapsed as f64)
+                        .with_total(timeout_secs as f64)
+                        .with_message(format!(
+                            "waiting for merge op {}... {}/{}s",
+                            op_id_for_progress, elapsed, timeout_secs
+                        ));
+
+                    debug!(elapsed, "sending orch_wait_merge progress notification");
+
+                    match peer.notify_progress(param).await {
+                        Ok(_) => debug!(elapsed, "progress notification sent"),
+                        Err(e) => {
+                            debug!(elapsed, error = %e, "progress notification failed, stopping reporter");
+                            break;
+                        }
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        let result = wait_merge::wait_for_merge_op(&self.store, &req).await;
+
+        // Cancel the progress reporter now that the wait is done.
+        if let Some(handle) = progress_handle {
+            handle.abort();
+        }
+
+        match result {
+            Ok(WaitMergeOutcome::Found(op)) => {
+                let conflict_files: Option<Vec<String>> = op
+                    .conflict_files
+                    .as_ref()
+                    .and_then(|cf| serde_json::from_str(cf).ok());
+
+                #[derive(Serialize)]
+                struct WaitMergeResult {
+                    found: bool,
+                    op_id: String,
+                    thread_id: String,
+                    status: String,
+                    source_branch: String,
+                    target_branch: String,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    duration_ms: Option<i64>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    result_summary: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    error_detail: Option<String>,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    conflict_files: Option<Vec<String>>,
+                }
+
+                Ok(json_text(&WaitMergeResult {
+                    found: true,
+                    op_id: op.id.clone(),
+                    thread_id: op.thread_id.clone(),
+                    status: op.status.clone(),
+                    source_branch: op.source_branch.clone(),
+                    target_branch: op.target_branch.clone(),
+                    duration_ms: op.duration_ms,
+                    result_summary: op.result_summary.clone(),
+                    error_detail: op.error_detail.clone(),
+                    conflict_files,
+                }))
+            }
+            Ok(WaitMergeOutcome::Timeout {
+                op_id,
+                timeout_secs,
+                last_status,
+            }) => {
+                #[derive(Serialize)]
+                struct WaitMergeTimeout {
+                    found: bool,
+                    op_id: String,
+                    timeout_secs: u64,
+                    #[serde(skip_serializing_if = "Option::is_none")]
+                    last_status: Option<String>,
+                }
+
+                Ok(json_text(&WaitMergeTimeout {
+                    found: false,
+                    op_id,
+                    timeout_secs,
+                    last_status,
+                }))
+            }
+            Err(e) => Ok(err_text(e)),
         }
     }
 }
