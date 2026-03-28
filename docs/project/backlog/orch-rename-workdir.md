@@ -1,6 +1,6 @@
 # Config Field Rename: target_repo_root → default_workdir
 
-Status: Active
+Status: Done
 Owner: otto
 Created: 2026-03-21
 
@@ -28,7 +28,7 @@ Created: 2026-03-21
   - New key `default_workdir` used in all examples, docs, and tests
 - Verification:
   - `make verify`
-- Status: In Progress
+- Status: Done
 
 ## Execution Metrics
 

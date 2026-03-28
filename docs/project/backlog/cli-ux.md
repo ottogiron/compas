@@ -1,6 +1,6 @@
 # Compas CLI UX — Init, Doctor, Setup MCP
 
-Status: Active
+Status: Done (CLI-1/2/3 shipped; CLI-4 docs todo)
 Owner: otto
 Created: 2026-03-21
 
@@ -68,7 +68,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - Integration test: init → load_config round-trip
   - Manual: fresh `~/.compas/` → `compas init` → `compas dashboard` works end-to-end
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket CLI-2 — `compas setup mcp`
 
@@ -105,7 +105,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - Unit tests: CLI command construction for Claude Code and Codex
   - Manual: `compas setup mcp` → verify registration in each installed tool
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket CLI-3 — `compas doctor`
 
@@ -143,7 +143,7 @@ Architecture evaluation completed by `compas-architect` agent (thread `01KM6ZR2C
   - Unit tests: check ordering, failure formatting, exit codes
   - Manual: run `compas doctor` with intentionally broken setups (missing backend, missing MCP, no worker)
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket CLI-4 — Revised Onboarding Documentation
 

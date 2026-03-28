@@ -1,6 +1,6 @@
 # Priority Queue
 
-Last updated: 2026-03-22
+Last updated: 2026-03-28
 
 ## Active
 
@@ -12,16 +12,15 @@ No tickets currently in-flight.
 
 Ordered by priority. Work top item when capacity is available.
 
-1. WAIT-AX-1 — Fan-out settlement metadata (`orch-wait-ax.md`)
-2. HOOKS-4 — Declarative hook filters (`lifecycle-hooks.md`)
-3. GAP-5 — TUI mouse support (`quality-gaps.md`)
-4. EVO-16 — Session resume after crash (`orch-evolution.md`)
-5. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
-6. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-7. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-8. MCP-2 — `orch_wait_merge` MCP tool (`orch-wait-mcp.md`)
-9. MCP-3 — `orch_commit` MCP tool (`orch-wait-mcp.md`)
-10. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+1. HOOKS-4 — Declarative hook filters (`lifecycle-hooks.md`)
+2. GAP-5 — TUI mouse support (`quality-gaps.md`)
+3. EVO-16 — Session resume after crash (`orch-evolution.md`)
+4. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+5. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
+6. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
+7. MCP-2 — `orch_wait_merge` MCP tool (`orch-wait-mcp.md`)
+8. MCP-3 — `orch_commit` MCP tool (`orch-wait-mcp.md`)
+9. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 
