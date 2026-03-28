@@ -110,14 +110,21 @@ enum Commands {
         #[arg(long)]
         config: Option<PathBuf>,
     },
-    /// Wait for a message on a thread (reads SQLite directly, no MCP required).
-    ///
-    /// Exits 0 when a matching message is found, 1 on timeout, 2 on error.
-    /// Output is key=value lines on stdout for easy bash parsing.
+    /// Wait for orchestrator events
     Wait {
         /// Path to config YAML (default: ~/.compas/config.yaml)
         #[arg(long)]
         config: Option<PathBuf>,
+
+        #[command(subcommand)]
+        target: WaitTarget,
+    },
+}
+
+#[derive(Subcommand)]
+enum WaitTarget {
+    /// Wait for a message on a thread (exit 0=found, 1=timeout, 2=error)
+    Message {
         /// Thread ID to wait on
         #[arg(long)]
         thread_id: String,
@@ -138,15 +145,8 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         await_chain: bool,
     },
-    /// Wait for a merge operation to reach terminal status (reads SQLite directly, no MCP required).
-    ///
-    /// Exits 0 on completed, 1 on failure/cancelled/timeout, 2 on error.
-    /// Output is key=value lines on stdout for easy bash parsing.
-    #[command(name = "wait-merge")]
-    WaitMerge {
-        /// Path to config YAML (default: ~/.compas/config.yaml)
-        #[arg(long)]
-        config: Option<PathBuf>,
+    /// Wait for a merge operation to complete (exit 0=completed, 1=timeout/fail, 2=error)
+    Merge {
         /// Merge operation ID (ULID) returned by orch_merge
         #[arg(long)]
         op_id: String,
@@ -241,36 +241,54 @@ async fn main() -> ExitCode {
                 return ExitCode::from(2);
             }
         }
-        Commands::Wait {
-            config,
-            thread_id,
-            intent,
-            since,
-            strict_new,
-            timeout,
-            await_chain,
-        } => {
-            let config = effective_config_path(config);
+        Commands::Wait { config, target } => {
+            let config_path = effective_config_path(config);
             // Wait outputs key=value to stdout — no tracing there
-            return run_wait(
-                config,
-                thread_id,
-                intent,
-                since,
-                strict_new,
-                timeout,
-                await_chain,
-            )
-            .await;
-        }
-        Commands::WaitMerge {
-            config,
-            op_id,
-            timeout,
-        } => {
-            let config = effective_config_path(config);
-            // wait-merge outputs key=value to stdout — no tracing there
-            return run_wait_merge(config, op_id, timeout).await;
+            let cfg = match compas::config::load_config(&config_path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("error: failed to load config: {}", e);
+                    return ExitCode::from(2);
+                }
+            };
+            let db_path = resolve_db_path(&cfg);
+            let pool = match connect_db(&db_path, &cfg).await {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: failed to connect to database: {}", e);
+                    return ExitCode::from(2);
+                }
+            };
+            let store = compas::store::Store::new(pool);
+
+            return match target {
+                WaitTarget::Message {
+                    thread_id,
+                    intent,
+                    since,
+                    strict_new,
+                    timeout,
+                    await_chain,
+                } => {
+                    let req = WaitRequest {
+                        thread_id,
+                        intent,
+                        since_reference: since,
+                        strict_new,
+                        timeout: Duration::from_secs(timeout),
+                        trigger_intents: cfg.orchestration.trigger_intents.clone(),
+                        await_chain,
+                    };
+                    run_wait(&store, req).await
+                }
+                WaitTarget::Merge { op_id, timeout } => {
+                    let req = WaitMergeRequest {
+                        op_id,
+                        timeout: Duration::from_secs(timeout),
+                    };
+                    run_wait_merge(&store, req).await
+                }
+            };
         }
     }
 
@@ -713,43 +731,8 @@ async fn spawn_worker_process(
 // Wait mode
 // ---------------------------------------------------------------------------
 
-async fn run_wait(
-    config_path: PathBuf,
-    thread_id: String,
-    intent: Option<String>,
-    since: Option<String>,
-    strict_new: bool,
-    timeout: u64,
-    await_chain: bool,
-) -> ExitCode {
-    let config = match compas::config::load_config(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: failed to load config: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let db_path = resolve_db_path(&config);
-    let pool = match connect_db(&db_path, &config).await {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: failed to connect to database: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let store = compas::store::Store::new(pool);
-
-    let req = WaitRequest {
-        thread_id,
-        intent,
-        since_reference: since,
-        strict_new,
-        timeout: Duration::from_secs(timeout),
-        trigger_intents: config.orchestration.trigger_intents.clone(),
-        await_chain,
-    };
-
-    match wait::wait_for_message(&store, &req).await {
+async fn run_wait(store: &compas::store::Store, req: WaitRequest) -> ExitCode {
+    match wait::wait_for_message(store, &req).await {
         Ok(WaitOutcome::Found {
             message: msg,
             fanout_children_awaited,
@@ -805,30 +788,8 @@ async fn run_wait(
 // Wait-merge mode
 // ---------------------------------------------------------------------------
 
-async fn run_wait_merge(config_path: PathBuf, op_id: String, timeout: u64) -> ExitCode {
-    let config = match compas::config::load_config(&config_path) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: failed to load config: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let db_path = resolve_db_path(&config);
-    let pool = match connect_db(&db_path, &config).await {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("error: failed to connect to database: {}", e);
-            return ExitCode::from(2);
-        }
-    };
-    let store = compas::store::Store::new(pool);
-
-    let req = WaitMergeRequest {
-        op_id,
-        timeout: Duration::from_secs(timeout),
-    };
-
-    match wait_merge::wait_for_merge_op(&store, &req).await {
+async fn run_wait_merge(store: &compas::store::Store, req: WaitMergeRequest) -> ExitCode {
+    match wait_merge::wait_for_merge_op(store, &req).await {
         Ok(WaitMergeOutcome::Found(op)) => {
             println!("found=true");
             println!("op_id={}", op.id);
@@ -880,7 +841,8 @@ async fn run_wait_merge(config_path: PathBuf, op_id: String, timeout: u64) -> Ex
 #[cfg(test)]
 mod tests {
     use super::{
-        effective_config_path, is_worker_alive, Cli, Commands, WORKER_HEARTBEAT_MAX_AGE_SECS,
+        effective_config_path, is_worker_alive, Cli, Commands, WaitTarget,
+        WORKER_HEARTBEAT_MAX_AGE_SECS,
     };
     use clap::Parser;
     use std::path::PathBuf;
@@ -1038,28 +1000,35 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_requires_thread_id() {
+    fn test_wait_requires_subcommand() {
         let parsed = Cli::try_parse_from(["compas", "wait"]);
-        assert!(parsed.is_err());
-        let parsed = Cli::try_parse_from(["compas", "wait", "--timeout", "120"]);
         assert!(parsed.is_err());
     }
 
     #[test]
-    fn test_wait_parses_minimal() {
-        let parsed = Cli::try_parse_from(["compas", "wait", "--thread-id", "t-123"]);
+    fn test_wait_message_requires_thread_id() {
+        let parsed = Cli::try_parse_from(["compas", "wait", "message"]);
+        assert!(parsed.is_err());
+        let parsed = Cli::try_parse_from(["compas", "wait", "message", "--timeout", "120"]);
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_wait_message_parses_minimal() {
+        let parsed = Cli::try_parse_from(["compas", "wait", "message", "--thread-id", "t-123"]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
-            if let Commands::Wait {
-                thread_id,
-                timeout,
-                config,
-                ..
-            } = cli.command
-            {
-                assert_eq!(thread_id, "t-123");
-                assert_eq!(timeout, 120); // default
+            if let Commands::Wait { config, target } = cli.command {
                 assert!(config.is_none());
+                if let WaitTarget::Message {
+                    thread_id, timeout, ..
+                } = target
+                {
+                    assert_eq!(thread_id, "t-123");
+                    assert_eq!(timeout, 120); // default
+                } else {
+                    panic!("expected Message target");
+                }
             } else {
                 panic!("expected Wait command");
             }
@@ -1067,12 +1036,13 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_parses_all_flags() {
+    fn test_wait_message_parses_all_flags() {
         let parsed = Cli::try_parse_from([
             "compas",
             "wait",
             "--config",
             "foo.yaml",
+            "message",
             "--thread-id",
             "t-abc",
             "--intent",
@@ -1085,22 +1055,25 @@ mod tests {
         ]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
-            if let Commands::Wait {
-                thread_id,
-                intent,
-                since,
-                strict_new,
-                timeout,
-                config,
-                ..
-            } = cli.command
-            {
-                assert_eq!(thread_id, "t-abc");
-                assert_eq!(intent, Some("status-update".to_string()));
-                assert_eq!(since, Some("db:42".to_string()));
-                assert!(strict_new);
-                assert_eq!(timeout, 300);
+            if let Commands::Wait { config, target } = cli.command {
                 assert_eq!(config, Some(PathBuf::from("foo.yaml")));
+                if let WaitTarget::Message {
+                    thread_id,
+                    intent,
+                    since,
+                    strict_new,
+                    timeout,
+                    ..
+                } = target
+                {
+                    assert_eq!(thread_id, "t-abc");
+                    assert_eq!(intent, Some("status-update".to_string()));
+                    assert_eq!(since, Some("db:42".to_string()));
+                    assert!(strict_new);
+                    assert_eq!(timeout, 300);
+                } else {
+                    panic!("expected Message target");
+                }
             } else {
                 panic!("expected Wait command");
             }
@@ -1111,23 +1084,23 @@ mod tests {
     fn test_wait_merge_parses_with_op_id() {
         let parsed = Cli::try_parse_from([
             "compas",
-            "wait-merge",
+            "wait",
+            "merge",
             "--op-id",
             "01ABC000000000000000000000",
         ]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
-            if let Commands::WaitMerge {
-                op_id,
-                timeout,
-                config,
-            } = cli.command
-            {
-                assert_eq!(op_id, "01ABC000000000000000000000");
-                assert_eq!(timeout, 120); // default
+            if let Commands::Wait { config, target } = cli.command {
                 assert!(config.is_none());
+                if let WaitTarget::Merge { op_id, timeout } = target {
+                    assert_eq!(op_id, "01ABC000000000000000000000");
+                    assert_eq!(timeout, 120); // default
+                } else {
+                    panic!("expected Merge target");
+                }
             } else {
-                panic!("expected WaitMerge command");
+                panic!("expected Wait command");
             }
         }
     }
@@ -1245,13 +1218,23 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_parses_await_chain_flag() {
-        let parsed =
-            Cli::try_parse_from(["compas", "wait", "--thread-id", "t-xyz", "--await-chain"]);
+    fn test_wait_message_parses_await_chain_flag() {
+        let parsed = Cli::try_parse_from([
+            "compas",
+            "wait",
+            "message",
+            "--thread-id",
+            "t-xyz",
+            "--await-chain",
+        ]);
         assert!(parsed.is_ok());
         if let Ok(cli) = parsed {
-            if let Commands::Wait { await_chain, .. } = cli.command {
-                assert!(await_chain);
+            if let Commands::Wait { target, .. } = cli.command {
+                if let WaitTarget::Message { await_chain, .. } = target {
+                    assert!(await_chain);
+                } else {
+                    panic!("expected Message target");
+                }
             } else {
                 panic!("expected Wait command");
             }
@@ -1259,10 +1242,15 @@ mod tests {
     }
 
     #[test]
-    fn test_wait_await_chain_defaults_false() {
-        let parsed = Cli::try_parse_from(["compas", "wait", "--thread-id", "t-abc"]).unwrap();
-        if let Commands::Wait { await_chain, .. } = parsed.command {
-            assert!(!await_chain);
+    fn test_wait_message_await_chain_defaults_false() {
+        let parsed =
+            Cli::try_parse_from(["compas", "wait", "message", "--thread-id", "t-abc"]).unwrap();
+        if let Commands::Wait { target, .. } = parsed.command {
+            if let WaitTarget::Message { await_chain, .. } = target {
+                assert!(!await_chain);
+            } else {
+                panic!("expected Message target");
+            }
         } else {
             panic!("expected Wait command");
         }
