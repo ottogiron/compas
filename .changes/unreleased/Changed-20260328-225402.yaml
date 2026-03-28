@@ -1,0 +1,3 @@
+kind: Changed
+body: Update all documentation to use new 'compas wait message' / 'compas wait merge' subcommand syntax
+time: 2026-03-28T22:54:02.621603+01:00

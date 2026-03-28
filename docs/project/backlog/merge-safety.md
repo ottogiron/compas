@@ -16,7 +16,7 @@ Created: 2026-03-28
   - Before running `git merge`, always check for uncommitted changes in the agent worktree (dirty-worktree check runs first, regardless of divergence).
   - If worktree has uncommitted changes (whether or not source is ahead of target): report merge as `failed` with `error: "Source branch has uncommitted changes — agent did not commit its work"` and list the dirty files in `conflict_files` (reuse the field for diagnostic visibility).
   - If source == target (no divergence) AND worktree is clean: report merge as `failed` with `error: "No commits to merge — source branch is identical to target"`.
-  - `orch_merge_status` and `wait-merge` surface the error clearly so the operator can take corrective action (commit the work, re-queue merge).
+  - `orch_merge_status` and `wait merge` surface the error clearly so the operator can take corrective action (commit the work, re-queue merge).
   - Same detection applies to all strategies (merge, rebase, squash).
 - Out of scope:
   - Auto-committing uncommitted changes (operator decision).
@@ -25,7 +25,7 @@ Created: 2026-03-28
 - Acceptance criteria:
   - Merge of identical branches returns `status=failed` with descriptive error, not `status=completed`.
   - Merge where worktree has uncommitted changes returns `status=failed` with file list — regardless of whether source is ahead of target.
-  - `wait-merge` shows the error in its output.
+  - `wait merge` shows the error in its output.
   - Normal merges (source ahead of target, clean worktree) are unaffected.
   - `make verify` passes.
 - Verification:

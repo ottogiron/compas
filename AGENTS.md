@@ -26,7 +26,7 @@ This is a standalone repository (`ottogiron/compas`).
 - `src/worktree.rs` — git worktree creation, cleanup, and path resolution
 - `src/merge.rs` — merge executor, temporary worktree merge, conflict detection
 - `src/events.rs` — EventBus and execution telemetry pipeline
-- `src/bin/compas.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait`, `wait-merge`)
+- `src/bin/compas.rs` — CLI entrypoints (`worker`, `mcp-server`, `dashboard`, `wait [message|merge]`)
 - `tests/integration_tests.rs` — orchestrator integration tests
 
 ## Build Commands

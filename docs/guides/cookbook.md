@@ -142,7 +142,7 @@ agents:
 "Close that thread as completed and merge into main"
 ```
 
-Your CLI uses `orch_close` with a `merge` object, which atomically queues the merge before worktree cleanup runs. Use `compas wait-merge --op-id <id>` to block until the merge completes.
+Your CLI uses `orch_close` with a `merge` object, which atomically queues the merge before worktree cleanup runs. Use `compas wait merge --op-id <id>` to block until the merge completes.
 
 **Chain-stop.** To unconditionally stop a chain at a specific agent (without waiting for depth exhaustion), use `on_response: operator`:
 
@@ -152,7 +152,7 @@ Your CLI uses `orch_close` with a `merge` object, which atomically queues the me
       on_response: operator    # Chain stops here, operator review required
 ```
 
-**Notes:** `max_chain_depth: 3` means 3 handoffs total: dev -> reviewer -> dev -> reviewer. The chain stops and inserts a review-request for the operator. Fan-out creates batch-linked threads — use `orch_batch_status` to check when all reviewers have finished. Use `compas wait --thread-id <id> --await-chain` to block until the entire chain (including fan-out) settles.
+**Notes:** `max_chain_depth: 3` means 3 handoffs total: dev -> reviewer -> dev -> reviewer. The chain stops and inserts a review-request for the operator. Fan-out creates batch-linked threads — use `orch_batch_status` to check when all reviewers have finished. Use `compas wait message --thread-id <id> --await-chain` to block until the entire chain (including fan-out) settles.
 
 ---
 

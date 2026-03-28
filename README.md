@@ -125,7 +125,7 @@ You talk to your coding CLI (Claude Code, Codex, etc.) as usual. When you say "d
 Wait for the full chain to settle from a script or CLI:
 
 ```bash
-compas wait --thread-id <id> --await-chain --timeout 900
+compas wait message --thread-id <id> --await-chain --timeout 900
 ```
 
 ## Configuration
@@ -260,7 +260,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 
 For non-MCP or scripted-shell workflows, use the CLI commands directly.
 
-**`compas wait` flags:**
+**`compas wait message` flags:**
 
 | Flag | Description |
 | --- | --- |
@@ -273,9 +273,9 @@ For non-MCP or scripted-shell workflows, use the CLI commands directly.
 
 **Exit codes:** `0` = matching message found, `1` = timeout (no match within deadline), `2` = error.
 
-**`compas wait-merge` flags:**
+**`compas wait merge` flags:**
 
-Use `compas wait-merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_merge`.
+Use `compas wait merge --op-id <id>` to block until a merge operation reaches a terminal status. The op ID is returned by `orch_merge`.
 
 | Flag | Description |
 | --- | --- |

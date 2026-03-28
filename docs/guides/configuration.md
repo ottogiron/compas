@@ -195,7 +195,7 @@ Fan-out creates batch-linked threads. Use `orch_batch_status` to check aggregate
 
 **Depth limit:** `max_chain_depth` (default: 3, range: 1..=20) caps consecutive auto-handoffs. At the limit, a review-request is inserted for the operator.
 
-**Waiting:** `orch_wait` with `await_chain=true` (MCP) or `compas wait --thread-id <id> --await-chain` (CLI) blocks until the entire chain settles.
+**Waiting:** `orch_wait` with `await_chain=true` (MCP) or `compas wait message --thread-id <id> --await-chain` (CLI) blocks until the entire chain settles.
 
 **Viewing:** Press `c` on a thread in the dashboard Ops tab, or use `orch_transcript` from your CLI.
 

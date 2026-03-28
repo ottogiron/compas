@@ -43,7 +43,7 @@ When reviewing work from a worktree agent, the changes are on the worktree branc
 
 **Worktree cleanup:** Worktrees are automatically cleaned up (deleted) by the worker when threads reach terminal state (`Completed` or `Abandoned`). `Failed` threads retain their worktrees for inspection. The merge queue blocks cleanup while the merge is pending.
 
-**Merge-before-close gate:** Completed worktree threads require an explicit `orch_merge` + `wait-merge` before `orch_close(status=completed)` is allowed. Close will refuse with an actionable error if no completed merge exists for the thread.
+**Merge-before-close gate:** Completed worktree threads require an explicit `orch_merge` + `wait merge` before `orch_close(status=completed)` is allowed. Close will refuse with an actionable error if no completed merge exists for the thread.
 
 ## Automatic Retry
 
@@ -178,7 +178,7 @@ Based on reviewer response:
   Wait for merge completion:
 
   ```bash
-  compas wait-merge --op-id <merge_op_id> --timeout 120
+  compas wait merge --op-id <merge_op_id> --timeout 120
   ```
 
   To override the target branch or strategy:
