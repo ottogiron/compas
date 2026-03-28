@@ -197,7 +197,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | Tool | What it does |
 | --- | --- |
 | `orch_close` | Close a thread as completed or failed |
-| `orch_merge` | Queue a merge of a completed thread's branch |
+| `orch_merge` | Queue a merge of a worktree thread's branch (Active, Completed, or Failed) |
 | `orch_abandon` | Cancel a thread and its active executions |
 
 #### Debug
@@ -240,7 +240,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 
 | Tool | What it does |
 | --- | --- |
-| `orch_merge` | Queue a merge of a completed thread's branch into a target branch |
+| `orch_merge` | Queue a merge of a worktree thread's branch (Active, Completed, or Failed) into a target branch |
 | `orch_merge_status` | Query merge operation detail or aggregate overview |
 | `orch_merge_cancel` | Cancel a queued merge operation |
 | `orch_wait_merge` | Block until a merge operation completes, fails, or is cancelled; sends progress notifications |

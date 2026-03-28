@@ -35,7 +35,7 @@ impl MergeExecutor {
     /// Validate preconditions before queuing a merge.
     ///
     /// Checks:
-    /// 1. Thread exists and is `Completed` or `Failed` (not Active/Abandoned)
+    /// 1. Thread exists and is `Active`, `Completed`, or `Failed` (not Abandoned)
     /// 2. Source branch `compas/{thread_id}` exists in the git repo
     /// 3. Thread's worktree is clean (no uncommitted changes)
     /// 4. No existing queued/claiming/executing merge for same (thread_id, target_branch)
@@ -45,7 +45,7 @@ impl MergeExecutor {
         target_branch: &str,
         repo_root: &Path,
     ) -> Result<PreflightResult, String> {
-        // 1. Thread must exist and be in a terminal-eligible status
+        // 1. Thread must exist and be in a merge-eligible status
         let status = store
             .get_thread_status(thread_id)
             .await
@@ -53,22 +53,16 @@ impl MergeExecutor {
             .ok_or_else(|| format!("thread '{}' not found", thread_id))?;
 
         match status.as_str() {
-            "Completed" | "Failed" => {} // eligible
-            "Active" => {
-                return Err(format!(
-                    "thread '{}' is Active — only Completed or Failed threads can be merged",
-                    thread_id
-                ));
-            }
+            "Active" | "Completed" | "Failed" => {} // eligible
             "Abandoned" => {
                 return Err(format!(
-                    "thread '{}' is Abandoned — only Completed or Failed threads can be merged",
+                    "thread '{}' is Abandoned and cannot be merged",
                     thread_id
                 ));
             }
             other => {
                 return Err(format!(
-                    "thread '{}' has unexpected status '{}' — only Completed or Failed threads can be merged",
+                    "thread '{}' has unexpected status '{}' — only Active, Completed, or Failed threads can be merged",
                     thread_id, other
                 ));
             }
@@ -1565,24 +1559,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_preflight_rejects_active_thread() {
+    async fn test_preflight_accepts_active_thread() {
         let store = test_store().await;
         let repo = init_test_repo();
 
-        // Create an Active thread
+        // Create an Active thread with a source branch
         store
             .ensure_thread("active-thread", None, None)
             .await
             .unwrap();
+        create_source_branch(
+            repo.path(),
+            "compas/active-thread",
+            "feature.txt",
+            "content",
+        );
 
         let result =
             MergeExecutor::preflight_check(&store, "active-thread", "main", repo.path()).await;
 
+        assert!(
+            result.is_ok(),
+            "Active threads should be eligible for merge, got: {:?}",
+            result.unwrap_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preflight_rejects_abandoned_thread() {
+        let store = test_store().await;
+        let repo = init_test_repo();
+
+        // Create an Abandoned thread
+        store
+            .ensure_thread("abandoned-thread", None, None)
+            .await
+            .unwrap();
+        store
+            .update_thread_status("abandoned-thread", ThreadStatus::Abandoned)
+            .await
+            .unwrap();
+
+        let result =
+            MergeExecutor::preflight_check(&store, "abandoned-thread", "main", repo.path()).await;
+
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.contains("Active"),
-            "error should mention Active status, got: {}",
+            err.contains("Abandoned"),
+            "error should mention Abandoned status, got: {}",
             err
         );
     }

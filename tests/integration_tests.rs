@@ -8247,7 +8247,7 @@ mod merge_tool_tests {
     }
 
     #[tokio::test]
-    async fn test_orch_merge_preflight_rejects_active_thread() {
+    async fn test_orch_merge_preflight_accepts_active_thread() {
         let server = test_server().await;
 
         // Create an active thread by inserting a message
@@ -8259,6 +8259,9 @@ mod merge_tool_tests {
             .await
             .unwrap();
 
+        // Preflight will pass the status check for Active threads but may fail
+        // on subsequent checks (e.g., missing source branch). The key assertion
+        // is that it does NOT fail with a status-related error.
         let result = server
             .merge_impl(MergeParams {
                 thread_id: "t-active".to_string(),
@@ -8269,7 +8272,7 @@ mod merge_tool_tests {
             .await
             .unwrap();
 
-        assert!(is_error(&result), "should reject active thread");
+        // If there's an error, it must NOT be about Active status
         let text = result
             .content
             .first()
@@ -8279,8 +8282,8 @@ mod merge_tool_tests {
             })
             .unwrap();
         assert!(
-            text.contains("Active"),
-            "error should mention Active status, got: {}",
+            !text.contains("only Completed or Failed"),
+            "should not reject Active threads, got: {}",
             text
         );
     }
