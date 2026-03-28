@@ -7,6 +7,7 @@ pub mod executions;
 pub mod log_viewer;
 pub mod payload;
 
+use chrono::{TimeZone, Utc};
 use ratatui::style::Color;
 
 /// Pass-through: thread status values are already human-readable.
@@ -107,6 +108,32 @@ pub fn format_tokens(n: i64) -> String {
 /// Always two decimal places: `"$0.00"`, `"$0.12"`, `"$1.23"`, etc.
 pub fn format_cost_usd(cost: f64) -> String {
     format!("${:.2}", cost.max(0.0))
+}
+
+// ── Shared timestamp formatters ───────────────────────────────────────────────
+
+/// Format a Unix timestamp (seconds) as "HH:MM UTC" for today or "Mon DD HH:MM" for older.
+pub fn format_timestamp(ts_secs: i64) -> String {
+    let dt = match Utc.timestamp_opt(ts_secs, 0) {
+        chrono::LocalResult::Single(dt) => dt,
+        _ => return "-".to_string(),
+    };
+    let today = Utc::now().date_naive();
+    if dt.date_naive() == today {
+        dt.format("%H:%M UTC").to_string()
+    } else {
+        dt.format("%b %d %H:%M").to_string()
+    }
+}
+
+/// Format a Unix timestamp in milliseconds as "HH:MM:SS" (UTC).
+pub fn format_timestamp_ms(ts_ms: i64) -> String {
+    let secs = ts_ms / 1000;
+    let dt = match Utc.timestamp_opt(secs, 0) {
+        chrono::LocalResult::Single(dt) => dt,
+        _ => return "--:--:--".to_string(),
+    };
+    dt.format("%H:%M:%S").to_string()
 }
 
 // ── Shared string helpers ──────────────────────────────────────────────────────

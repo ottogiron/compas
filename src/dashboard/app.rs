@@ -42,7 +42,9 @@ use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::conversation::{render_conversation, ConversationViewState};
 use crate::dashboard::views::executions::{self, HistorySelectable};
-use crate::dashboard::views::log_viewer::{render_execution_detail, ExecutionDetailState};
+use crate::dashboard::views::log_viewer::{
+    render_execution_detail, ExecutionDetailState, Tab as LogTab,
+};
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::store::{
     AgentCostSummary, CostSummary, ExecutionRow, MergeOperation, Store, ThreadStatusView,
@@ -759,9 +761,6 @@ impl App {
             return;
         };
 
-        let agent_alias = execution.agent_alias.clone();
-        let status = execution.status.clone();
-        let duration_ms = execution.duration_ms;
         let (input_payload, input_linked) = self.resolve_input_payload_for_execution(&execution);
         let log_path = Some(self.log_dir.join(format!("{}.log", execution.id)));
         let timeline_events = self.handle.block_on(async {
@@ -771,18 +770,14 @@ impl App {
                 .unwrap_or_default()
         });
         let timeline_truncated = timeline_events.len() as i64 == TIMELINE_EVENT_LIMIT;
-        let mut detail = ExecutionDetailState::new(
-            execution.id,
-            agent_alias,
-            status,
-            duration_ms,
+        let detail = ExecutionDetailState::new(
+            execution,
             log_path,
             input_payload,
             input_linked,
-            execution.output_preview.clone(),
+            timeline_events,
+            timeline_truncated,
         );
-        detail.timeline_events = timeline_events;
-        detail.timeline_truncated = timeline_truncated;
         self.viewing_log = Some(detail);
     }
 
@@ -797,32 +792,25 @@ impl App {
             return;
         };
 
-        let exec_id = row.id.clone();
-        let agent_alias = row.agent_alias.clone();
-        let status = row.status.clone();
-        let duration_ms = row.duration_ms;
+        let execution = row.clone();
         let (input_payload, input_linked) = self.resolve_input_payload_for_execution(row);
 
-        let log_path = self.log_dir.join(format!("{}.log", exec_id));
+        let log_path = self.log_dir.join(format!("{}.log", execution.id));
         let timeline_events = self.handle.block_on(async {
             self.store
-                .get_execution_events(&exec_id, None, None, Some(TIMELINE_EVENT_LIMIT))
+                .get_execution_events(&execution.id, None, None, Some(TIMELINE_EVENT_LIMIT))
                 .await
                 .unwrap_or_default()
         });
         let timeline_truncated = timeline_events.len() as i64 == TIMELINE_EVENT_LIMIT;
-        let mut detail = ExecutionDetailState::new(
-            exec_id.clone(),
-            agent_alias,
-            status,
-            duration_ms,
+        let detail = ExecutionDetailState::new(
+            execution,
             Some(log_path),
             input_payload,
             input_linked,
-            row.output_preview.clone(),
+            timeline_events,
+            timeline_truncated,
         );
-        detail.timeline_events = timeline_events;
-        detail.timeline_truncated = timeline_truncated;
         self.viewing_log = Some(detail);
     }
 
@@ -1143,7 +1131,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         let timeline_refresh = app.viewing_log.as_ref().and_then(|v| {
             if v.is_running() {
                 Some((
-                    v.exec_id.clone(),
+                    v.execution.id.clone(),
                     v.timeline_events.last().map(|e| e.event_index),
                 ))
             } else {
@@ -1387,17 +1375,37 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Up | KeyCode::Char('k') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.select_prev_section();
+                viewer.scroll_up(1);
             }
         }
         KeyCode::Down | KeyCode::Char('j') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.select_next_section();
+                viewer.scroll_down(1);
             }
         }
-        KeyCode::Enter => {
+        KeyCode::Tab => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.toggle_selected_section();
+                viewer.next_tab();
+            }
+        }
+        KeyCode::BackTab => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.prev_tab();
+            }
+        }
+        KeyCode::Char('1') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.set_tab(LogTab::Output);
+            }
+        }
+        KeyCode::Char('2') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.set_tab(LogTab::Timeline);
+            }
+        }
+        KeyCode::Char('3') => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.set_tab(LogTab::Input);
             }
         }
         KeyCode::PageUp => {
