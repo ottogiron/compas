@@ -100,10 +100,9 @@ impl ExecutionDetailState {
     /// Create a new detail view from an execution row and associated data.
     ///
     /// Sets default tab and follow mode based on execution status:
-    /// - Failed/Crashed/Timed out -> Output tab, follow off, pre-scrolled to bottom
-    /// - Executing/Picked up -> Output tab, follow on
-    /// - Completed -> Output tab, follow off
-    /// - Queued -> Input tab, follow off
+    /// - All statuses default to Input tab
+    /// - Failed/Crashed/Timed out -> Output follow off, pre-scrolled to bottom
+    /// - Executing/Picked up -> Output follow on
     pub fn new(
         execution: ExecutionRow,
         log_path: Option<PathBuf>,
@@ -113,11 +112,9 @@ impl ExecutionDetailState {
         timeline_truncated: bool,
     ) -> Self {
         let (default_tab, output_follow, output_scroll) = match execution.status.as_str() {
-            "failed" | "crashed" | "timed_out" => (Tab::Output, false, usize::MAX),
-            "executing" | "picked_up" => (Tab::Output, true, 0),
-            "completed" => (Tab::Output, false, 0),
-            "queued" => (Tab::Input, false, 0),
-            _ => (Tab::Output, false, 0),
+            "failed" | "crashed" | "timed_out" => (Tab::Input, false, usize::MAX),
+            "executing" | "picked_up" => (Tab::Input, true, 0),
+            _ => (Tab::Input, false, 0),
         };
 
         let tab_states = [
@@ -835,6 +832,7 @@ mod tests {
     #[test]
     fn test_log_viewer_scroll_up_clamps_at_zero() {
         let mut s = make_state("completed", vec!["a"; 20]);
+        s.set_tab(Tab::Output);
         s.tab_states[Tab::Output.index()].scroll_offset = 2;
         s.scroll_up(10);
         assert_eq!(s.tab_states[Tab::Output.index()].scroll_offset, 0);
@@ -843,6 +841,7 @@ mod tests {
     #[test]
     fn test_log_viewer_scroll_up_disables_follow() {
         let mut s = make_state("executing", vec!["a"; 20]);
+        s.set_tab(Tab::Output);
         s.tab_states[Tab::Output.index()].follow = true;
         s.scroll_up(1);
         assert!(!s.tab_states[Tab::Output.index()].follow);
@@ -851,6 +850,7 @@ mod tests {
     #[test]
     fn test_log_viewer_toggle_follow_on() {
         let mut s = make_state("executing", vec!["a"; 5]);
+        s.set_tab(Tab::Output);
         s.tab_states[Tab::Output.index()].scroll_offset = 0;
         s.tab_states[Tab::Output.index()].follow = false;
         s.toggle_follow();
@@ -899,7 +899,7 @@ mod tests {
     fn test_status_adaptive_defaults_failed() {
         let execution = make_execution("failed");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Output);
+        assert_eq!(s.active_tab, Tab::Input);
         assert!(!s.tab_states[Tab::Output.index()].follow);
         assert_eq!(s.tab_states[Tab::Output.index()].scroll_offset, usize::MAX);
     }
@@ -908,7 +908,7 @@ mod tests {
     fn test_status_adaptive_defaults_executing() {
         let execution = make_execution("executing");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Output);
+        assert_eq!(s.active_tab, Tab::Input);
         assert!(s.tab_states[Tab::Output.index()].follow);
     }
 
@@ -924,7 +924,7 @@ mod tests {
     fn test_status_adaptive_defaults_completed() {
         let execution = make_execution("completed");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Output);
+        assert_eq!(s.active_tab, Tab::Input);
         assert!(!s.tab_states[Tab::Output.index()].follow);
         assert_eq!(s.tab_states[Tab::Output.index()].scroll_offset, 0);
     }
