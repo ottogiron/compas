@@ -714,7 +714,7 @@ fn build_input_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     match state.input_payload.as_deref() {
         Some(payload) => {
             let trimmed = payload.trim_start();
-            if trimmed.starts_with('{') || trimmed.starts_with('[') {
+            if trimmed.starts_with('{') {
                 // JSON payload — use structured formatting.
                 for line in format_payload_lines(payload, state.json_view_mode, 200) {
                     lines.push(Line::from(line).fg(TEXT_MUTED));
