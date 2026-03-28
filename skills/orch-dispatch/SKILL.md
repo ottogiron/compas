@@ -246,7 +246,11 @@ After merge confirmation (`wait-merge` succeeds):
    - Fill in Start, End, Duration from orch timestamps
    - Add Notes if relevant (e.g., "required 2 review rounds")
 
-3. Close ticket session:
+3. Clean the NEXT queue (`docs/project/backlog/NEXT.md`):
+   - Remove the completed ticket from the Queue section
+   - Renumber remaining items sequentially
+
+4. Close ticket session:
    - `ticket done <ticket-id>`
    - Or `ticket done <batch-id> --batch` if all tickets in the batch are done
 

@@ -97,11 +97,61 @@ Created: 2026-03-22
 - Risk: Low
 - Notes: Closes known-issues.md "MCP-only agents cannot commit worktree changes"
 
+## Ticket CLI-WAIT-1 — Consolidate CLI wait commands under subcommands
+
+- Goal: Restructure `compas wait` and `compas wait-merge` into `compas wait message` and `compas wait merge` subcommands. Deduplicates config/DB setup boilerplate and scales cleanly for future wait targets (e.g., `wait execution`, `wait batch`).
+- In scope:
+  - Replace `Commands::Wait` and `Commands::WaitMerge` with `Commands::Wait { config, target: WaitTarget }` containing a nested `WaitTarget` enum (`Message`, `Merge`)
+  - `config` lives at the `Wait` level (shared); target-specific params in nested variants
+  - Deduplicate config load → DB connect → store construction into shared setup
+  - Migrate existing tests to new subcommand structure
+  - Keep exit code contract unchanged: 0=found/completed, 1=timeout/fail, 2=error
+  - Keep key=value output format unchanged
+- Out of scope:
+  - Hidden backward-compat alias for `compas wait-merge` (pre-v1, clean break)
+  - Changing MCP wait behavior
+- Dependencies: None (independent of MCP-2)
+- Acceptance criteria:
+  - `compas wait message --thread-id <id>` works identically to old `compas wait --thread-id <id>`
+  - `compas wait merge --op-id <id>` works identically to old `compas wait-merge --op-id <id>`
+  - Old `compas wait-merge` is removed
+  - `compas wait --help` shows both subcommands
+  - `make verify` passes
+- Verification:
+  - Existing wait/wait-merge integration tests pass under new syntax
+  - `make verify`
+- Status: Todo
+- Complexity: S
+- Risk: Low
+
+## Ticket CLI-WAIT-2 — Update docs for consolidated wait syntax
+
+- Goal: Update all documentation referencing `compas wait` and `compas wait-merge` to the new subcommand syntax.
+- In scope:
+  - Update `orch-dispatch` skill (`compas wait-merge` → `compas wait merge`)
+  - Update README CLI reference section
+  - Update any cookbook/guide references
+  - Changelog fragment
+- Out of scope:
+  - Code changes (handled by CLI-WAIT-1)
+- Dependencies: CLI-WAIT-1
+- Acceptance criteria:
+  - No references to `compas wait-merge` remain in docs (only `compas wait merge`)
+  - `make verify` passes (markdown lint)
+- Verification:
+  - `grep -r 'wait-merge' docs/` returns no results
+  - `make verify`
+- Status: Todo
+- Complexity: S
+- Risk: Low
+
 ## Execution Order
 
 1. ~~WAIT-MCP-1~~ (done)
-2. MCP-2 (orch_wait_merge)
-3. MCP-3 (orch_commit)
+2. MCP-2 (orch_wait_merge) — parallel with CLI-WAIT-1
+3. CLI-WAIT-1 (consolidate CLI wait subcommands) — parallel with MCP-2
+4. MCP-3 (orch_commit)
+5. CLI-WAIT-2 (docs update) — after CLI-WAIT-1
 
 ## Tracking Notes
 

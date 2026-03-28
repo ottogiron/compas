@@ -12,14 +12,15 @@ No tickets currently in-flight.
 
 Ordered by priority. Work top item when capacity is available.
 
-1. MERGE-1 — Detect no-op merges and uncommitted worktree changes (`merge-safety.md`)
-2. EVO-16 — Session resume after crash (`orch-evolution.md`)
-3. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
-4. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-5. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-6. MCP-2 — `orch_wait_merge` MCP tool (`orch-wait-mcp.md`)
+1. EVO-16 — Session resume after crash (`orch-evolution.md`)
+2. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+3. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
+4. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
+5. MCP-2 — `orch_wait_merge` MCP tool (`orch-wait-mcp.md`)
+6. CLI-WAIT-1 — Consolidate CLI wait subcommands (`orch-wait-mcp.md`)
 7. MCP-3 — `orch_commit` MCP tool (`orch-wait-mcp.md`)
-8. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+8. CLI-WAIT-2 — Update docs for consolidated wait syntax (`orch-wait-mcp.md`)
+9. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 
