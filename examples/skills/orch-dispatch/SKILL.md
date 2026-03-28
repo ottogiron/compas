@@ -342,8 +342,8 @@ Completion Status: completed / rejected / abandoned
 
 ## Failure Handling
 
-- **CLI wait timeout:** `compas wait` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
-- **CLI wait error:** `compas wait` exits `2`. Verify worker process + config path, then retry.
+- **CLI wait timeout:** `compas wait message` exits `1`. Run `orch_poll(thread_id=<thread-id>)`, `orch_tasks(alias="<worker>")`, and `orch_diagnose(thread_id="<thread-id>")` before deciding to continue waiting, abandon, or re-dispatch.
+- **CLI wait error:** `compas wait message` exits `2`. Verify worker process + config path, then retry.
 - **Backend unhealthy:** Check `orch_health(alias="<worker>")` for backend ping status and worker heartbeat.
 - **Stale thread:** Use `orch_abandon(thread_id="<thread-id>")` and re-dispatch.
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.
