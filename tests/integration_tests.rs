@@ -8686,3 +8686,193 @@ mod merge_tool_tests {
         );
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Commit Tool Tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod commit_tests {
+    use super::*;
+
+    /// Initialize a bare git repo in a temp dir (for worktree simulation).
+    fn init_git_repo(path: &std::path::Path) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        // Create an initial commit so HEAD exists
+        std::fs::write(path.join(".gitkeep"), "").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "-A"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_commit_no_thread() {
+        let server = test_server().await;
+
+        let result = server
+            .commit_impl(CommitParams {
+                thread_id: "nonexistent".to_string(),
+                message: "test commit".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result));
+        let text = extract_text(&result);
+        assert!(
+            text.contains("not found"),
+            "expected 'not found' error, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_no_worktree() {
+        let server = test_server().await;
+        // Create thread with no worktree path
+        server
+            .store
+            .ensure_thread("t-commit-no-wt", None, None)
+            .await
+            .unwrap();
+
+        let result = server
+            .commit_impl(CommitParams {
+                thread_id: "t-commit-no-wt".to_string(),
+                message: "test commit".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result));
+        let text = extract_text(&result);
+        assert!(
+            text.contains("no worktree path"),
+            "expected 'no worktree path' error, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_not_active() {
+        let server = test_server().await;
+        server
+            .store
+            .ensure_thread("t-commit-done", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .update_thread_status("t-commit-done", ThreadStatus::Completed)
+            .await
+            .unwrap();
+
+        let result = server
+            .commit_impl(CommitParams {
+                thread_id: "t-commit-done".to_string(),
+                message: "test commit".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result));
+        let text = extract_text(&result);
+        assert!(
+            text.contains("Completed"),
+            "expected status in error, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_nothing_to_commit() {
+        let server = test_server().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path();
+        init_git_repo(tmp_path);
+
+        server
+            .store
+            .ensure_thread("t-commit-clean", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .set_thread_worktree_path("t-commit-clean", tmp_path, tmp_path)
+            .await
+            .unwrap();
+
+        let result = server
+            .commit_impl(CommitParams {
+                thread_id: "t-commit-clean".to_string(),
+                message: "empty commit".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result));
+        let text = extract_text(&result);
+        assert!(
+            text.contains("nothing to commit"),
+            "expected 'nothing to commit' error, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_commit_success() {
+        let server = test_server().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path();
+        init_git_repo(tmp_path);
+
+        server
+            .store
+            .ensure_thread("t-commit-ok", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .set_thread_worktree_path("t-commit-ok", tmp_path, tmp_path)
+            .await
+            .unwrap();
+
+        // Write a new file to make a dirty worktree
+        std::fs::write(tmp_path.join("new_file.txt"), "hello world").unwrap();
+
+        let result = server
+            .commit_impl(CommitParams {
+                thread_id: "t-commit-ok".to_string(),
+                message: "add new file".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result), "expected success, got error");
+        let json = extract_json(&result);
+        assert_eq!(json["thread_id"], "t-commit-ok");
+        assert!(!json["commit_sha"].as_str().unwrap().is_empty());
+        assert_eq!(json["files_changed"], 1);
+        assert!(!json["worktree_path"].as_str().unwrap().is_empty());
+    }
+}
