@@ -1,0 +1,3 @@
+kind: Changed
+body: Reorder execution detail tabs to Input-first; render Input tab content as markdown
+time: 2026-03-28T23:06:56.531004+01:00

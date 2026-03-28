@@ -1395,7 +1395,7 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('1') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.set_tab(LogTab::Output);
+                viewer.set_tab(LogTab::Input);
             }
         }
         KeyCode::Char('2') => {
@@ -1405,7 +1405,7 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('3') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.set_tab(LogTab::Input);
+                viewer.set_tab(LogTab::Output);
             }
         }
         KeyCode::PageUp => {
