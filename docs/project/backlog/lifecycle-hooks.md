@@ -116,14 +116,14 @@ Created: 2026-03-21
   - Unit test: hook with matching filter runs, non-matching filter skips
   - Unit test: filter on missing payload key skips hook
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
 1. ~~HOOKS-1~~ (done)
 2. ~~HOOKS-2~~ (done)
 3. ~~HOOKS-3~~ (done)
-4. HOOKS-4
+4. ~~HOOKS-4~~ (done)
 
 ## Tracking Notes
 
@@ -136,6 +136,15 @@ Created: 2026-03-21
 - HOOKS-4 (filter): architect rejected per-agent hooks on `AgentConfig` (thread `01KM9DVT6EYACRJ11PYZQ1PRXD`). Declarative filters on `HookEntry` are the recommended alternative — keeps hooks in one config section, no layering violation, degrades gracefully for thread events.
 
 ## Execution Metrics
+
+- Ticket: HOOKS-4
+- Owner: compas-dev
+- Complexity: low
+- Risk: low
+- Start: 2026-03-28 17:54 UTC
+- End: 2026-03-28 18:13 UTC
+- Duration: 00:19:26
+- Notes: 1 review round with rework (missing changelog, doctor tests, key sort)
 
 - Ticket: HOOKS-3
 - Owner: (pending)
