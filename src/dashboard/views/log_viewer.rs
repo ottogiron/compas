@@ -25,7 +25,9 @@ use std::path::PathBuf;
 
 use crate::dashboard::theme::{self, *};
 use crate::dashboard::views::conversation::markdown_to_lines;
-use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
+use crate::dashboard::views::payload::{
+    extract_content_from_log_line, format_log_line, format_payload_lines, JsonViewMode,
+};
 use crate::dashboard::views::{
     format_duration_ms, format_duration_secs, format_timestamp_ms, humanize_exec_status, truncate,
 };
@@ -648,15 +650,34 @@ fn build_output_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     if state.lines.is_empty() {
         return vec![Line::from("(no output)").fg(TEXT_MUTED)];
     }
-    state
-        .lines
-        .iter()
-        .flat_map(|line| {
-            format_log_line(line, state.json_view_mode)
-                .into_iter()
-                .map(|l| Line::from(l).fg(TEXT_NORMAL))
-        })
-        .collect()
+    match state.json_view_mode {
+        JsonViewMode::Humanized => {
+            // Content extraction — shows agent's narrative text.
+            let lines: Vec<Line<'static>> = state
+                .lines
+                .iter()
+                .filter_map(|line| extract_content_from_log_line(line))
+                .flat_map(|texts| texts.into_iter().map(|t| Line::from(t).fg(TEXT_NORMAL)))
+                .collect();
+            if lines.is_empty() {
+                vec![Line::from("(no text content)").fg(TEXT_MUTED)]
+            } else {
+                lines
+            }
+        }
+        JsonViewMode::RawPretty => {
+            // Raw protocol — for debugging, pretty-printed JSON.
+            state
+                .lines
+                .iter()
+                .flat_map(|line| {
+                    format_log_line(line, JsonViewMode::RawPretty)
+                        .into_iter()
+                        .map(|l| Line::from(l).fg(TEXT_NORMAL))
+                })
+                .collect()
+        }
+    }
 }
 
 fn build_timeline_lines(events: &[ExecutionEventRow], truncated: bool) -> Vec<Line<'static>> {
