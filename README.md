@@ -208,7 +208,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | `orch_diagnose` | Thread diagnostics with suggested next actions |
 
 <details>
-<summary><b>All 23 tools — complete reference</b></summary>
+<summary><b>All 24 tools — complete reference</b></summary>
 
 #### Core (lifecycle)
 
@@ -243,6 +243,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | `orch_merge` | Queue a merge of a completed thread's branch into a target branch |
 | `orch_merge_status` | Query merge operation detail or aggregate overview |
 | `orch_merge_cancel` | Cancel a queued merge operation |
+| `orch_wait_merge` | Block until a merge operation completes, fails, or is cancelled; sends progress notifications |
 
 #### System
 

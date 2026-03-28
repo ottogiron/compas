@@ -8550,4 +8550,136 @@ mod merge_tool_tests {
             actions_text
         );
     }
+
+    // ── orch_wait_merge ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_orch_wait_merge_returns_found_for_completed_op() {
+        let server = test_server().await;
+
+        let op = MergeOperation {
+            id: "wait-merge-ok-1".to_string(),
+            thread_id: "t-wm-ok".to_string(),
+            source_branch: "compas/t-wm-ok".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "completed".to_string(),
+            push_requested: false,
+            queued_at: chrono::Utc::now().timestamp(),
+            claimed_at: Some(chrono::Utc::now().timestamp()),
+            started_at: Some(chrono::Utc::now().timestamp()),
+            finished_at: Some(chrono::Utc::now().timestamp()),
+            duration_ms: Some(320),
+            result_summary: Some("merged 3 commits".to_string()),
+            error_detail: None,
+            conflict_files: None,
+        };
+        server.store.insert_merge_op(&op).await.unwrap();
+
+        let result = server
+            .wait_merge_impl(
+                WaitMergeParams {
+                    op_id: "wait-merge-ok-1".to_string(),
+                    timeout_secs: Some(5),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !is_error(&result),
+            "wait_merge for completed op should succeed"
+        );
+        let json = extract_json(&result);
+
+        assert_eq!(json["found"], true);
+        assert_eq!(json["op_id"], "wait-merge-ok-1");
+        assert_eq!(json["thread_id"], "t-wm-ok");
+        assert_eq!(json["status"], "completed");
+        assert_eq!(json["source_branch"], "compas/t-wm-ok");
+        assert_eq!(json["target_branch"], "main");
+        assert_eq!(json["duration_ms"], 320);
+        assert_eq!(json["result_summary"], "merged 3 commits");
+    }
+
+    #[tokio::test]
+    async fn test_orch_wait_merge_times_out() {
+        let server = test_server().await;
+
+        let op = MergeOperation {
+            id: "wait-merge-to-1".to_string(),
+            thread_id: "t-wm-to".to_string(),
+            source_branch: "compas/t-wm-to".to_string(),
+            target_branch: "main".to_string(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: chrono::Utc::now().timestamp(),
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        server.store.insert_merge_op(&op).await.unwrap();
+
+        let result = server
+            .wait_merge_impl(
+                WaitMergeParams {
+                    op_id: "wait-merge-to-1".to_string(),
+                    timeout_secs: Some(1),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            !is_error(&result),
+            "timeout is not an error, it returns found=false"
+        );
+        let json = extract_json(&result);
+
+        assert_eq!(json["found"], false);
+        assert_eq!(json["op_id"], "wait-merge-to-1");
+        assert_eq!(json["timeout_secs"], 1);
+        assert_eq!(json["last_status"], "queued");
+    }
+
+    #[tokio::test]
+    async fn test_orch_wait_merge_unknown_op_id_returns_error() {
+        let server = test_server().await;
+
+        let result = server
+            .wait_merge_impl(
+                WaitMergeParams {
+                    op_id: "nonexistent-merge-op".to_string(),
+                    timeout_secs: Some(5),
+                },
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "unknown op_id should return error");
+        let text = result
+            .content
+            .first()
+            .and_then(|c| c.as_text())
+            .map(|t| t.text.as_str())
+            .unwrap_or("");
+        assert!(
+            text.contains("not found"),
+            "error should mention 'not found', got: {}",
+            text
+        );
+    }
 }

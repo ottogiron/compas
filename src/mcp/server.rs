@@ -287,7 +287,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_merge",
-        description = "Queue a merge operation for a completed thread's branch. Runs preflight validation (thread status, branch existence, clean worktree, no duplicate). After queuing, wait for completion using CLI: `compas wait-merge --op-id <id> --timeout 120`."
+        description = "Queue a merge operation for a completed thread's branch. Runs preflight validation (thread status, branch existence, clean worktree, no duplicate). After queuing, use orch_wait_merge to block until completion, or CLI: `compas wait-merge --op-id <id> --timeout 120`."
     )]
     async fn orch_merge(
         &self,
@@ -317,6 +317,24 @@ impl OrchestratorMcpServer {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.merge_cancel_impl(params).await
     }
+
+    #[tool(
+        name = "orch_wait_merge",
+        description = "Block until a merge operation reaches a terminal status (completed, failed, cancelled), or timeout. \
+            Returns merge result with status, branch info, duration, and conflict details on failure. \
+            Sends progress notifications every 10s to prevent transport timeouts. \
+            For non-blocking merge status checks use orch_merge_status instead."
+    )]
+    async fn orch_wait_merge(
+        &self,
+        Parameters(params): Parameters<WaitMergeParams>,
+        peer: Peer<RoleServer>,
+        meta: Meta,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        let progress_token = meta.get_progress_token();
+        self.wait_merge_impl(params, Some(peer), progress_token)
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -336,7 +354,8 @@ impl ServerHandler for OrchestratorMcpServer {
                  timeouts). If orch_wait returns found=false, re-issue with the same \
                  parameters. Use await_chain=true when the agent uses auto-handoff \
                  and you want the terminal result. Use orch_poll for instant status \
-                 checks only, not for waiting."
+                 checks only, not for waiting. After queuing a merge via orch_merge, \
+                 use orch_wait_merge to block until the merge completes."
                     .to_string(),
             )
     }

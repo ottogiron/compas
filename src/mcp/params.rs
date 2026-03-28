@@ -200,3 +200,11 @@ pub struct MergeCancelParams {
     /// Merge operation ID to cancel
     pub op_id: String,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct WaitMergeParams {
+    /// Merge operation ULID to wait on
+    pub op_id: String,
+    /// Timeout in seconds (default 120)
+    pub timeout_secs: Option<u64>,
+}
