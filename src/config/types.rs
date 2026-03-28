@@ -125,6 +125,11 @@ pub struct HookEntry {
     /// Additional environment variables injected into the hook process.
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+    /// Optional declarative filter: only run this hook when all key-value pairs
+    /// match the corresponding top-level fields in the event payload.
+    /// Missing payload fields cause the hook to be skipped (no error).
+    #[serde(default)]
+    pub filter: Option<HashMap<String, String>>,
 }
 
 fn default_hook_timeout_secs() -> u64 {

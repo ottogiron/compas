@@ -265,7 +265,11 @@ pub async fn run(config_path: PathBuf, fix: bool) -> DoctorReport {
     let hook_checks = check_hook_commands(&config);
     results.extend(hook_checks);
 
-    // ── 10. Schedule validation ─────────────────────────────────────────
+    // ── 10. Hook filter field validation ──────────────────────────────
+    let filter_checks = check_hook_filter_fields(&config);
+    results.extend(filter_checks);
+
+    // ── 11. Schedule validation ─────────────────────────────────────────
     let schedule_checks = check_schedules(&config);
     results.extend(schedule_checks);
 
@@ -624,7 +628,106 @@ fn check_hook_commands(config: &OrchestratorConfig) -> Vec<CheckResult> {
     results
 }
 
-/// Check 10: validate configured schedules.
+/// Check 10: validate filter keys in hook entries.
+///
+/// Known payload fields per hook point:
+/// - `on_execution_started`: event, thread_id, execution_id, agent_alias, timestamp
+/// - `on_execution_completed`: event, thread_id, execution_id, agent_alias, success, duration_ms, thread_summary, timestamp
+/// - `on_thread_closed` / `on_thread_failed`: event, thread_id, new_status, timestamp
+///
+/// Warns if a filter key is not in the known set for the hook point it belongs to.
+fn check_hook_filter_fields(config: &OrchestratorConfig) -> Vec<CheckResult> {
+    let hooks = match &config.hooks {
+        Some(h) => h,
+        None => return vec![],
+    };
+
+    let execution_started_fields: HashSet<&str> = [
+        "event",
+        "thread_id",
+        "execution_id",
+        "agent_alias",
+        "timestamp",
+    ]
+    .iter()
+    .copied()
+    .collect();
+    let execution_completed_fields: HashSet<&str> = [
+        "event",
+        "thread_id",
+        "execution_id",
+        "agent_alias",
+        "success",
+        "duration_ms",
+        "thread_summary",
+        "timestamp",
+    ]
+    .iter()
+    .copied()
+    .collect();
+    let thread_status_fields: HashSet<&str> = ["event", "thread_id", "new_status", "timestamp"]
+        .iter()
+        .copied()
+        .collect();
+
+    let mut results = Vec::new();
+
+    let check_entries = |entries: &[crate::config::types::HookEntry],
+                         hook_point: &str,
+                         known: &HashSet<&str>,
+                         results: &mut Vec<CheckResult>| {
+        for entry in entries {
+            if let Some(ref filter) = entry.filter {
+                let mut sorted_keys: Vec<&String> = filter.keys().collect();
+                sorted_keys.sort();
+                for key in sorted_keys {
+                    if !known.contains(key.as_str()) {
+                        results.push(CheckResult::warn(
+                            &format!("Hook filter: {}", hook_point),
+                            &format!(
+                                "filter key '{}' is not a known payload field for {}",
+                                key, hook_point
+                            ),
+                            &format!(
+                                "known fields: {}",
+                                known.iter().copied().collect::<Vec<_>>().join(", ")
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+    };
+
+    check_entries(
+        &hooks.on_execution_started,
+        "on_execution_started",
+        &execution_started_fields,
+        &mut results,
+    );
+    check_entries(
+        &hooks.on_execution_completed,
+        "on_execution_completed",
+        &execution_completed_fields,
+        &mut results,
+    );
+    check_entries(
+        &hooks.on_thread_closed,
+        "on_thread_closed",
+        &thread_status_fields,
+        &mut results,
+    );
+    check_entries(
+        &hooks.on_thread_failed,
+        "on_thread_failed",
+        &thread_status_fields,
+        &mut results,
+    );
+
+    results
+}
+
+/// Check 11: validate configured schedules.
 ///
 /// Verifies that each schedule's agent alias exists in the configured agents
 /// and that the cron expression parses correctly. Issues are reported as
@@ -1410,6 +1513,7 @@ mod tests {
                     args: None,
                     timeout_secs: 10,
                     env: None,
+                    filter: None,
                 }],
                 on_execution_completed: vec![],
                 on_thread_closed: vec![],
@@ -1449,6 +1553,7 @@ mod tests {
                     args: None,
                     timeout_secs: 10,
                     env: None,
+                    filter: None,
                 }],
                 on_execution_started: vec![],
                 on_thread_closed: vec![],
@@ -1460,6 +1565,106 @@ mod tests {
         let results = check_hook_commands(&config);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].severity, Severity::Pass);
+    }
+
+    // ── Hook filter field checks ─────────────────────────────────────────
+
+    #[test]
+    fn test_doctor_check_hook_filter_fields_no_hooks() {
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: None,
+        };
+
+        let results = check_hook_filter_fields(&config);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_doctor_check_hook_filter_fields_unknown_key() {
+        use crate::config::types::{HookEntry, HooksConfig};
+        use std::collections::HashMap;
+
+        let mut filter = HashMap::new();
+        filter.insert("bogus_field".to_string(), "x".to_string());
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: Some(HooksConfig {
+                on_execution_started: vec![HookEntry {
+                    command: "true".to_string(),
+                    args: None,
+                    timeout_secs: 10,
+                    env: None,
+                    filter: Some(filter),
+                }],
+                on_execution_completed: vec![],
+                on_thread_closed: vec![],
+                on_thread_failed: vec![],
+            }),
+            schedules: None,
+        };
+
+        let results = check_hook_filter_fields(&config);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].severity, Severity::Warn);
+        assert!(results[0].detail.contains("bogus_field"));
+    }
+
+    #[test]
+    fn test_doctor_check_hook_filter_fields_known_keys() {
+        use crate::config::types::{HookEntry, HooksConfig};
+        use std::collections::HashMap;
+
+        let mut filter = HashMap::new();
+        filter.insert("agent_alias".to_string(), "dev".to_string());
+        filter.insert("success".to_string(), "true".to_string());
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/state"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: Some(HooksConfig {
+                on_execution_started: vec![],
+                on_execution_completed: vec![HookEntry {
+                    command: "true".to_string(),
+                    args: None,
+                    timeout_secs: 10,
+                    env: None,
+                    filter: Some(filter),
+                }],
+                on_thread_closed: vec![],
+                on_thread_failed: vec![],
+            }),
+            schedules: None,
+        };
+
+        let results = check_hook_filter_fields(&config);
+        assert!(results.is_empty(), "known keys should not produce warnings");
     }
 
     // ── Schedule checks ─────────────────────────────────────────────────
