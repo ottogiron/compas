@@ -59,6 +59,90 @@ pub fn format_log_line(line: &str, mode: JsonViewMode) -> Vec<String> {
     }
 }
 
+/// Extract human-readable content from a JSONL log line.
+///
+/// Returns `None` for lines that should be skipped (protocol events, tool calls,
+/// thinking blocks). Returns `Some(lines)` for meaningful agent narrative text.
+///
+/// This is used by the Output tab in Humanized mode to show the agent's text
+/// instead of raw protocol JSON.
+pub fn extract_content_from_log_line(line: &str) -> Option<Vec<String>> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    // stderr lines pass through as-is.
+    if trimmed.starts_with("[stderr]") {
+        return Some(vec![trimmed.to_string()]);
+    }
+
+    // Non-JSON lines pass through as-is.
+    let value: serde_json::Value = match serde_json::from_str(trimmed) {
+        Ok(v) => v,
+        Err(_) => return Some(vec![trimmed.to_string()]),
+    };
+
+    let event_type = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+    match event_type {
+        // Skip protocol/init events.
+        "system" | "rate_limit_event" => None,
+
+        // Skip user messages (tool results — already in Timeline).
+        "user" => None,
+
+        // Assistant messages: extract text blocks only.
+        "assistant" => {
+            let content = value
+                .pointer("/message/content")
+                .and_then(|c| c.as_array())?;
+            let texts: Vec<String> = content
+                .iter()
+                .filter(|item| item.get("type").and_then(|t| t.as_str()) == Some("text"))
+                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                .filter(|t| !t.trim().is_empty())
+                .flat_map(|t| t.lines().map(str::to_string).collect::<Vec<_>>())
+                .collect();
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts)
+            }
+        }
+
+        // Result event: extract the result field.
+        "result" => {
+            let result_text = value.get("result").and_then(|r| r.as_str())?;
+            if result_text.trim().is_empty() {
+                return None;
+            }
+            Some(result_text.lines().map(str::to_string).collect())
+        }
+
+        // OpenCode streaming: extract part.text delta.
+        "content.delta" => {
+            let text = value.pointer("/part/text").and_then(|v| v.as_str())?;
+            if text.is_empty() {
+                return None;
+            }
+            Some(vec![text.to_string()])
+        }
+
+        // Codex streaming: extract item.text.
+        "item.completed" => {
+            let text = value.pointer("/item/text").and_then(|v| v.as_str())?;
+            if text.is_empty() {
+                return None;
+            }
+            Some(text.lines().map(str::to_string).collect())
+        }
+
+        // Unrecognized JSON event types — skip.
+        _ => None,
+    }
+}
+
 pub fn humanize_json_lines(raw: &str) -> Option<Vec<String>> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -172,5 +256,105 @@ mod tests {
     fn test_format_log_line_pretty_json() {
         let out = format_log_line("{\"ok\":true}", JsonViewMode::RawPretty);
         assert!(out.len() > 1);
+    }
+
+    // ── extract_content_from_log_line tests ─────────────────────────────────
+
+    #[test]
+    fn test_extract_content_assistant_text() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello world\nSecond line"}]}}"#;
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["Hello world", "Second line"]);
+    }
+
+    #[test]
+    fn test_extract_content_assistant_thinking_only_skipped() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"Let me think..."}]}}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_assistant_tool_use_only_skipped() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]}}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_assistant_mixed_extracts_text_only() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"The answer is 42"},{"type":"tool_use","name":"Write","input":{}}]}}"#;
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["The answer is 42"]);
+    }
+
+    #[test]
+    fn test_extract_content_result_event() {
+        let line = r#"{"type":"result","subtype":"success","result":"All done.\nFiles updated."}"#;
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["All done.", "Files updated."]);
+    }
+
+    #[test]
+    fn test_extract_content_skip_system() {
+        let line = r#"{"type":"system","subtype":"init","cwd":"/tmp","tools":["Bash"]}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_skip_rate_limit() {
+        let line = r#"{"type":"rate_limit_event","retry_after":5}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_skip_user() {
+        let line =
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result"}]}}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_non_json_passthrough() {
+        let line = "some plain text output";
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["some plain text output"]);
+    }
+
+    #[test]
+    fn test_extract_content_stderr_passthrough() {
+        let line = "[stderr] warning: something happened";
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["[stderr] warning: something happened"]);
+    }
+
+    #[test]
+    fn test_extract_content_opencode_delta() {
+        let line = r#"{"type":"content.delta","part":{"text":"streaming chunk"}}"#;
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["streaming chunk"]);
+    }
+
+    #[test]
+    fn test_extract_content_codex_item_completed() {
+        let line = r#"{"type":"item.completed","item":{"text":"Done.\nAll good."}}"#;
+        let result = extract_content_from_log_line(line).unwrap();
+        assert_eq!(result, vec!["Done.", "All good."]);
+    }
+
+    #[test]
+    fn test_extract_content_unknown_type_skipped() {
+        let line = r#"{"type":"some_unknown_event","data":"stuff"}"#;
+        assert!(extract_content_from_log_line(line).is_none());
+    }
+
+    #[test]
+    fn test_extract_content_empty_line_skipped() {
+        assert!(extract_content_from_log_line("").is_none());
+        assert!(extract_content_from_log_line("   ").is_none());
+    }
+
+    #[test]
+    fn test_extract_content_result_empty_text_skipped() {
+        let line = r#"{"type":"result","result":"  "}"#;
+        assert!(extract_content_from_log_line(line).is_none());
     }
 }
