@@ -398,3 +398,23 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 - **Hot-reload via `ConfigHandle`** — schedules are read from the live config on each tick. Adding, removing, or modifying schedules takes effect on the next 60s tick without restart.
 - **`max_runs` enforced from `schedule_runs.run_count`** — prevents runaway schedules. Once hit, the schedule is silently skipped with a debug log. Resetting requires deleting the row from `schedule_runs` (manual DB operation, acceptable for a safety cap).
 - **`from: 'scheduler'` sender alias** — distinguishes cron-originated dispatches from operator dispatches in message history and diagnostics.
+
+## ADR-025: Pre-merge validation — no-op detection and dirty-worktree guard
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** `git merge` exits 0 with "Already up to date." when branches are identical. The merge executor treated this as success, so no-op merges reported `status=completed`. Additionally, if an agent committed some work but left files uncommitted, the merge silently lost those files. Discovered during GAP-5 dispatch — worker left all changes uncommitted, merge reported `completed` with `duration_ms=0`.
+
+**Decision:** `MergeExecutor::execute()` performs two pre-merge validation checks before creating the temporary merge worktree. Both return `Ok(MergeResult { success: false })` (not `Err`) so the existing worker failure path (transition to `Failed` with `error_detail` and `conflict_files`) handles them uniformly.
+
+**Check 1 — Dirty-worktree guard (runs first):** If a `thread_worktree_path` is provided, call `WorktreeManager::dirty_files()` to detect uncommitted changes. If dirty, fail with the file list in `conflict_files`. If the check itself errors, fail for safety (defense-in-depth) with a warning log.
+
+**Check 2 — No-op detection:** Count commits on `source` not yet in `target` via `git rev-list --count {target}..{source}`. If zero, fail with "No commits to merge".
+
+**Key choices:**
+
+- **`conflict_files` reused for dirty-file diagnostics** — the field already exists on `MergeResult` and is surfaced by `orch_merge_status`, `wait-merge`, and the dashboard. Adding a separate field would require schema changes across the store, MCP tools, and CLI for no functional benefit. The semantics are "files that prevented merge" which fits both conflicts and uncommitted changes.
+- **Dirty-worktree check runs before no-op check** — uncommitted changes are the more actionable failure. If the agent left files uncommitted but also has zero committed divergence, the operator needs to know about the uncommitted files first (they explain *why* divergence is zero). Reversing the order would report "No commits to merge" and hide the root cause.
+- **TOCTOU accepted between preflight and execute** — `preflight_check()` (at merge-request time) validates worktree cleanliness and branch existence. `execute()` (at execution time, potentially seconds/minutes later) rechecks both. The window between checks is small (merge queue claim is near-instant), and the race is benign: if an agent commits between preflight and execute, the execute-time check passes (correct). If an agent dirties the worktree between preflight and execute, the execute-time check catches it (correct). The only uncaught race is an agent dirtying and then cleaning the worktree between checks, which is a no-op from the operator's perspective.
+- **`Err` from `dirty_files` fails the merge** — if we cannot determine worktree status (e.g., corrupt `.git` directory), proceeding risks silent data loss. Failing safe matches the preflight behavior where `worktree_status` errors also block the merge.

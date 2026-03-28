@@ -644,24 +644,28 @@ impl WorkerRunner {
         // Spawn a detached task so the merge does not block the select! loop.
         let store = self.store.clone();
         let event_bus = self.event_bus.clone();
-        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
+        // Resolve repo_root and thread worktree path from thread's worktree info,
         // falling back to config.default_workdir for shared-workspace or legacy threads.
-        let repo_root = match self.store.get_thread_worktree_info(&op.thread_id).await {
-            Ok(Some((_, root))) => root,
-            Ok(None) => self.config.load().default_workdir.clone(),
-            Err(e) => {
-                tracing::warn!(op_id = %op.id, thread_id = %op.thread_id, error = %e,
-                    "get_thread_worktree_info failed, falling back to default_workdir");
-                self.config.load().default_workdir.clone()
-            }
-        };
+        let (thread_worktree_path, repo_root) =
+            match self.store.get_thread_worktree_info(&op.thread_id).await {
+                Ok(Some((wt_path, root))) => (Some(wt_path), root),
+                Ok(None) => (None, self.config.load().default_workdir.clone()),
+                Err(e) => {
+                    tracing::warn!(op_id = %op.id, thread_id = %op.thread_id, error = %e,
+                        "get_thread_worktree_info failed, falling back to default_workdir");
+                    (None, self.config.load().default_workdir.clone())
+                }
+            };
 
         tokio::spawn(async move {
             // MergeExecutor::execute runs blocking git subprocesses — must use spawn_blocking.
             let op_clone = op.clone();
             let root = repo_root.clone();
-            let result =
-                tokio::task::spawn_blocking(move || MergeExecutor::execute(&op_clone, &root)).await;
+            let wt_path = thread_worktree_path.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                MergeExecutor::execute(&op_clone, &root, wt_path.as_deref())
+            })
+            .await;
 
             match result {
                 Ok(Ok(merge_result)) if merge_result.success => {

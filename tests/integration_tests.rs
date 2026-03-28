@@ -4177,7 +4177,13 @@ mod prompt_hash_tests {
     fn expected_hash(prompt: &str) -> String {
         let mut h = Sha256::new();
         h.update(prompt.as_bytes());
-        format!("{:x}", h.finalize())
+        h.finalize()
+            .iter()
+            .fold(String::with_capacity(64), |mut s, b| {
+                use std::fmt::Write;
+                let _ = write!(s, "{b:02x}");
+                s
+            })
     }
 
     /// Verify that `scan_and_enqueue_triggers` stores the SHA-256 hash of the
@@ -7484,6 +7490,360 @@ mod merge_worker_tests {
             if tokio::time::Instant::now() > deadline {
                 panic!(
                     "merge did not complete within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_merge_noop_clean_worktree() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        let path_str = repo.path().to_string_lossy().to_string();
+
+        // Create source branch at same commit as target (no additional commits)
+        let checkout = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-b", "compas/merge-noop"])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        let back = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+
+        let store = test_store().await;
+        let config = merge_test_config(repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let op = MergeOperation {
+            id: "merge-noop-1".to_string(),
+            thread_id: "merge-noop".to_string(),
+            source_branch: "compas/merge-noop".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        runner.poll_merge_ops().await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store.get_merge_op("merge-noop-1").await.unwrap().unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Failed,
+                    "no-op merge should fail, got: {:?}",
+                    fetched.error_detail
+                );
+                assert!(fetched.error_detail.is_some());
+                assert!(
+                    fetched
+                        .error_detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("No commits to merge"),
+                    "error should mention no commits, got: {}",
+                    fetched.error_detail.unwrap()
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not reach terminal status within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_merge_noop_dirty_worktree() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        let path_str = repo.path().to_string_lossy().to_string();
+
+        // Create source branch at same commit as target (no divergence)
+        let checkout = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-b", "compas/merge-noop-dirty"])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        let back = Command::new("git")
+            .args(["-C", &path_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+
+        // Create a worktree for the source branch and leave uncommitted changes
+        let wt_path = repo
+            .path()
+            .join(".compas-worktrees")
+            .join("merge-noop-dirty");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        let wt_add = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "compas/merge-noop-dirty",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            wt_add.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&wt_add.stderr)
+        );
+        std::fs::write(wt_path.join("uncommitted.txt"), "oops").unwrap();
+
+        let store = test_store().await;
+        let config = merge_test_config(repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Set up thread with worktree info so the worker passes it to execute()
+        store
+            .ensure_thread("merge-noop-dirty", None, None)
+            .await
+            .unwrap();
+        store
+            .set_thread_worktree_path("merge-noop-dirty", &wt_path, repo.path())
+            .await
+            .unwrap();
+
+        let op = MergeOperation {
+            id: "merge-noop-dirty-1".to_string(),
+            thread_id: "merge-noop-dirty".to_string(),
+            source_branch: "compas/merge-noop-dirty".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        runner.poll_merge_ops().await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store
+                .get_merge_op("merge-noop-dirty-1")
+                .await
+                .unwrap()
+                .unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Failed,
+                    "dirty worktree merge should fail"
+                );
+                assert!(fetched.error_detail.is_some());
+                assert!(
+                    fetched
+                        .error_detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("uncommitted changes"),
+                    "error should mention uncommitted changes, got: {}",
+                    fetched.error_detail.unwrap()
+                );
+                assert!(
+                    fetched.conflict_files.is_some(),
+                    "should have conflict_files listing dirty files"
+                );
+                let files: Vec<String> =
+                    serde_json::from_str(fetched.conflict_files.as_ref().unwrap()).unwrap();
+                assert!(
+                    files.iter().any(|f| f.contains("uncommitted.txt")),
+                    "conflict_files should include uncommitted.txt, got: {:?}",
+                    files
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not reach terminal status within timeout, status: {}",
+                    fetched.status
+                );
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_worker_merge_partial_commit_dirty_worktree() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+        let path_str = repo.path().to_string_lossy().to_string();
+
+        // Create source branch with a committed file (ahead of target)
+        create_source_branch(repo.path(), "compas/merge-partial");
+
+        // Create a worktree and leave uncommitted changes
+        let wt_path = repo.path().join(".compas-worktrees").join("merge-partial");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        let wt_add = Command::new("git")
+            .args([
+                "-C",
+                &path_str,
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "compas/merge-partial",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            wt_add.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&wt_add.stderr)
+        );
+        std::fs::write(wt_path.join("forgot.txt"), "not committed").unwrap();
+
+        let store = test_store().await;
+        let config = merge_test_config(repo.path().to_path_buf());
+        let config_handle = ConfigHandle::new(config);
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        // Set up thread with worktree info
+        store
+            .ensure_thread("merge-partial", None, None)
+            .await
+            .unwrap();
+        store
+            .set_thread_worktree_path("merge-partial", &wt_path, repo.path())
+            .await
+            .unwrap();
+
+        let op = MergeOperation {
+            id: "merge-partial-1".to_string(),
+            thread_id: "merge-partial".to_string(),
+            source_branch: "compas/merge-partial".to_string(),
+            target_branch: target.clone(),
+            merge_strategy: "merge".to_string(),
+            requested_by: "operator".to_string(),
+            status: "queued".to_string(),
+            push_requested: false,
+            queued_at: 1000,
+            claimed_at: None,
+            started_at: None,
+            finished_at: None,
+            duration_ms: None,
+            result_summary: None,
+            error_detail: None,
+            conflict_files: None,
+        };
+        store.insert_merge_op(&op).await.unwrap();
+
+        runner.poll_merge_ops().await;
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let fetched = store
+                .get_merge_op("merge-partial-1")
+                .await
+                .unwrap()
+                .unwrap();
+            let status: MergeOperationStatus = fetched.status.parse().unwrap();
+            if status.is_terminal() {
+                assert_eq!(
+                    status,
+                    MergeOperationStatus::Failed,
+                    "partial commit dirty worktree should fail"
+                );
+                assert!(fetched.error_detail.is_some());
+                assert!(
+                    fetched
+                        .error_detail
+                        .as_ref()
+                        .unwrap()
+                        .contains("uncommitted changes"),
+                    "error should mention uncommitted changes, got: {}",
+                    fetched.error_detail.unwrap()
+                );
+                assert!(
+                    fetched.conflict_files.is_some(),
+                    "should have conflict_files listing dirty files"
+                );
+                let files: Vec<String> =
+                    serde_json::from_str(fetched.conflict_files.as_ref().unwrap()).unwrap();
+                assert!(
+                    files.iter().any(|f| f.contains("forgot.txt")),
+                    "conflict_files should include forgot.txt, got: {:?}",
+                    files
+                );
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!(
+                    "merge did not reach terminal status within timeout, status: {}",
                     fetched.status
                 );
             }

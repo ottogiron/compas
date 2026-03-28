@@ -39,6 +39,57 @@ impl WorktreeManager {
         Self
     }
 
+    /// Return structured list of dirty files in a worktree, or None if clean/missing.
+    ///
+    /// - `Ok(None)` — clean or path does not exist on disk
+    /// - `Ok(Some(files))` — dirty; each entry is a filename from `git status --porcelain`
+    /// - `Err(msg)` — git command failed
+    pub fn dirty_files(worktree_path: &Path) -> Result<Option<Vec<String>>, String> {
+        if !worktree_path.exists() {
+            return Ok(None);
+        }
+
+        let path_str = worktree_path.to_string_lossy();
+
+        let status_output = Command::new("git")
+            .args(["-C", &path_str, "status", "--porcelain"])
+            .output()
+            .map_err(|e| format!("failed to run git status: {}", e))?;
+
+        if !status_output.status.success() {
+            let stderr = String::from_utf8_lossy(&status_output.stderr);
+            return Err(format!("git status failed: {}", stderr.trim()));
+        }
+
+        let porcelain = String::from_utf8_lossy(&status_output.stdout);
+        let porcelain = porcelain.trim();
+
+        if porcelain.is_empty() {
+            return Ok(None);
+        }
+
+        // Each porcelain line is "XY filename" — skip the 3-char status prefix.
+        let files: Vec<String> = porcelain
+            .lines()
+            .filter_map(|line| {
+                if line.len() > 3 {
+                    Some(line[3..].to_string())
+                } else if line.len() == 3 {
+                    // Edge case: status prefix with empty filename (shouldn't happen)
+                    None
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if files.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(files))
+        }
+    }
+
     /// Check for uncommitted changes in a worktree.
     ///
     /// Returns a tri-state:
@@ -579,6 +630,85 @@ mod tests {
         assert!(
             matches!(result, Ok(None)),
             "nonexistent path should return Ok(None)"
+        );
+    }
+
+    #[test]
+    fn test_dirty_files_nonexistent_path() {
+        let result = WorktreeManager::dirty_files(Path::new("/nonexistent/path"));
+        assert!(
+            matches!(result, Ok(None)),
+            "nonexistent path should return Ok(None)"
+        );
+    }
+
+    #[test]
+    fn test_dirty_files_clean_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+
+        let result = WorktreeManager::dirty_files(dir.path());
+        assert!(
+            matches!(result, Ok(None)),
+            "clean repo should return Ok(None)"
+        );
+    }
+
+    #[test]
+    fn test_dirty_files_untracked_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let init = Command::new("git")
+            .args(["init", &dir.path().to_string_lossy()])
+            .output()
+            .unwrap();
+        assert!(init.status.success());
+        let _ = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "-c",
+                "user.email=test@test.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ])
+            .output()
+            .unwrap();
+
+        std::fs::write(dir.path().join("new_file.txt"), "hello").unwrap();
+
+        let result = WorktreeManager::dirty_files(dir.path());
+        assert!(
+            matches!(result, Ok(Some(_))),
+            "dirty repo should return files"
+        );
+        let files = result.unwrap().unwrap();
+        assert!(
+            files.iter().any(|f| f.contains("new_file.txt")),
+            "should list the dirty file, got: {:?}",
+            files
         );
     }
 

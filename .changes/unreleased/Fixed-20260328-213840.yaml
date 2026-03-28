@@ -1,0 +1,3 @@
+kind: Fixed
+body: Detect no-op merges and uncommitted worktree changes before merge execution
+time: 2026-03-28T21:38:40.936651+01:00

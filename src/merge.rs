@@ -139,6 +139,28 @@ impl MergeExecutor {
         })
     }
 
+    /// Count commits on `source` not yet in `target`.
+    /// Returns 0 when source is identical to or behind target.
+    fn commits_ahead(repo_root: &Path, target: &str, source: &str) -> Result<u64, String> {
+        let repo_str = repo_root.to_string_lossy();
+        let range = format!("{}..{}", target, source);
+        let output = Command::new("git")
+            .args(["-C", &repo_str, "rev-list", "--count", &range])
+            .output()
+            .map_err(|e| format!("failed to run git rev-list: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("git rev-list failed: {}", stderr.trim()));
+        }
+
+        let count_str = String::from_utf8_lossy(&output.stdout);
+        count_str
+            .trim()
+            .parse::<u64>()
+            .map_err(|e| format!("failed to parse rev-list count: {}", e))
+    }
+
     /// Execute a merge operation in a temporary worktree.
     ///
     /// The merge happens in `.compas-worktrees/merge-{op.id}` using a temporary
@@ -149,7 +171,62 @@ impl MergeExecutor {
     ///   uncommitted changes conflict with merged files.
     /// - If the target branch is NOT checked out, `git update-ref` moves only
     ///   the branch pointer (no working tree to sync).
-    pub fn execute(op: &MergeOperation, repo_root: &Path) -> Result<MergeResult, String> {
+    ///
+    /// `thread_worktree_path` is the agent's worktree (if any). When provided,
+    /// the executor checks for uncommitted changes before proceeding.
+    pub fn execute(
+        op: &MergeOperation,
+        repo_root: &Path,
+        thread_worktree_path: Option<&Path>,
+    ) -> Result<MergeResult, String> {
+        // Pre-merge validation: check for uncommitted changes in the agent worktree
+        if let Some(wt_path) = thread_worktree_path {
+            match WorktreeManager::dirty_files(wt_path) {
+                Ok(Some(files)) => {
+                    return Ok(MergeResult {
+                        success: false,
+                        summary: None,
+                        error: Some(
+                            "Source branch has uncommitted changes — agent did not commit its work"
+                                .to_string(),
+                        ),
+                        conflict_files: Some(files),
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        op_id = %op.id,
+                        worktree = %wt_path.display(),
+                        error = %e,
+                        "dirty_files check failed — blocking merge for safety"
+                    );
+                    return Ok(MergeResult {
+                        success: false,
+                        summary: None,
+                        error: Some(format!(
+                            "Failed to check worktree for uncommitted changes: {}",
+                            e
+                        )),
+                        conflict_files: None,
+                    });
+                }
+                Ok(None) => {} // clean — proceed
+            }
+        }
+
+        // Pre-merge validation: check divergence (no-op detection)
+        let ahead = Self::commits_ahead(repo_root, &op.target_branch, &op.source_branch)?;
+        if ahead == 0 {
+            return Ok(MergeResult {
+                success: false,
+                summary: None,
+                error: Some(
+                    "No commits to merge — source branch is identical to target".to_string(),
+                ),
+                conflict_files: None,
+            });
+        }
+
         let worktree_path = repo_root
             .join(".compas-worktrees")
             .join(format!("merge-{}", op.id));
@@ -779,7 +856,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("merge-ok", "compas/test-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "merge should succeed");
         assert!(result.summary.is_some());
@@ -805,7 +882,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("sync-ok", "compas/sync-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "merge should succeed");
 
@@ -860,7 +937,7 @@ mod tests {
         std::fs::write(repo.path().join("shared.txt"), "uncommitted local edit").unwrap();
 
         let op = make_test_merge_op("dirty-ok", "compas/dirty-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(
             result.success,
@@ -909,7 +986,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("rebase-sync", "compas/rebase-sync", &target, "rebase");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "rebase should succeed");
         let rebased_path = repo.path().join("rebased.txt");
@@ -933,7 +1010,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("squash-sync", "compas/squash-sync", &target, "squash");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "squash should succeed");
         let squashed_path = repo.path().join("squashed.txt");
@@ -968,7 +1045,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("nff-merge", "compas/nff-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "non-fast-forward merge should succeed");
         assert!(result.summary.is_some());
@@ -1015,7 +1092,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("merge-conflict", "compas/conflict-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(!result.success, "merge should fail due to conflict");
         assert!(result.error.is_some());
@@ -1060,7 +1137,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("rebase-ok", "compas/rebase-thread", &target, "rebase");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "rebase should succeed");
         assert!(result.summary.is_some());
@@ -1086,7 +1163,7 @@ mod tests {
         );
 
         let op = make_test_merge_op("squash-ok", "compas/squash-thread", &target, "squash");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
 
         assert!(result.success, "squash merge should succeed");
         assert!(result.summary.is_some());
@@ -1104,7 +1181,7 @@ mod tests {
         commit_file(repo.path(), "base.txt", "content", "add base");
 
         let op = make_test_merge_op("missing-branch", "compas/nonexistent", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path());
+        let result = MergeExecutor::execute(&op, repo.path(), None);
 
         // The merge will fail because the source branch doesn't exist
         // This could manifest as a merge error or a git worktree error
@@ -1153,7 +1230,7 @@ mod tests {
 
         // Test success path — worktree should be cleaned up
         let op = make_test_merge_op("cleanup-test", "compas/cleanup-thread", &target, "merge");
-        let result = MergeExecutor::execute(&op, repo.path()).unwrap();
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
         assert!(result.success);
         assert!(
             !worktree_path.exists(),
@@ -1191,7 +1268,7 @@ mod tests {
             &target,
             "merge",
         );
-        let result2 = MergeExecutor::execute(&op2, repo.path()).unwrap();
+        let result2 = MergeExecutor::execute(&op2, repo.path(), None).unwrap();
         assert!(!result2.success);
         assert!(
             !conflict_worktree.exists(),
@@ -1261,6 +1338,219 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cleaned = MergeExecutor::cleanup_orphaned_merge_worktrees(dir.path(), &[]).unwrap();
         assert_eq!(cleaned, 0);
+    }
+
+    // ── No-op and dirty-worktree detection ──────────────────────────────────
+
+    #[test]
+    fn test_merge_execute_noop_identical_branches() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        // Create source branch at same commit as target (no additional commits)
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let checkout = Command::new("git")
+            .args(["-C", &repo_str, "checkout", "-b", "compas/noop-thread"])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        let back = Command::new("git")
+            .args(["-C", &repo_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+
+        let op = make_test_merge_op("noop-merge", "compas/noop-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+
+        assert!(!result.success, "no-op merge should fail");
+        assert!(result.error.is_some());
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("No commits to merge"),
+            "error should mention no commits, got: {}",
+            result.error.unwrap()
+        );
+        assert!(result.conflict_files.is_none());
+    }
+
+    #[test]
+    fn test_merge_execute_dirty_worktree_blocks_merge() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        // Create source branch at same commit (no divergence)
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let checkout = Command::new("git")
+            .args(["-C", &repo_str, "checkout", "-b", "compas/dirty-thread-2"])
+            .output()
+            .unwrap();
+        assert!(checkout.status.success());
+        let back = Command::new("git")
+            .args(["-C", &repo_str, "checkout", "-"])
+            .output()
+            .unwrap();
+        assert!(back.status.success());
+
+        // Create a worktree to act as the agent's working directory
+        let wt_path = repo.path().join(".compas-worktrees").join("dirty-thread-2");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        let wt_add = Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "compas/dirty-thread-2",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            wt_add.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&wt_add.stderr)
+        );
+
+        // Leave uncommitted changes in the worktree
+        std::fs::write(wt_path.join("uncommitted.txt"), "oops").unwrap();
+
+        let op = make_test_merge_op("dirty-merge", "compas/dirty-thread-2", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path(), Some(&wt_path)).unwrap();
+
+        assert!(!result.success, "dirty worktree should block merge");
+        assert!(result.error.is_some());
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("uncommitted changes"),
+            "error should mention uncommitted changes, got: {}",
+            result.error.unwrap()
+        );
+        assert!(result.conflict_files.is_some());
+        let files = result.conflict_files.unwrap();
+        assert!(
+            files.iter().any(|f| f.contains("uncommitted.txt")),
+            "conflict_files should list the dirty file, got: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn test_merge_execute_dirty_worktree_blocks_even_when_ahead() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        // Create source branch with a real commit ahead of target
+        create_source_branch(
+            repo.path(),
+            "compas/partial-thread",
+            "committed.txt",
+            "committed content",
+        );
+
+        // Create a worktree for the source branch
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let wt_path = repo.path().join(".compas-worktrees").join("partial-thread");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        let wt_add = Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "compas/partial-thread",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            wt_add.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&wt_add.stderr)
+        );
+
+        // Leave uncommitted changes in the worktree even though branch is ahead
+        std::fs::write(wt_path.join("not-committed.txt"), "forgot to commit").unwrap();
+
+        let op = make_test_merge_op("partial-merge", "compas/partial-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path(), Some(&wt_path)).unwrap();
+
+        assert!(
+            !result.success,
+            "dirty worktree should block merge even when source is ahead"
+        );
+        assert!(result.error.is_some());
+        assert!(
+            result
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("uncommitted changes"),
+            "error should mention uncommitted changes, got: {}",
+            result.error.unwrap()
+        );
+        assert!(result.conflict_files.is_some());
+        let files = result.conflict_files.unwrap();
+        assert!(
+            files.iter().any(|f| f.contains("not-committed.txt")),
+            "conflict_files should list the dirty file, got: {:?}",
+            files
+        );
+    }
+
+    #[test]
+    fn test_merge_execute_clean_worktree_succeeds() {
+        // Verify that passing a clean worktree path doesn't block a normal merge
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+
+        create_source_branch(
+            repo.path(),
+            "compas/clean-wt-thread",
+            "feature.txt",
+            "feature content",
+        );
+
+        // Create a worktree for the source branch (clean)
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let wt_path = repo
+            .path()
+            .join(".compas-worktrees")
+            .join("clean-wt-thread");
+        std::fs::create_dir_all(wt_path.parent().unwrap()).unwrap();
+        let wt_add = Command::new("git")
+            .args([
+                "-C",
+                &repo_str,
+                "worktree",
+                "add",
+                &wt_path.to_string_lossy(),
+                "compas/clean-wt-thread",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            wt_add.status.success(),
+            "worktree add failed: {}",
+            String::from_utf8_lossy(&wt_add.stderr)
+        );
+
+        let op = make_test_merge_op("clean-wt-merge", "compas/clean-wt-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path(), Some(&wt_path)).unwrap();
+
+        assert!(
+            result.success,
+            "clean worktree with commits ahead should succeed"
+        );
+        assert!(result.summary.is_some());
     }
 
     // ── Preflight tests (using real store) ─────────────────────────────────
