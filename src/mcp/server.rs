@@ -111,7 +111,7 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_close",
-        description = "Close a thread with a terminal status (completed or failed). Completed worktree threads are automatically merged to the default target branch. Pass a `merge` object to override target_branch or strategy."
+        description = "Close a thread with a terminal status (completed or failed). For completed worktree threads, a merge must be completed first via orch_merge — close will refuse if no completed merge exists. Failed and non-worktree threads close without merge requirements."
     )]
     async fn orch_close(
         &self,

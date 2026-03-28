@@ -53,18 +53,6 @@ pub struct CloseParams {
     pub status: CloseStatus,
     /// Optional close note
     pub note: Option<String>,
-    /// Optional: override the auto-merge target branch or strategy.
-    /// Completed worktree threads are auto-merged using config defaults;
-    /// pass this to override target_branch or strategy.
-    pub merge: Option<CloseMergeParams>,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
-pub struct CloseMergeParams {
-    /// Target branch (default: "main")
-    pub target_branch: Option<String>,
-    /// Merge strategy: "merge", "rebase", or "squash" (default from config)
-    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema, Clone, Copy)]

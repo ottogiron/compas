@@ -242,7 +242,7 @@ pub struct OrchestrationConfig {
     /// Default merge strategy: "merge", "rebase", or "squash" (default "merge").
     #[serde(default = "default_merge_strategy")]
     pub default_merge_strategy: String,
-    /// Default target branch for auto-merge on close (default: "main").
+    /// Default target branch for merge operations (default: "main").
     #[serde(default = "default_merge_target")]
     pub default_merge_target: String,
     /// Per-backend circuit breaker configuration.

@@ -3007,6 +3007,22 @@ impl Store {
         Ok(row.0 > 0)
     }
 
+    /// Check if there's at least one completed merge operation for the given thread.
+    ///
+    /// Used by the merge-before-close gate: completed worktree threads must have
+    /// a completed merge before they can be closed.
+    pub async fn has_completed_merge_for_thread(&self, thread_id: &str) -> Result<bool, String> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM merge_operations
+             WHERE thread_id = ? AND status = 'completed'",
+        )
+        .bind(thread_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| format!("has_completed_merge_for_thread failed: {}", e))?;
+        Ok(row.0 > 0)
+    }
+
     /// Count merge operations grouped by status, with optional filters.
     pub async fn count_merge_ops_by_status(
         &self,
@@ -5033,6 +5049,46 @@ mod tests {
             .has_pending_merge_for_thread("t-1", "main")
             .await
             .unwrap();
+        assert!(!has);
+    }
+
+    #[tokio::test]
+    async fn test_merge_op_has_completed() {
+        let store = test_store().await;
+
+        // No merge ops at all
+        let has = store.has_completed_merge_for_thread("t-1").await.unwrap();
+        assert!(!has);
+
+        // Insert a queued op — not completed
+        let op = make_merge_op("m-1", "t-1", "main");
+        store.insert_merge_op(&op).await.unwrap();
+        let has = store.has_completed_merge_for_thread("t-1").await.unwrap();
+        assert!(!has);
+
+        // Mark it as failed — still not completed
+        store
+            .update_merge_op_status(
+                "m-1",
+                MergeOperationStatus::Failed,
+                Some("conflict"),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        let has = store.has_completed_merge_for_thread("t-1").await.unwrap();
+        assert!(!has);
+
+        // Insert a completed op
+        let mut op2 = make_merge_op("m-2", "t-1", "main");
+        op2.status = "completed".to_string();
+        store.insert_merge_op(&op2).await.unwrap();
+        let has = store.has_completed_merge_for_thread("t-1").await.unwrap();
+        assert!(has);
+
+        // Different thread — no completed
+        let has = store.has_completed_merge_for_thread("t-2").await.unwrap();
         assert!(!has);
     }
 
