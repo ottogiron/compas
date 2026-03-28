@@ -441,6 +441,30 @@ Created: 2026-03-14
   - `make verify`
 - Status: Todo
 
+## Ticket ORCH-EVO-17 — `skip_handoff` Dispatch Flag
+
+- Goal: Allow the operator to dispatch a message to an agent with auto-handoff configured without triggering the handoff chain on the agent's response. Useful for follow-up questions, status checks, or lightweight exchanges where re-running the full review chain is unnecessary overhead.
+- In scope:
+  - Add `skip_handoff: Option<bool>` parameter to `orch_dispatch` MCP tool (default false)
+  - Store `skip_handoff` flag on the dispatch message row (new column in `messages` table, or on the resulting execution row)
+  - In `maybe_auto_handoff()` (`src/worker/loop_runner.rs`): check the originating dispatch message's `skip_handoff` flag. If true, skip handoff routing and deliver the response directly to the operator
+  - Add `--skip-handoff` flag to `compas dispatch` CLI
+  - `orch_transcript` should show when a response skipped handoff (e.g., a field on the message or a log note)
+- Out of scope:
+  - Per-target skip (skip specific handoff targets but not others)
+  - Automatic detection of "lightweight" dispatches
+- Dependencies: None
+- Acceptance criteria:
+  - `orch_dispatch(skip_handoff=true)` to an agent with `handoff.on_response` configured does NOT trigger the handoff chain on the agent's response
+  - Without `skip_handoff` (default), behavior is unchanged
+  - The response is delivered to the operator as a normal `response` intent message
+  - `make verify` passes
+- Verification:
+  - Integration test: dispatch with `skip_handoff=true` to agent with handoff config, verify no handoff thread created
+  - Integration test: dispatch without flag, verify handoff still triggers
+  - `make verify`
+- Status: Todo
+
 ## Execution Order
 
 1. ~~ORCH-EVO-2 (Event Broadcast — done)~~
@@ -452,11 +476,12 @@ Created: 2026-03-14
 7. ~~ORCH-EVO-12 (Retry with Error Classification — done)~~
 8. ~~ORCH-EVO-13 (Prompt Version Hashing — done)~~
 9. ~~ORCH-EVO-15 (Health Check Performance — done)~~
-10. ORCH-EVO-16 (Session Resume After Crash — high value, enables crash recovery with full context)
-11. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
-12. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
-13. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
-14. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
+10. ORCH-EVO-17 (skip_handoff dispatch flag — small, high ergonomic value, unblocks lightweight follow-ups)
+11. ORCH-EVO-16 (Session Resume After Crash — high value, enables crash recovery with full context)
+12. ORCH-EVO-10 (Webhook Notifications — simpler than HTTP API, high value for Slack/Discord alerts)
+13. ORCH-EVO-6 (Quick Dispatch — independent, high ergonomic value)
+14. ORCH-EVO-11 (Periodic Summaries — builds on telemetry + dashboard)
+15. ORCH-EVO-14 (Thread Dependency Primitive — sequenced multi-step orchestration)
 15. ~~ORCH-EVO-8 (HTTP API — superseded by MFE-2 in multi-frontend.md)~~
 16. ~~ORCH-EVO-9 (Web Dashboard — superseded, deferred in multi-frontend.md)~~
 

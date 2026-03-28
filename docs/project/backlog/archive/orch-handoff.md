@@ -162,7 +162,7 @@ Parallelization: HANDOFF-1 and HANDOFF-3 can be dispatched in parallel (differen
 - `HandoffTarget` uses `serde(untagged)` for backward-compatible YAML (string or list)
 - `handoff_prompt` composition: custom prompt → blank line → auto-generated context
 - `--await-chain` checks: no active executions + non-trigger reply after last handoff
-- Phase 2 deferred: `on_error` routing, `--batch` wait, `orch_resume` tool
+- Phase 2 deferred: `on_error` routing, `--batch` wait, `orch_resume` tool, `skip_handoff` dispatch flag
 
 ## Execution Metrics
 
