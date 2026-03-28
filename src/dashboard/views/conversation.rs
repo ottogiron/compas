@@ -173,7 +173,7 @@ fn message_color(from: &str, intent: &str) -> Color {
 }
 
 /// Parse markdown body text and return styled ratatui lines, each prefixed with `│ `.
-fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
+pub(crate) fn markdown_to_lines(body: &str, border_color: Color) -> Vec<Line<'static>> {
     let prefix = Span::styled("│ ", Style::default().fg(border_color));
 
     let parser = pulldown_cmark::Parser::new(body);

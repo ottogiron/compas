@@ -5,7 +5,7 @@
 //! 2. Error card — only for failed/crashed/timed_out, `FAILURE` border
 //! 3. Context line — `parsed_intent`
 //! 4. Timing line — phase breakdown from timestamps
-//! 5. Tab bar — Output | Timeline (N) | Input
+//! 5. Tab bar — Input | Timeline (N) | Output
 //! 6. Content pane — active tab, scrollable, `Wrap { trim: false }`
 //! 7. Footer — keybinding hints, follow indicator, scroll position
 //!
@@ -24,6 +24,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::dashboard::theme::{self, *};
+use crate::dashboard::views::conversation::markdown_to_lines;
 use crate::dashboard::views::payload::{format_log_line, format_payload_lines, JsonViewMode};
 use crate::dashboard::views::{
     format_duration_ms, format_duration_secs, format_timestamp_ms, humanize_exec_status, truncate,
@@ -40,18 +41,18 @@ const TIMELINE_SUMMARY_MAX: usize = 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
-    Output = 0,
+    Input = 0,
     Timeline = 1,
-    Input = 2,
+    Output = 2,
 }
 
 impl Tab {
     fn from_index(i: usize) -> Self {
         match i {
-            0 => Tab::Output,
+            0 => Tab::Input,
             1 => Tab::Timeline,
-            2 => Tab::Input,
-            _ => Tab::Output,
+            2 => Tab::Output,
+            _ => Tab::Input,
         }
     }
 
@@ -120,12 +121,12 @@ impl ExecutionDetailState {
         };
 
         let tab_states = [
+            TabState::default(),
+            TabState::default(),
             TabState {
                 scroll_offset: output_scroll,
                 follow: output_follow,
             },
-            TabState::default(),
-            TabState::default(),
         ];
 
         let mut state = Self {
@@ -605,9 +606,9 @@ fn render_timing_line(f: &mut Frame, execution: &ExecutionRow, area: Rect) {
 
 fn render_tab_bar(f: &mut Frame, active: Tab, events: &[ExecutionEventRow], area: Rect) {
     let tab_labels = [
-        "Output".to_string(),
-        format!("Timeline ({})", events.len()),
         "Input".to_string(),
+        format!("Timeline ({})", events.len()),
+        "Output".to_string(),
     ];
 
     let mut spans: Vec<Span<'static>> = vec![Span::styled("╶ ", Style::new().fg(BORDER_DIM))];
@@ -640,9 +641,9 @@ fn render_tab_bar(f: &mut Frame, active: Tab, events: &[ExecutionEventRow], area
 
 fn build_content_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     match state.active_tab {
-        Tab::Output => build_output_lines(state),
-        Tab::Timeline => build_timeline_lines(&state.timeline_events, state.timeline_truncated),
         Tab::Input => build_input_lines(state),
+        Tab::Timeline => build_timeline_lines(&state.timeline_events, state.timeline_truncated),
+        Tab::Output => build_output_lines(state),
     }
 }
 
@@ -710,20 +711,29 @@ fn build_input_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(""));
 
-    let content_lines = state
-        .input_payload
-        .as_deref()
-        .map(|s| format_payload_lines(s, state.json_view_mode, 200))
-        .unwrap_or_else(|| {
-            if state.input_linked {
-                vec!["(no input)".to_string()]
+    match state.input_payload.as_deref() {
+        Some(payload) => {
+            let trimmed = payload.trim_start();
+            if trimmed.starts_with('{') {
+                // JSON payload — use structured formatting.
+                for line in format_payload_lines(payload, state.json_view_mode, 200) {
+                    lines.push(Line::from(line).fg(TEXT_MUTED));
+                }
             } else {
-                vec!["(input unavailable: execution not linked to dispatch message)".to_string()]
+                // Markdown payload — render with pulldown_cmark.
+                lines.extend(markdown_to_lines(payload, TEXT_DIM));
             }
-        });
-
-    for line in content_lines {
-        lines.push(Line::from(line).fg(TEXT_MUTED));
+        }
+        None => {
+            if state.input_linked {
+                lines.push(Line::from("(no input)").fg(TEXT_MUTED));
+            } else {
+                lines.push(
+                    Line::from("(input unavailable: execution not linked to dispatch message)")
+                        .fg(TEXT_MUTED),
+                );
+            }
+        }
     }
 
     lines
@@ -853,25 +863,25 @@ mod tests {
     #[test]
     fn test_tab_navigation_next() {
         let mut s = make_state("completed", vec!["a"]);
-        s.active_tab = Tab::Output;
+        s.active_tab = Tab::Input;
         s.next_tab();
         assert_eq!(s.active_tab, Tab::Timeline);
         s.next_tab();
-        assert_eq!(s.active_tab, Tab::Input);
-        s.next_tab();
         assert_eq!(s.active_tab, Tab::Output);
+        s.next_tab();
+        assert_eq!(s.active_tab, Tab::Input);
     }
 
     #[test]
     fn test_tab_navigation_prev() {
         let mut s = make_state("completed", vec!["a"]);
-        s.active_tab = Tab::Output;
+        s.active_tab = Tab::Input;
         s.prev_tab();
-        assert_eq!(s.active_tab, Tab::Input);
+        assert_eq!(s.active_tab, Tab::Output);
         s.prev_tab();
         assert_eq!(s.active_tab, Tab::Timeline);
         s.prev_tab();
-        assert_eq!(s.active_tab, Tab::Output);
+        assert_eq!(s.active_tab, Tab::Input);
     }
 
     #[test]
