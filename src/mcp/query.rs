@@ -111,6 +111,8 @@ impl OrchestratorMcpServer {
             intent: String,
             body: String,
             created_at: i64,
+            #[serde(skip_serializing_if = "std::ops::Not::not")]
+            skip_handoff: bool,
         }
 
         #[derive(Serialize)]
@@ -153,6 +155,7 @@ impl OrchestratorMcpServer {
                     intent: m.intent,
                     body: m.body,
                     created_at: m.created_at,
+                    skip_handoff: m.skip_handoff,
                 })
                 .collect(),
             executions: executions

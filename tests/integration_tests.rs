@@ -990,6 +990,7 @@ mod dispatch_tests {
                 thread_id: Some("t-dispatch-1".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1047,6 +1048,7 @@ mod dispatch_tests {
                 thread_id: Some("t-summary".to_string()),
                 summary: Some("Add JWT authentication".to_string()),
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1080,6 +1082,7 @@ mod dispatch_tests {
                 thread_id: None,
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1114,6 +1117,7 @@ mod dispatch_tests {
                 thread_id: None,
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1134,6 +1138,7 @@ mod dispatch_tests {
                 thread_id: Some("t-info".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1158,6 +1163,7 @@ mod dispatch_tests {
                 thread_id: Some("t-batch".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1183,6 +1189,7 @@ mod dispatch_tests {
                 thread_id: Some("t-handoff".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1208,6 +1215,7 @@ mod dispatch_tests {
                 thread_id: Some("t-continue".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1223,6 +1231,7 @@ mod dispatch_tests {
                 thread_id: Some("t-continue".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1257,6 +1266,7 @@ mod dispatch_tests {
                 thread_id: Some("t-sched-1".to_string()),
                 summary: None,
                 scheduled_for: Some(future_ts.clone()),
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1292,6 +1302,7 @@ mod dispatch_tests {
                 thread_id: Some("t-sched-past".to_string()),
                 summary: None,
                 scheduled_for: Some(past_ts),
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1313,6 +1324,7 @@ mod dispatch_tests {
                 thread_id: Some("t-sched-bad".to_string()),
                 summary: None,
                 scheduled_for: Some("not-a-timestamp".to_string()),
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1334,6 +1346,7 @@ mod dispatch_tests {
                 thread_id: Some("t-sched-none".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1654,6 +1667,7 @@ mod lifecycle_tests {
                 thread_id: Some(thread_id.to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1847,6 +1861,7 @@ mod lifecycle_tests {
                 thread_id: Some("t-full-lifecycle".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -1927,6 +1942,7 @@ mod lifecycle_tests {
                 thread_id: Some("t-close-failed-cycle".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -2176,6 +2192,7 @@ mod query_tests {
                 thread_id: Some("t-q-1".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -2190,6 +2207,7 @@ mod query_tests {
                 thread_id: Some("t-q-2".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -2499,6 +2517,7 @@ mod poll_tests {
                 thread_id: Some("t-poll-auto".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -2532,6 +2551,7 @@ mod poll_tests {
                 thread_id: Some("t-poll-resp".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -3128,6 +3148,7 @@ mod diagnose_tests {
                 thread_id: Some("t-diag-q".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -3178,6 +3199,7 @@ mod diagnose_tests {
                 thread_id: Some("t-diag-hb".to_string()),
                 summary: None,
                 scheduled_for: None,
+                skip_handoff: None,
             })
             .await
             .unwrap();
@@ -4177,7 +4199,11 @@ mod prompt_hash_tests {
     fn expected_hash(prompt: &str) -> String {
         let mut h = Sha256::new();
         h.update(prompt.as_bytes());
-        format!("{:x}", h.finalize())
+        let result = h.finalize();
+        result
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
     }
 
     /// Verify that `scan_and_enqueue_triggers` stores the SHA-256 hash of the
@@ -4955,6 +4981,360 @@ agents:
         // Agent without handoff_prompt should have None.
         let reviewer = &config.agents[1];
         assert!(reviewer.handoff.is_none());
+    }
+
+    // ── ORCH-EVO-17: skip_handoff tests ─────────────────────────────────
+
+    #[tokio::test]
+    async fn test_skip_handoff_suppresses_auto_handoff() {
+        // Agent A has on_response: agent-b. Dispatch with skip_handoff=true.
+        // After agent-a completes, there should be NO handoff to agent-b.
+        let store = test_store().await;
+        let config = chain_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "skip-handoff-test";
+        let msg_id = store
+            .insert_dispatch_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature X",
+                None,
+                None,
+                true, // skip_handoff
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for at least one MessageReceived (the reply).
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                // Give a moment for any additional messages to be emitted.
+                break;
+            }
+        }
+        // Drain any remaining events.
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        while rx.try_recv().is_ok() {}
+
+        assert!(
+            message_count >= 1,
+            "expected at least 1 MessageReceived (reply)"
+        );
+
+        // Verify: reply exists but NO handoff to agent-b.
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let reply = messages
+            .iter()
+            .find(|m| m.intent == "response" && m.from_alias == "agent-a");
+        assert!(reply.is_some(), "expected reply from agent-a");
+
+        let handoff = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "agent-b");
+        assert!(
+            handoff.is_none(),
+            "expected NO handoff to agent-b when skip_handoff=true; messages: {:?}",
+            messages
+                .iter()
+                .map(|m| format!("{}→{} ({})", m.from_alias, m.to_alias, m.intent))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_skip_handoff_false_preserves_handoff() {
+        // Same setup as above but skip_handoff=false → handoff should still fire.
+        let store = test_store().await;
+        let config = chain_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "skip-handoff-false-test";
+        let msg_id = store
+            .insert_dispatch_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature Y",
+                None,
+                None,
+                false, // skip_handoff=false, handoff should proceed
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for TWO MessageReceived events: reply + handoff.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut message_count = 0;
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                message_count += 1;
+                if message_count >= 2 {
+                    while rx.try_recv().is_ok() {}
+                    break;
+                }
+            }
+        }
+        assert!(
+            message_count >= 2,
+            "expected 2 MessageReceived events (reply + handoff), got {}",
+            message_count
+        );
+
+        // Verify: handoff to agent-b exists.
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let handoff = messages
+            .iter()
+            .find(|m| m.intent == "handoff" && m.to_alias == "agent-b");
+        assert!(
+            handoff.is_some(),
+            "expected handoff to agent-b when skip_handoff=false"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_skip_handoff_store_roundtrip() {
+        let store = test_store().await;
+        let thread_id = "skip-handoff-roundtrip";
+
+        // Insert with skip_handoff=true.
+        let msg_id = store
+            .insert_dispatch_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "task body",
+                None,
+                None,
+                true,
+            )
+            .await
+            .unwrap();
+
+        let msg = store.get_message(msg_id).await.unwrap().unwrap();
+        assert!(
+            msg.skip_handoff,
+            "skip_handoff should be true after roundtrip"
+        );
+
+        // Insert with skip_handoff=false (via regular insert_message).
+        let msg_id2 = store
+            .insert_message(
+                thread_id, "operator", "agent-a", "dispatch", "task2", None, None,
+            )
+            .await
+            .unwrap();
+
+        let msg2 = store.get_message(msg_id2).await.unwrap().unwrap();
+        assert!(
+            !msg2.skip_handoff,
+            "skip_handoff should default to false for insert_message"
+        );
+    }
+
+    /// Config with agent-a fanning out to reviewer + reviewer-2.
+    fn fanout_skip_config() -> OrchestratorConfig {
+        OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/compas-test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![
+                AgentConfig {
+                    alias: "agent-a".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: Some(HandoffConfig {
+                        on_response: Some(HandoffTarget::FanOut(vec![
+                            "reviewer".to_string(),
+                            "reviewer-2".to_string(),
+                        ])),
+                        handoff_prompt: None,
+                        max_chain_depth: Some(3),
+                    }),
+                },
+                AgentConfig {
+                    alias: "reviewer".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: None,
+                },
+                AgentConfig {
+                    alias: "reviewer-2".to_string(),
+                    backend: "stub".to_string(),
+                    role: AgentRole::Worker,
+                    model: None,
+                    prompt: None,
+                    prompt_file: None,
+                    timeout_secs: None,
+                    backend_args: None,
+                    env: None,
+                    workdir: None,
+                    workspace: None,
+                    max_retries: 0,
+                    retry_backoff_secs: 30,
+                    handoff: None,
+                },
+            ],
+            worktree_dir: None,
+            orchestration: OrchestrationConfig::default(),
+            database: DatabaseConfig::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_skip_handoff_suppresses_fanout() {
+        // Agent with fan-out handoff config + skip_handoff=true dispatch.
+        // Verify no fan-out threads created.
+        let store = test_store().await;
+        let config = fanout_skip_config();
+        let config_handle = ConfigHandle::new(config.clone());
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+
+        let event_bus = EventBus::new();
+        let mut rx = event_bus.subscribe();
+
+        let worktree_manager = compas::worktree::WorktreeManager::new();
+        let runner = WorkerRunner::new(
+            config_handle,
+            store.clone(),
+            registry,
+            event_bus,
+            worktree_manager,
+        );
+
+        let thread_id = "skip-handoff-fanout-test";
+        let msg_id = store
+            .insert_dispatch_message(
+                thread_id,
+                "operator",
+                "agent-a",
+                "dispatch",
+                "implement feature Z",
+                None,
+                None,
+                true, // skip_handoff
+            )
+            .await
+            .unwrap();
+        store
+            .insert_execution_with_dispatch(thread_id, "agent-a", Some(msg_id), None)
+            .await
+            .unwrap();
+
+        let semaphore = Arc::new(Semaphore::new(4));
+        runner.poll_once(&semaphore).await;
+
+        // Wait for at least one MessageReceived (the reply).
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        while let Ok(Ok(event)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            if matches!(event, OrchestratorEvent::MessageReceived { .. }) {
+                break;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        while rx.try_recv().is_ok() {}
+
+        // Verify: reply exists but NO handoff messages.
+        let messages = store.get_thread_messages(thread_id).await.unwrap();
+        let reply = messages
+            .iter()
+            .find(|m| m.from_alias == "agent-a" && m.intent == "response");
+        assert!(reply.is_some(), "expected reply from fan-out agent");
+
+        let handoff_count = messages.iter().filter(|m| m.intent == "handoff").count();
+        assert_eq!(
+            handoff_count, 0,
+            "expected no handoff messages when skip_handoff=true on fan-out agent"
+        );
+
+        // Verify no fan-out child threads were created.
+        let all_threads = store.list_threads(None, None, 100).await.unwrap();
+        let child_threads: Vec<_> = all_threads
+            .iter()
+            .filter(|t| t.source_thread_id.as_deref() == Some(thread_id))
+            .collect();
+        assert!(
+            child_threads.is_empty(),
+            "expected no fan-out child threads when skip_handoff=true"
+        );
     }
 }
 

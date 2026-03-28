@@ -1,0 +1,3 @@
+kind: Added
+body: orch_dispatch skip_handoff flag suppresses per-dispatch auto-handoff chains
+time: 2026-03-28T21:22:00.660826+01:00

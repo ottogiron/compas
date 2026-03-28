@@ -214,7 +214,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 
 | Tool | What it does |
 | --- | --- |
-| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary` and `scheduled_for` (ISO 8601) for delayed execution |
+| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary`, `scheduled_for` (ISO 8601) for delayed execution, and `skip_handoff` to suppress auto-handoff on the response |
 | `orch_wait` | Block until a matching message arrives or timeout; sends progress notifications every 10s |
 | `orch_close` | Close a thread as `completed` or `failed`. Optionally pass a `merge` object to atomically queue a merge |
 | `orch_abandon` | Cancel a thread and its active executions |

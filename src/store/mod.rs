@@ -178,6 +178,7 @@ pub struct MessageRow {
     pub body: String,
     pub batch_id: Option<String>,
     pub created_at: i64,
+    pub skip_handoff: bool,
 }
 
 /// A stored execution row.
@@ -717,6 +718,17 @@ impl Store {
         .execute(&self.pool)
         .await?;
 
+        // EVO-17: skip_handoff flag on messages
+        let msg_cols: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(messages)")
+                .fetch_all(&self.pool)
+                .await?;
+        if !msg_cols.iter().any(|c| c.1 == "skip_handoff") {
+            sqlx::query("ALTER TABLE messages ADD COLUMN skip_handoff INTEGER NOT NULL DEFAULT 0")
+                .execute(&self.pool)
+                .await?;
+        }
+
         // GAP-1: circuit_breaker_state table for cross-process visibility
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS circuit_breaker_state (
@@ -1024,6 +1036,41 @@ impl Store {
         Ok(row.0)
     }
 
+    /// Insert a dispatch message with optional `skip_handoff` flag.
+    ///
+    /// This is used by `orch_dispatch` to persist the per-dispatch handoff
+    /// suppression flag. All other callers use `insert_message` (which defaults
+    /// `skip_handoff` to false).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn insert_dispatch_message(
+        &self,
+        thread_id: &str,
+        from_alias: &str,
+        to_alias: &str,
+        intent: &str,
+        body: &str,
+        batch_id: Option<&str>,
+        summary: Option<&str>,
+        skip_handoff: bool,
+    ) -> Result<i64, sqlx::Error> {
+        self.ensure_thread(thread_id, batch_id, summary).await?;
+        let row: (i64,) = sqlx::query_as(
+            "INSERT INTO messages (thread_id, from_alias, to_alias, intent, body, batch_id, skip_handoff)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             RETURNING id",
+        )
+        .bind(thread_id)
+        .bind(from_alias)
+        .bind(to_alias)
+        .bind(intent)
+        .bind(body)
+        .bind(batch_id)
+        .bind(skip_handoff as i64)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     pub async fn get_thread_messages(
         &self,
         thread_id: &str,
@@ -1037,8 +1084,9 @@ impl Store {
             String,
             Option<String>,
             i64,
+            i64,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at, skip_handoff
                  FROM messages WHERE thread_id = ? ORDER BY id ASC",
         )
         .bind(thread_id)
@@ -1062,8 +1110,9 @@ impl Store {
             String,
             Option<String>,
             i64,
+            i64,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at, skip_handoff
                  FROM messages WHERE thread_id = ? AND id > ? ORDER BY id ASC",
         )
         .bind(thread_id)
@@ -1355,8 +1404,9 @@ impl Store {
             String,
             Option<String>,
             i64,
+            i64,
         )> = sqlx::query_as(
-            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at
+            "SELECT id, thread_id, from_alias, to_alias, intent, body, batch_id, created_at, skip_handoff
                  FROM messages WHERE id = ?",
         )
         .bind(id)
@@ -3101,6 +3151,7 @@ fn row_to_message(
         String,
         Option<String>,
         i64,
+        i64,
     ),
 ) -> MessageRow {
     MessageRow {
@@ -3112,6 +3163,7 @@ fn row_to_message(
         body: r.5,
         batch_id: r.6,
         created_at: r.7,
+        skip_handoff: r.8 != 0,
     }
 }
 
