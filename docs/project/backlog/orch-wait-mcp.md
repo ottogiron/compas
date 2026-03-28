@@ -64,7 +64,7 @@ Created: 2026-03-22
 - Verification:
   - Integration test: close worktree thread → get merge_op_id → `orch_wait_merge` → verify completed
   - `make verify`
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 
@@ -92,7 +92,7 @@ Created: 2026-03-22
   - Integration test: create worktree thread → write file → `orch_commit` → verify commit exists on branch
   - Manual: Claude Desktop agent edits files, calls `orch_commit`, closes thread, changes merge
   - `make verify`
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 - Notes: Closes known-issues.md "MCP-only agents cannot commit worktree changes"
@@ -120,7 +120,7 @@ Created: 2026-03-22
 - Verification:
   - Existing wait/wait-merge integration tests pass under new syntax
   - `make verify`
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 
@@ -141,17 +141,40 @@ Created: 2026-03-22
 - Verification:
   - `grep -r 'wait-merge' docs/` returns no results
   - `make verify`
+- Status: Done
+- Complexity: S
+- Risk: Low
+
+## Ticket MCP-4 — Fix `orch_wait_merge` `timeout_secs` deserialization
+
+- Goal: `orch_wait_merge(op_id, timeout_secs=120)` fails with `invalid type: string "120", expected u64` when `timeout_secs` is passed as a string by the MCP transport. The parameter type is `Option<u64>` but MCP JSON-RPC transports may serialize numbers as strings.
+- In scope:
+  - Add `#[serde(deserialize_with = "...")]` or use a flexible deserializer for `timeout_secs` in `WaitMergeParams` (`src/mcp/params.rs`) that accepts both string and integer representations
+  - Audit other `Option<u64>` timeout params (`WaitParams.timeout_secs`) for the same issue — apply the same fix if affected
+- Out of scope:
+  - Changing default timeout values
+  - Other parameter types
+- Dependencies: None
+- Acceptance criteria:
+  - `orch_wait_merge(op_id="<id>", timeout_secs=120)` works when transport sends `"120"` (string) or `120` (integer)
+  - `orch_wait(thread_id="<id>", timeout_secs=60)` also handles string/integer
+  - `make verify` passes
+- Verification:
+  - Integration test: call with numeric timeout, verify no deserialization error
+  - Manual: call `orch_wait_merge` with explicit `timeout_secs` via MCP
+  - `make verify`
 - Status: Todo
 - Complexity: S
 - Risk: Low
+- Notes: Found during smoke testing on 2026-03-28. Works fine when `timeout_secs` is omitted (uses default 120).
 
 ## Execution Order
 
 1. ~~WAIT-MCP-1~~ (done)
-2. MCP-2 (orch_wait_merge) — parallel with CLI-WAIT-1
-3. CLI-WAIT-1 (consolidate CLI wait subcommands) — parallel with MCP-2
-4. MCP-3 (orch_commit)
-5. CLI-WAIT-2 (docs update) — after CLI-WAIT-1
+2. ~~MCP-2~~ (done) — parallel with CLI-WAIT-1
+3. ~~CLI-WAIT-1~~ (done) — parallel with MCP-2
+4. ~~MCP-3~~ (done)
+5. ~~CLI-WAIT-2~~ (done) — after CLI-WAIT-1
 
 ## Tracking Notes
 
@@ -159,3 +182,40 @@ Created: 2026-03-22
 - Implementation commits should reference ticket IDs.
 - Record scope changes/deferrals here.
 - Implementation plan: local only (not committed)
+
+## Execution Metrics
+
+- Ticket: MCP-3
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-28 22:06 UTC
+- End: 2026-03-28 22:23 UTC
+- Duration: 00:16:35
+- Notes: (pending)
+
+- Ticket: CLI-WAIT-2
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-28 21:49 UTC
+- End: 2026-03-28 22:04 UTC
+- Duration: 00:15:14
+- Notes: (pending)
+- Ticket: CLI-WAIT-1
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-28 21:35 UTC
+- End: 2026-03-28 22:04 UTC
+- Duration: 00:29:11
+- Notes: (pending)
+
+- Ticket: MCP-2
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-28 21:35 UTC
+- End: 2026-03-28 22:04 UTC
+- Duration: 00:29:11
+- Notes: (pending)

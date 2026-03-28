@@ -2,7 +2,7 @@
 //!
 //! Polls the `merge_operations` table at 200ms intervals until the operation
 //! reaches a terminal status (`completed`, `failed`, `cancelled`) or timeout.
-//! Used by the `compas wait-merge` CLI subcommand.
+//! Used by the `compas wait merge` CLI subcommand.
 
 use std::time::Duration;
 

@@ -38,7 +38,7 @@ When reviewing work from a worktree agent, the changes are on the worktree branc
 
 **Worktree cleanup:** Worktrees are automatically cleaned up (deleted) by the worker when threads reach terminal state (`Completed` or `Abandoned`). `Failed` threads retain their worktrees for inspection. The merge queue blocks cleanup while the merge is pending.
 
-**Merge-before-close gate:** Completed worktree threads require an explicit `orch_merge` + `wait merge` before `orch_close(status=completed)` is allowed. Close will refuse with an actionable error if no completed merge exists for the thread.
+**Merge-before-close gate:** Completed worktree threads require an explicit `orch_merge` + `orch_wait_merge` before `orch_close(status=completed)` is allowed. Close will refuse with an actionable error if no completed merge exists for the thread.
 
 ## Automatic Retry
 
@@ -83,7 +83,7 @@ Save `thread_id` and dispatch message `reference` (e.g. `db:42`).
 
 ### Step 3 — Wait for worker response
 
-Use the CLI wait (not the MCP tool — it was removed due to transport timeout issues):
+Use the CLI wait (this example stays portable; MCP-connected operators can use `orch_wait` instead):
 
 ```bash
 compas wait message \
@@ -178,8 +178,8 @@ Based on reviewer response:
 
   If the agent left uncommitted changes in the worktree, commit them first:
 
-  ```bash
-  git -C <worktree-path> add -A && git -C <worktree-path> commit -m "<description>"
+  ```text
+  orch_commit(thread_id="<worker-thread-id>", message="<description>")
   ```
 
   Close the reviewer thread (non-worktree, closes immediately):
@@ -196,8 +196,8 @@ Based on reviewer response:
 
   Wait for merge completion:
 
-  ```bash
-  compas wait merge --op-id <merge_op_id> --timeout 120
+  ```text
+  orch_wait_merge(op_id="<merge_op_id>", timeout_secs=120)
   ```
 
   To override the target branch or strategy:

@@ -19,7 +19,7 @@ Do not use for trivial fixes (typo, single-line config) where dispatch overhead 
 ## Inputs
 
 - Active ticket or batch context (operator must have called `ticket start` before dispatching)
-- Target worker alias (routing: `compas-implementer` for compas development work)
+- Target worker alias (routing: `compas-dev` / `compas-dev-2` for compas development work)
 - Reviewer alias: `compas-reviewer` (configured in the production orch config). Verify with `orch_list_agents()`.
 - Task description with acceptance criteria
 
@@ -159,8 +159,8 @@ Based on reviewer response:
 
   If the agent left uncommitted changes in the worktree, commit them first:
 
-  ```bash
-  git -C <worktree-path> add -A && git -C <worktree-path> commit -m "<description>"
+  ```text
+  orch_commit(thread_id="<worker-thread-id>", message="<description>")
   ```
 
   Close the reviewer thread (non-worktree, closes immediately):
@@ -177,8 +177,8 @@ Based on reviewer response:
 
   Wait for merge completion:
 
-  ```bash
-  compas wait merge --op-id <merge_op_id> --timeout 120
+  ```text
+  orch_wait_merge(op_id="<merge_op_id>", timeout_secs=120)
   ```
 
   To override the target branch or strategy:
@@ -213,7 +213,7 @@ Based on reviewer response:
   orch_close(from="operator", thread_id="<reviewer-thread-id>", status="completed", note="Changes requested from worker based on findings")
   ```
 
-  Then loop back to Step 3. Use the `reference` from the `changes-requested` dispatch as the new `--since` value.
+  Then loop back to Step 3. Use the `reference` from the `changes-requested` dispatch as the new `since_reference` parameter value.
 
 - **Blocking findings → operator fixes directly:**
 

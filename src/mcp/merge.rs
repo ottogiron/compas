@@ -238,7 +238,7 @@ impl OrchestratorMcpServer {
         };
 
         let next_step = format!(
-            "orch_wait_merge(op_id=\"{}\") or CLI: compas wait-merge --op-id {} --timeout 120",
+            "orch_wait_merge(op_id=\"{}\") or CLI: compas wait merge --op-id {} --timeout 120",
             op_id, op_id
         );
 
