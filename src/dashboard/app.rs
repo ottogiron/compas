@@ -13,7 +13,10 @@
 //! When `viewing_log` is `Some`, the execution detail view occupies the full
 //! terminal area (tab bar and status bar are hidden for maximum vertical space).
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    MouseButton, MouseEventKind,
+};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Flex, Layout, Rect},
@@ -24,6 +27,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use std::{
+    cell::RefCell,
     collections::HashMap,
     io,
     path::PathBuf,
@@ -114,6 +118,45 @@ pub struct ExecutionsData {
     pub fetched_at: Instant,
 }
 
+// ── Click caches ─────────────────────────────────────────────────────────────
+//
+// Render functions take `app: &App` (immutable) but mouse handlers need layout
+// geometry from the most recent render pass. `RefCell`-wrapped caches are
+// populated during render and read during click handling.
+
+/// Click geometry for the Ops tab list.
+#[derive(Debug, Default)]
+pub(crate) struct OpsClickCache {
+    /// `(display_row_offset, height)` per selectable slot.
+    pub slot_geometry: Vec<(usize, usize)>,
+    /// Current scroll offset of the list.
+    pub scroll: usize,
+    /// The rect used for the list area (excluding footer).
+    pub list_rect: Rect,
+}
+
+/// Click geometry for the History tab table.
+#[derive(Debug, Default)]
+pub(crate) struct HistoryClickCache {
+    /// Maps selectable slot index → table row index.
+    pub selectable_to_row: Vec<usize>,
+    /// The rect used for the table area.
+    pub table_rect: Rect,
+    /// Current scroll offset from `TableState::offset()`.
+    pub scroll_offset: usize,
+    /// Number of header rows (1 for the column header).
+    pub header_rows: usize,
+}
+
+/// Click geometry for the Agents tab.
+#[derive(Debug, Default)]
+pub(crate) struct AgentsClickCache {
+    /// `(display_row_offset, height)` per agent card (includes separator rows).
+    pub card_geometry: Vec<(usize, usize)>,
+    /// The rect used for the agent list area.
+    pub list_rect: Rect,
+}
+
 // ── App state ─────────────────────────────────────────────────────────────────
 
 /// Central application state passed into every draw call and mutated by events.
@@ -183,6 +226,12 @@ pub struct App {
     schedule_run_counts: Option<HashMap<String, (i64, u64)>>,
     /// Timestamp of the last schedule data refresh attempt.
     last_schedule_attempt: Option<Instant>,
+    /// Click geometry cache for the Ops tab (populated during render).
+    pub(crate) ops_click_cache: RefCell<OpsClickCache>,
+    /// Click geometry cache for the History tab (populated during render).
+    pub(crate) history_click_cache: RefCell<HistoryClickCache>,
+    /// Click geometry cache for the Agents tab (populated during render).
+    pub(crate) agents_click_cache: RefCell<AgentsClickCache>,
 }
 
 impl App {
@@ -250,6 +299,9 @@ impl App {
             progress_last_changed: HashMap::new(),
             schedule_run_counts: None,
             last_schedule_attempt: None,
+            ops_click_cache: RefCell::new(OpsClickCache::default()),
+            history_click_cache: RefCell::new(HistoryClickCache::default()),
+            agents_click_cache: RefCell::new(AgentsClickCache::default()),
         }
     }
 
@@ -1040,8 +1092,10 @@ pub fn run_tui(
 ) -> io::Result<()> {
     let poll_interval = Duration::from_secs(poll_interval_secs);
     let mut terminal = ratatui::init();
+    let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
     let mut app = App::new(store, config, config_path, handle, poll_interval, event_bus);
     let result = event_loop(&mut terminal, &mut app);
+    let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -1236,6 +1290,16 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     handle_help_key(app, key.code);
                 } else {
                     handle_list_key(app, key.code);
+                }
+            } else if let Event::Mouse(mouse) = event {
+                if app.viewing_conversation.is_some() {
+                    handle_conversation_mouse(app, mouse.kind);
+                } else if app.viewing_log.is_some() {
+                    handle_log_viewer_mouse(app, mouse.kind);
+                } else if app.show_help {
+                    // No-op: no mouse interaction in help overlay.
+                } else {
+                    handle_list_mouse(app, mouse.kind, mouse.column, mouse.row);
                 }
             }
         }
@@ -1490,6 +1554,225 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
             }
         }
         _ => {}
+    }
+}
+
+// ── Mouse handlers ───────────────────────────────────────────────────────────
+
+/// Scroll step for mouse wheel events in overlay views (log viewer, conversation).
+const MOUSE_SCROLL_STEP: usize = 3;
+
+/// Handle mouse events when the conversation view is open.
+fn handle_conversation_mouse(app: &mut App, kind: MouseEventKind) {
+    match kind {
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_up(MOUSE_SCROLL_STEP);
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut cv) = app.viewing_conversation {
+                cv.scroll_down(MOUSE_SCROLL_STEP);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle mouse events when the log viewer is open.
+fn handle_log_viewer_mouse(app: &mut App, kind: MouseEventKind) {
+    match kind {
+        MouseEventKind::ScrollUp => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_up(MOUSE_SCROLL_STEP);
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                viewer.scroll_down(MOUSE_SCROLL_STEP);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle mouse events when the normal list/tab view is active.
+fn handle_list_mouse(app: &mut App, kind: MouseEventKind, col: u16, row: u16) {
+    match kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.show_hint_banner = false;
+
+            // ── Tab bar click detection ──────────────────────────────────
+            // Recompute the main layout to find the tab bar rect.
+            let (w, h) = crossterm::terminal::size().unwrap_or((80, 24));
+            let terminal_area = Rect::new(0, 0, w, h);
+            let [tab_bar, _content, _status] = Layout::vertical(MAIN_LAYOUT).areas(terminal_area);
+
+            if row >= tab_bar.y && row < tab_bar.y + tab_bar.height {
+                if let Some(tab_idx) = detect_tab_click(col, tab_bar) {
+                    app.active_tab = tab_idx;
+                    return;
+                }
+            }
+
+            // ── List area clicks ─────────────────────────────────────────
+            match app.active_tab {
+                0 => handle_ops_click(app, col, row),
+                1 => handle_agents_click(app, row),
+                2 => handle_history_click(app, col, row),
+                _ => {} // Settings tab: no clickable items
+            }
+        }
+        MouseEventKind::ScrollUp => app.select_prev_row(),
+        MouseEventKind::ScrollDown => app.select_next_row(),
+        _ => {}
+    }
+}
+
+/// Detect which tab label was clicked based on cumulative x-offsets.
+///
+/// Tab bar is a bordered block; inner area starts at `x+1`.
+/// Each tab label occupies `label.len() + 2` chars (1 space padding each side),
+/// dividers are 3 chars (` │ `).
+fn detect_tab_click(col: u16, tab_bar: Rect) -> Option<usize> {
+    let inner = tab_bar.inner(ratatui::layout::Margin::new(1, 1));
+    if col < inner.x || col >= inner.x + inner.width {
+        return None;
+    }
+    let rel_x = (col - inner.x) as usize;
+    let mut offset = 0;
+    for (i, label) in TABS.iter().enumerate() {
+        let tab_width = label.len() + 2; // 1 space padding on each side
+        if rel_x < offset + tab_width {
+            return Some(i);
+        }
+        offset += tab_width;
+        // Divider ` │ ` is 3 chars (except after the last tab).
+        if i < TABS.len() - 1 {
+            offset += 3;
+        }
+    }
+    None
+}
+
+/// Handle a left-click on the Ops tab list area.
+fn handle_ops_click(app: &mut App, _col: u16, row: u16) {
+    let cache = app.ops_click_cache.borrow();
+    if cache.slot_geometry.is_empty() {
+        return;
+    }
+    let rect = cache.list_rect;
+    if row < rect.y || row >= rect.y + rect.height {
+        return;
+    }
+    let display_row = (row - rect.y) as usize + cache.scroll;
+    // Linear search through slot geometry to find which selectable was clicked.
+    let mut clicked_slot = None;
+    for (slot, &(offset, height)) in cache.slot_geometry.iter().enumerate() {
+        if display_row >= offset && display_row < offset + height {
+            clicked_slot = Some(slot);
+            break;
+        }
+    }
+    drop(cache);
+
+    if let Some(slot) = clicked_slot {
+        if app.activity_selected == slot {
+            // Click on already-selected item → Enter behavior.
+            simulate_enter(app);
+        } else {
+            app.activity_selected = slot;
+        }
+    }
+}
+
+/// Handle a left-click on the Agents tab.
+fn handle_agents_click(app: &mut App, row: u16) {
+    let cache = app.agents_click_cache.borrow();
+    if cache.card_geometry.is_empty() {
+        return;
+    }
+    let rect = cache.list_rect;
+    if row < rect.y || row >= rect.y + rect.height {
+        return;
+    }
+    let display_row = (row - rect.y) as usize;
+    let mut clicked_idx = None;
+    for (idx, &(offset, height)) in cache.card_geometry.iter().enumerate() {
+        if display_row >= offset && display_row < offset + height {
+            clicked_idx = Some(idx);
+            break;
+        }
+    }
+    drop(cache);
+
+    if let Some(idx) = clicked_idx {
+        app.agents_selected = idx;
+    }
+}
+
+/// Handle a left-click on the History tab table.
+fn handle_history_click(app: &mut App, _col: u16, row: u16) {
+    let cache = app.history_click_cache.borrow();
+    if cache.selectable_to_row.is_empty() {
+        return;
+    }
+    let rect = cache.table_rect;
+    if row < rect.y || row >= rect.y + rect.height {
+        return;
+    }
+    // Compute which table row was clicked: account for header rows and scroll.
+    let rel_y = (row - rect.y) as usize;
+    if rel_y < cache.header_rows {
+        return; // Clicked on the header.
+    }
+    let table_row = rel_y - cache.header_rows + cache.scroll_offset;
+
+    // Find the selectable slot that maps to this table row.
+    let mut clicked_slot = None;
+    for (slot, &mapped_row) in cache.selectable_to_row.iter().enumerate() {
+        if mapped_row == table_row {
+            clicked_slot = Some(slot);
+            break;
+        }
+    }
+    drop(cache);
+
+    if let Some(slot) = clicked_slot {
+        if app.executions_selected == slot {
+            // Click on already-selected item → Enter behavior.
+            simulate_enter(app);
+        } else {
+            app.executions_selected = slot;
+        }
+    }
+}
+
+/// Simulate the Enter key action for click-on-selected behavior.
+fn simulate_enter(app: &mut App) {
+    if app.active_tab == 0
+        && matches!(
+            app.selected_activity_target(),
+            Some(OpsSelectable::Batch(_))
+        )
+    {
+        app.enter_batch_drill();
+    } else if app.active_tab == 0 {
+        if let Some(OpsSelectable::MergeOp(op_id)) = app.selected_activity_target() {
+            app.open_merge_op_thread(&op_id);
+        } else {
+            app.open_log_viewer();
+        }
+    } else if app.active_tab == 2 {
+        if let Some(HistorySelectable::Batch(batch_id)) = app.selected_history_target() {
+            app.history_drill_batch = Some(batch_id);
+            app.executions_selected = 0;
+            app.refresh_executions();
+        } else {
+            app.open_log_viewer();
+        }
+    } else {
+        app.open_log_viewer();
     }
 }
 
@@ -1817,4 +2100,212 @@ fn centered_rect(percent_x: u16, height_rows: u16, r: Rect) -> Rect {
         .flex(Flex::Center)
         .areas(area);
     area
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod mouse_tests {
+    use super::*;
+
+    // ── detect_tab_click ─────────────────────────────────────────────────
+
+    fn make_tab_bar(x: u16, y: u16, w: u16, h: u16) -> Rect {
+        Rect::new(x, y, w, h)
+    }
+
+    #[test]
+    fn test_detect_tab_click_first_tab() {
+        // Tab bar bordered block: inner starts at x=1.
+        // Tab labels: "Ops" (5 chars padded), "Agents" (8), "History" (9), "Settings" (10)
+        // With padding: " Ops " = 5, " Agents " = 8, " History " = 9, " Settings " = 10
+        // Dividers: " │ " = 3 chars
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // Inner area: x=1, y=1, w=78, h=1
+        // Tab " Ops " occupies cols 1..6 (inner-relative 0..5)
+        assert_eq!(detect_tab_click(1, bar), Some(0)); // first char of " Ops "
+        assert_eq!(detect_tab_click(5, bar), Some(0)); // last char of " Ops "
+    }
+
+    #[test]
+    fn test_detect_tab_click_second_tab() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // After "Ops" (5) + divider (3) = offset 8 → "Agents" tab starts at inner-rel 8
+        // Inner starts at x=1, so absolute col = 1 + 8 = 9
+        assert_eq!(detect_tab_click(9, bar), Some(1));
+    }
+
+    #[test]
+    fn test_detect_tab_click_third_tab() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // After "Ops" (5) + div (3) + "Agents" (8) + div (3) = 19
+        // Absolute col = 1 + 19 = 20
+        assert_eq!(detect_tab_click(20, bar), Some(2));
+    }
+
+    #[test]
+    fn test_detect_tab_click_fourth_tab() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // After "Ops" (5) + div (3) + "Agents" (8) + div (3) + "History" (9) + div (3) = 31
+        // Absolute col = 1 + 31 = 32
+        assert_eq!(detect_tab_click(32, bar), Some(3));
+    }
+
+    #[test]
+    fn test_detect_tab_click_on_divider() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // Divider between Ops and Agents: inner-relative 5, 6, 7 → absolute 6, 7, 8.
+        // Clicks in the divider region resolve to the next tab (acceptable UX —
+        // the gap is small and clicking between tabs selects the nearest one).
+        assert_eq!(detect_tab_click(6, bar), Some(1));
+        assert_eq!(detect_tab_click(7, bar), Some(1));
+        assert_eq!(detect_tab_click(8, bar), Some(1));
+    }
+
+    #[test]
+    fn test_detect_tab_click_outside_right() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // After all tabs: 5 + 3 + 8 + 3 + 9 + 3 + 10 = 41 → inner-relative 41+
+        // Absolute col = 1 + 41 = 42
+        assert_eq!(detect_tab_click(42, bar), None);
+    }
+
+    #[test]
+    fn test_detect_tab_click_on_border() {
+        let bar = make_tab_bar(0, 0, 80, 3);
+        // Col 0 is the left border — outside inner area.
+        assert_eq!(detect_tab_click(0, bar), None);
+    }
+
+    #[test]
+    fn test_detect_tab_click_offset_origin() {
+        // Tab bar not at (0,0) — e.g., nested layout.
+        let bar = make_tab_bar(10, 5, 60, 3);
+        // Inner starts at x=11. First tab at absolute col 11.
+        assert_eq!(detect_tab_click(11, bar), Some(0));
+        assert_eq!(detect_tab_click(10, bar), None); // border
+    }
+
+    // ── Slot geometry lookup (Ops click mapping) ─────────────────────────
+
+    #[test]
+    fn test_ops_slot_geometry_basic_lookup() {
+        // Simulate 3 selectable slots at display rows 2, 3, 5 with height 1 each.
+        let geometry = [(2, 1), (3, 1), (5, 1)];
+        let list_rect = Rect::new(0, 10, 80, 20);
+        let scroll = 0;
+
+        // Click on row 12 → display_row = (12 - 10) + 0 = 2 → slot 0
+        let display_row = (12u16 - list_rect.y) as usize + scroll;
+        let slot = geometry
+            .iter()
+            .position(|(offset, height)| display_row >= *offset && display_row < offset + height);
+        assert_eq!(slot, Some(0));
+
+        // Click on row 13 → display_row = 3 → slot 1
+        let display_row = (13u16 - list_rect.y) as usize + scroll;
+        let slot = geometry
+            .iter()
+            .position(|(offset, height)| display_row >= *offset && display_row < offset + height);
+        assert_eq!(slot, Some(1));
+
+        // Click on row 14 → display_row = 4 → no slot (gap between 1 and 2)
+        let display_row = (14u16 - list_rect.y) as usize + scroll;
+        let slot = geometry
+            .iter()
+            .position(|(offset, height)| display_row >= *offset && display_row < offset + height);
+        assert_eq!(slot, None);
+    }
+
+    #[test]
+    fn test_ops_slot_geometry_with_scroll() {
+        // Slots at rows 0, 2, 4 (height 2 each — selected items expand).
+        let geometry = [(0, 2), (2, 2), (4, 2)];
+        let list_rect = Rect::new(0, 5, 80, 10);
+        let scroll = 3;
+
+        // Click on row 5 → display_row = (5 - 5) + 3 = 3 → inside slot 1 (offset=2, height=2)
+        let display_row = (5u16 - list_rect.y) as usize + scroll;
+        let slot = geometry
+            .iter()
+            .position(|(offset, height)| display_row >= *offset && display_row < offset + height);
+        assert_eq!(slot, Some(1));
+    }
+
+    #[test]
+    fn test_ops_slot_geometry_multi_line_item() {
+        // Slot 0 at row 1 with height 3 (e.g., running item with progress + detail).
+        // Slot 1 at row 5 with height 1.
+        let geometry = [(1, 3), (5, 1)];
+        let list_rect = Rect::new(0, 0, 80, 20);
+        let scroll = 0;
+
+        // Clicking rows 1, 2, 3 should all resolve to slot 0.
+        for click_row in 1u16..=3 {
+            let display_row = (click_row - list_rect.y) as usize + scroll;
+            let slot = geometry.iter().position(|(offset, height)| {
+                display_row >= *offset && display_row < offset + height
+            });
+            assert_eq!(slot, Some(0), "click_row={click_row}");
+        }
+
+        // Row 5 → slot 1
+        let display_row = (5u16 - list_rect.y) as usize + scroll;
+        let slot = geometry
+            .iter()
+            .position(|(offset, height)| display_row >= *offset && display_row < offset + height);
+        assert_eq!(slot, Some(1));
+    }
+
+    // ── History click mapping ────────────────────────────────────────────
+
+    #[test]
+    fn test_history_click_header_rejected() {
+        let table_rect = Rect::new(0, 5, 80, 20);
+        let header_rows = 1;
+
+        // Click on row 5 → rel_y = 0, which is < header_rows → rejected
+        let rel_y = (5u16 - table_rect.y) as usize;
+        assert!(rel_y < header_rows);
+    }
+
+    #[test]
+    fn test_history_click_maps_to_slot() {
+        let selectable_to_row = [0, 1, 3, 4]; // slot → table row
+        let table_rect = Rect::new(0, 5, 80, 20);
+        let header_rows = 1;
+        let scroll_offset = 0;
+
+        // Click on row 6 → rel_y = 1, table_row = 1 - 1 + 0 = 0 → slot 0
+        let rel_y = (6u16 - table_rect.y) as usize;
+        let table_row = rel_y - header_rows + scroll_offset;
+        let slot = selectable_to_row.iter().position(|&r| r == table_row);
+        assert_eq!(slot, Some(0));
+
+        // Click on row 9 → rel_y = 4, table_row = 3 → slot 2
+        let rel_y = (9u16 - table_rect.y) as usize;
+        let table_row = rel_y - header_rows + scroll_offset;
+        let slot = selectable_to_row.iter().position(|&r| r == table_row);
+        assert_eq!(slot, Some(2));
+    }
+
+    #[test]
+    fn test_history_click_with_scroll() {
+        let selectable_to_row = [0, 1, 5, 6];
+        let header_rows = 1;
+        let scroll_offset = 3;
+
+        let table_rect = Rect::new(0, 0, 80, 20);
+        // Click on row 2 → rel_y = 2, table_row = 2 - 1 + 3 = 4 → no match
+        let rel_y = (2u16 - table_rect.y) as usize;
+        let table_row = rel_y - header_rows + scroll_offset;
+        let slot = selectable_to_row.iter().position(|&r| r == table_row);
+        assert_eq!(slot, None);
+
+        // Click on row 3 → rel_y = 3, table_row = 3 - 1 + 3 = 5 → slot 2
+        let rel_y = (3u16 - table_rect.y) as usize;
+        let table_row = rel_y - header_rows + scroll_offset;
+        let slot = selectable_to_row.iter().position(|&r| r == table_row);
+        assert_eq!(slot, Some(2));
+    }
 }

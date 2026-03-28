@@ -857,14 +857,13 @@ fn render_ops_list(
 
     let visible_height = list_area.height as usize;
     let selected_display_idx = sel_to_row.get(selected_slot).copied().unwrap_or(0);
+    // Capture per-item heights before List::new() consumes them.
+    let item_heights: Vec<usize> = items.iter().map(|item| item.height()).collect();
     // Compute total display rows (sum of lines per ListItem) — items can be multi-line
     // (e.g. selected items with inline detail, running items with progress summary).
-    let total_display_rows: usize = items.iter().map(|item| item.height()).sum();
+    let total_display_rows: usize = item_heights.iter().sum();
     // Compute the display-row offset of the selected item (sum of heights of preceding items).
-    let selected_row_offset: usize = items[..selected_display_idx]
-        .iter()
-        .map(|item| item.height())
-        .sum();
+    let selected_row_offset: usize = item_heights[..selected_display_idx].iter().sum();
     let scroll = compute_scroll(selected_row_offset, visible_height, total_display_rows);
 
     let mut state = ListState::default().with_selected(Some(selected_display_idx));
@@ -886,6 +885,24 @@ fn render_ops_list(
             .style(Style::new().bg(theme::BG_PRIMARY).fg(theme::TEXT_DIM)),
         footer_area,
     );
+
+    // ── Populate click cache ────────────────────────────────────────────────
+    // Build display-row offsets for each selectable slot using the captured
+    // `item_heights` and `sel_to_row` mapping, so mouse clicks can map
+    // (click_y + scroll) → slot index.
+    {
+        let mut slot_geometry = Vec::with_capacity(sel_to_row.len());
+        for &item_idx in &sel_to_row {
+            // Display-row offset = sum of heights of all items before this one.
+            let offset: usize = item_heights[..item_idx].iter().sum();
+            let height = item_heights.get(item_idx).copied().unwrap_or(1);
+            slot_geometry.push((offset, height));
+        }
+        let mut cache = app.ops_click_cache.borrow_mut();
+        cache.slot_geometry = slot_geometry;
+        cache.scroll = scroll;
+        cache.list_rect = list_area;
+    }
 }
 
 /// The `[c] conversation` hint occupies a fixed-width suffix so it stays

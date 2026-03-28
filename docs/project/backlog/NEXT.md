@@ -12,7 +12,7 @@ No tickets currently in-flight.
 
 Ordered by priority. Work top item when capacity is available.
 
-1. GAP-5 — TUI mouse support (`quality-gaps.md`)
+1. MERGE-1 — Detect no-op merges and uncommitted worktree changes (`merge-safety.md`)
 2. EVO-16 — Session resume after crash (`orch-evolution.md`)
 3. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
 4. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)

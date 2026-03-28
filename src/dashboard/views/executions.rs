@@ -221,6 +221,20 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         .thumb_style(theme::scrollbar_thumb_style())
         .track_style(theme::scrollbar_track_style());
     f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+
+    // ── Populate click cache ────────────────────────────────────────────────
+    {
+        // Build ordered vec of table row indices for each selectable slot.
+        let mut ordered_rows: Vec<usize> = Vec::with_capacity(selectable_to_row.len());
+        for slot in 0..selectables.len() {
+            ordered_rows.push(selectable_to_row.get(&slot).copied().unwrap_or(0));
+        }
+        let mut cache = app.history_click_cache.borrow_mut();
+        cache.selectable_to_row = ordered_rows;
+        cache.table_rect = table_area;
+        cache.scroll_offset = state.offset();
+        cache.header_rows = 1; // single header row
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -46,13 +46,19 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
     let n = cfg.agents.len();
     let selected = app.agents_selected.min(n.saturating_sub(1));
     let mut items: Vec<ListItem> = Vec::new();
+    // Track per-agent card item indices so we can compute click geometry.
+    let mut card_item_indices: Vec<usize> = Vec::with_capacity(n);
     for (idx, agent) in cfg.agents.iter().enumerate() {
         if idx > 0 {
             // Dynamic width: long enough string that ratatui clips to terminal width.
             items.push(ListItem::new(Line::from("─".repeat(200).fg(BORDER_DIM))));
         }
+        card_item_indices.push(items.len());
         items.push(build_agent_item(app, agent));
     }
+
+    // Capture per-item heights before List::new() consumes them.
+    let item_heights: Vec<usize> = items.iter().map(|item| item.height()).collect();
 
     let mut state = ListState::default();
     state.select(Some(selected.saturating_mul(2)));
@@ -69,6 +75,21 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
         .thumb_style(theme::scrollbar_thumb_style())
         .track_style(theme::scrollbar_track_style());
     f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+
+    // ── Populate click cache ────────────────────────────────────────────────
+    // The list area inside the bordered block is where clicks land.
+    let inner = theme::panel("Agents").inner(area);
+    {
+        let mut card_geometry = Vec::with_capacity(n);
+        for &item_idx in &card_item_indices {
+            let offset: usize = item_heights[..item_idx].iter().sum();
+            let height = item_heights.get(item_idx).copied().unwrap_or(1);
+            card_geometry.push((offset, height));
+        }
+        let mut cache = app.agents_click_cache.borrow_mut();
+        cache.card_geometry = card_geometry;
+        cache.list_rect = inner;
+    }
 }
 
 // ── Agent card ────────────────────────────────────────────────────────────────

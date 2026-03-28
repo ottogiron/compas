@@ -179,7 +179,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
   - Manual: test click selection, tab switching, scroll, and Enter-equivalent on all tabs
   - Existing integration tests pass unchanged
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 - Notes: Already tracked in `known-issues.md`. Ratatui supports mouse events via crossterm. Low effort, high ergonomic payoff.
@@ -362,10 +362,10 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 - Owner: otto
 - Complexity: S
 - Risk: Low
-- Start:
-- End:
-- Duration:
-- Notes:
+- Start: 2026-03-28 18:50 UTC
+- End: 2026-03-28 19:12 UTC
+- Duration: 00:21:46
+- Notes: 2 review rounds. Round 1: 3 blocking (terminal restore, changelog, tests) + 3 minor. All resolved in round 2. Residual: agents scroll offset (low risk).
 
 - Ticket: GAP-6
 - Owner: otto
