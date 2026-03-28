@@ -49,6 +49,9 @@ pub const TEXT_BRIGHT: Color = Color::Rgb(220, 220, 230);
 /// Very dim text — decorative, batch IDs, tertiary info.
 pub const TEXT_DIM: Color = Color::Rgb(70, 70, 80);
 
+/// Inline code — soft blue-gray for `code` spans inside prose.
+pub const TEXT_CODE: Color = Color::Rgb(140, 180, 220);
+
 // ── Accent ───────────────────────────────────────────────────────────────────
 
 /// Primary accent — warm amber. Active items, keybindings, focus indicators.

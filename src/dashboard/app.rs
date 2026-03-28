@@ -1400,12 +1400,12 @@ fn handle_log_viewer_key(app: &mut App, code: KeyCode) {
         }
         KeyCode::Char('2') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.set_tab(LogTab::Timeline);
+                viewer.set_tab(LogTab::Output);
             }
         }
         KeyCode::Char('3') => {
             if let Some(ref mut viewer) = app.viewing_log {
-                viewer.set_tab(LogTab::Output);
+                viewer.set_tab(LogTab::Timeline);
             }
         }
         KeyCode::PageUp => {

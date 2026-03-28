@@ -5,7 +5,7 @@
 //! 2. Error card — only for failed/crashed/timed_out, `FAILURE` border
 //! 3. Context line — `parsed_intent`
 //! 4. Timing line — phase breakdown from timestamps
-//! 5. Tab bar — Input | Timeline (N) | Output
+//! 5. Tab bar — Input | Output | Timeline (N)
 //! 6. Content pane — active tab, scrollable, `Wrap { trim: false }`
 //! 7. Footer — keybinding hints, follow indicator, scroll position
 //!
@@ -24,7 +24,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::conversation::markdown_to_lines;
+use crate::dashboard::views::conversation::markdown_to_lines_standalone;
 use crate::dashboard::views::payload::{
     extract_content_from_log_line, format_log_line, format_payload_lines, JsonViewMode,
 };
@@ -44,16 +44,16 @@ const TIMELINE_SUMMARY_MAX: usize = 60;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Input = 0,
-    Timeline = 1,
-    Output = 2,
+    Output = 1,
+    Timeline = 2,
 }
 
 impl Tab {
     fn from_index(i: usize) -> Self {
         match i {
             0 => Tab::Input,
-            1 => Tab::Timeline,
-            2 => Tab::Output,
+            1 => Tab::Output,
+            2 => Tab::Timeline,
             _ => Tab::Input,
         }
     }
@@ -102,9 +102,10 @@ impl ExecutionDetailState {
     /// Create a new detail view from an execution row and associated data.
     ///
     /// Sets default tab and follow mode based on execution status:
-    /// - All statuses default to Input tab
-    /// - Failed/Crashed/Timed out -> Output follow off, pre-scrolled to bottom
-    /// - Executing/Picked up -> Output follow on
+    /// - Failed/Crashed/Timed out -> Output tab, follow off, pre-scrolled to bottom
+    /// - Executing/Picked up -> Output tab, follow on
+    /// - Completed -> Output tab
+    /// - Queued -> Input tab
     pub fn new(
         execution: ExecutionRow,
         log_path: Option<PathBuf>,
@@ -114,18 +115,20 @@ impl ExecutionDetailState {
         timeline_truncated: bool,
     ) -> Self {
         let (default_tab, output_follow, output_scroll) = match execution.status.as_str() {
-            "failed" | "crashed" | "timed_out" => (Tab::Input, false, usize::MAX),
-            "executing" | "picked_up" => (Tab::Input, true, 0),
-            _ => (Tab::Input, false, 0),
+            "failed" | "crashed" | "timed_out" => (Tab::Output, false, usize::MAX),
+            "executing" | "picked_up" => (Tab::Output, true, 0),
+            "completed" => (Tab::Output, false, 0),
+            _ => (Tab::Input, false, 0), // queued and others
         };
 
         let tab_states = [
-            TabState::default(),
-            TabState::default(),
+            TabState::default(), // Input (0)
             TabState {
+                // Output (1)
                 scroll_offset: output_scroll,
                 follow: output_follow,
             },
+            TabState::default(), // Timeline (2)
         ];
 
         let mut state = Self {
@@ -606,8 +609,8 @@ fn render_timing_line(f: &mut Frame, execution: &ExecutionRow, area: Rect) {
 fn render_tab_bar(f: &mut Frame, active: Tab, events: &[ExecutionEventRow], area: Rect) {
     let tab_labels = [
         "Input".to_string(),
-        format!("Timeline ({})", events.len()),
         "Output".to_string(),
+        format!("Timeline ({})", events.len()),
     ];
 
     let mut spans: Vec<Span<'static>> = vec![Span::styled("╶ ", Style::new().fg(BORDER_DIM))];
@@ -641,8 +644,8 @@ fn render_tab_bar(f: &mut Frame, active: Tab, events: &[ExecutionEventRow], area
 fn build_content_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     match state.active_tab {
         Tab::Input => build_input_lines(state),
-        Tab::Timeline => build_timeline_lines(&state.timeline_events, state.timeline_truncated),
         Tab::Output => build_output_lines(state),
+        Tab::Timeline => build_timeline_lines(&state.timeline_events, state.timeline_truncated),
     }
 }
 
@@ -652,17 +655,18 @@ fn build_output_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
     }
     match state.json_view_mode {
         JsonViewMode::Humanized => {
-            // Content extraction — shows agent's narrative text.
-            let lines: Vec<Line<'static>> = state
+            // Content extraction — shows agent's narrative text with markdown rendering.
+            let text_lines: Vec<String> = state
                 .lines
                 .iter()
                 .filter_map(|line| extract_content_from_log_line(line))
-                .flat_map(|texts| texts.into_iter().map(|t| Line::from(t).fg(TEXT_NORMAL)))
+                .flat_map(|texts| texts.into_iter())
                 .collect();
-            if lines.is_empty() {
+            if text_lines.is_empty() {
                 vec![Line::from("(no text content)").fg(TEXT_MUTED)]
             } else {
-                lines
+                let combined = text_lines.join("\n");
+                markdown_to_lines_standalone(&combined)
             }
         }
         JsonViewMode::RawPretty => {
@@ -738,8 +742,8 @@ fn build_input_lines(state: &ExecutionDetailState) -> Vec<Line<'static>> {
                     lines.push(Line::from(line).fg(TEXT_MUTED));
                 }
             } else {
-                // Markdown payload — render with pulldown_cmark.
-                lines.extend(markdown_to_lines(payload, TEXT_DIM));
+                // Markdown payload — render with pulldown_cmark (standalone, no prefix).
+                lines.extend(markdown_to_lines_standalone(payload));
             }
         }
         None => {
@@ -886,9 +890,9 @@ mod tests {
         let mut s = make_state("completed", vec!["a"]);
         s.active_tab = Tab::Input;
         s.next_tab();
-        assert_eq!(s.active_tab, Tab::Timeline);
-        s.next_tab();
         assert_eq!(s.active_tab, Tab::Output);
+        s.next_tab();
+        assert_eq!(s.active_tab, Tab::Timeline);
         s.next_tab();
         assert_eq!(s.active_tab, Tab::Input);
     }
@@ -898,9 +902,9 @@ mod tests {
         let mut s = make_state("completed", vec!["a"]);
         s.active_tab = Tab::Input;
         s.prev_tab();
-        assert_eq!(s.active_tab, Tab::Output);
-        s.prev_tab();
         assert_eq!(s.active_tab, Tab::Timeline);
+        s.prev_tab();
+        assert_eq!(s.active_tab, Tab::Output);
         s.prev_tab();
         assert_eq!(s.active_tab, Tab::Input);
     }
@@ -920,7 +924,7 @@ mod tests {
     fn test_status_adaptive_defaults_failed() {
         let execution = make_execution("failed");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Input);
+        assert_eq!(s.active_tab, Tab::Output);
         assert!(!s.tab_states[Tab::Output.index()].follow);
         assert_eq!(s.tab_states[Tab::Output.index()].scroll_offset, usize::MAX);
     }
@@ -929,7 +933,7 @@ mod tests {
     fn test_status_adaptive_defaults_executing() {
         let execution = make_execution("executing");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Input);
+        assert_eq!(s.active_tab, Tab::Output);
         assert!(s.tab_states[Tab::Output.index()].follow);
     }
 
@@ -945,7 +949,7 @@ mod tests {
     fn test_status_adaptive_defaults_completed() {
         let execution = make_execution("completed");
         let s = ExecutionDetailState::new(execution, None, None, false, Vec::new(), false);
-        assert_eq!(s.active_tab, Tab::Input);
+        assert_eq!(s.active_tab, Tab::Output);
         assert!(!s.tab_states[Tab::Output.index()].follow);
         assert_eq!(s.tab_states[Tab::Output.index()].scroll_offset, 0);
     }
