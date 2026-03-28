@@ -572,6 +572,7 @@ mod tests {
             body: body.to_string(),
             batch_id: None,
             created_at: 1_700_000_000 + id * 60,
+            skip_handoff: false,
         }
     }
 

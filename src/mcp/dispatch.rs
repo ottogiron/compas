@@ -90,9 +90,10 @@ impl OrchestratorMcpServer {
             .unwrap_or_else(|| ulid::Ulid::new().to_string());
 
         // Insert message — trigger eligibility is determined by the worker.
+        let skip_handoff = params.skip_handoff.unwrap_or(false);
         let message_id = match self
             .store
-            .insert_message(
+            .insert_dispatch_message(
                 &thread_id,
                 &params.from,
                 &params.to,
@@ -100,6 +101,7 @@ impl OrchestratorMcpServer {
                 &params.body,
                 params.batch.as_deref(),
                 params.summary.as_deref(),
+                skip_handoff,
             )
             .await
         {

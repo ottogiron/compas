@@ -24,6 +24,9 @@ pub struct DispatchParams {
     /// Optional ISO 8601 timestamp (e.g. "2026-03-21T20:00:00Z") for delayed execution.
     /// When set, the execution will not be eligible for worker pickup until this time.
     pub scheduled_for: Option<String>,
+    /// When true, the agent's response will NOT trigger auto-handoff even if
+    /// the agent has handoff.on_response configured.
+    pub skip_handoff: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

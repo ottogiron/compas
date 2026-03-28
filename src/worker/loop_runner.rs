@@ -1264,6 +1264,28 @@ async fn handle_trigger_output(
             new_status: "Active".to_string(),
         });
 
+        // EVO-17: check if originating dispatch had skip_handoff set.
+        let skip_handoff = match output.dispatch_message_id {
+            Some(id) => store
+                .get_message(id)
+                .await
+                .ok()
+                .flatten()
+                .map(|m| m.skip_handoff)
+                .unwrap_or(false),
+            None => false,
+        };
+
+        if skip_handoff {
+            tracing::info!(
+                thread_id = %output.thread_id,
+                agent = %output.agent_alias,
+                "skip_handoff set — delivering reply without auto-handoff"
+            );
+            insert_reply_message(store, event_bus, output, reply_intent, reply_body).await;
+            return;
+        }
+
         // Resolve the handoff type BEFORE inserting the reply so that
         // fan-out can use a single transaction (reply + fan-out threads).
         let handoff_resolution = resolve_handoff(store, output, agent_configs, reply_body).await;
