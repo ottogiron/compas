@@ -382,22 +382,17 @@ impl MergeExecutor {
         Ok(result)
     }
 
-    /// Standard merge: `git merge {source_branch} --no-edit`
+    /// Standard merge: `git merge {source_branch} -m <message>`
     fn execute_merge(op: &MergeOperation, worktree_path: &Path) -> Result<MergeResult, String> {
         let wt_str = worktree_path.to_string_lossy().to_string();
 
+        let commit_msg = op
+            .commit_message
+            .clone()
+            .unwrap_or_else(|| format!("Merge {} into {}", op.source_branch, op.target_branch));
+
         let merge_output = Command::new("git")
-            .args([
-                "-C",
-                &wt_str,
-                "-c",
-                "user.email=compas@localhost",
-                "-c",
-                "user.name=compas",
-                "merge",
-                &op.source_branch,
-                "--no-edit",
-            ])
+            .args(["-C", &wt_str, "merge", &op.source_branch, "-m", &commit_msg])
             .output()
             .map_err(|e| format!("failed to run git merge: {}", e))?;
 
@@ -509,20 +504,14 @@ impl MergeExecutor {
         }
 
         // Squash succeeded — now commit
-        let commit_msg = format!("Squash merge {}", op.source_branch);
+        let commit_msg = op.commit_message.clone().unwrap_or_else(|| {
+            format!(
+                "Squash merge {} into {}",
+                op.source_branch, op.target_branch
+            )
+        });
         let commit_output = Command::new("git")
-            .args([
-                "-C",
-                &wt_str,
-                "-c",
-                "user.email=compas@localhost",
-                "-c",
-                "user.name=compas",
-                "commit",
-                "--no-edit",
-                "-m",
-                &commit_msg,
-            ])
+            .args(["-C", &wt_str, "commit", "-m", &commit_msg])
             .output()
             .map_err(|e| format!("failed to commit squash merge: {}", e))?;
 
@@ -697,7 +686,7 @@ mod tests {
     use super::*;
     use crate::store::{MergeOperation, ThreadStatus};
 
-    /// Create a temporary git repo with an initial commit.
+    /// Create a temporary git repo with an initial commit and local user config.
     fn init_test_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let dir_str = dir.path().to_string_lossy().to_string();
@@ -709,15 +698,23 @@ mod tests {
             .unwrap();
         assert!(init.status.success(), "git init failed");
 
+        // Set local git config so commits/merges work without -c overrides
+        let cfg_email = Command::new("git")
+            .args(["-C", &dir_str, "config", "user.email", "test@test.com"])
+            .output()
+            .unwrap();
+        assert!(cfg_email.status.success(), "git config user.email failed");
+        let cfg_name = Command::new("git")
+            .args(["-C", &dir_str, "config", "user.name", "Test"])
+            .output()
+            .unwrap();
+        assert!(cfg_name.status.success(), "git config user.name failed");
+
         // Initial commit
         let commit = Command::new("git")
             .args([
                 "-C",
                 &dir_str,
-                "-c",
-                "user.email=test@test.com",
-                "-c",
-                "user.name=Test",
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -830,6 +827,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         }
     }
 
@@ -857,6 +855,200 @@ mod tests {
         assert!(result.summary.unwrap().contains("Merged"));
         assert!(result.error.is_none());
         assert!(result.conflict_files.is_none());
+    }
+
+    #[test]
+    fn test_merge_commit_uses_custom_message() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/msg-thread",
+            "feature.txt",
+            "feature content",
+        );
+        // Add a commit on target to create divergence (prevents fast-forward)
+        commit_file(repo.path(), "target.txt", "target content", "target work");
+
+        let mut op = make_test_merge_op("msg-ok", "compas/msg-thread", &target, "merge");
+        op.commit_message = Some("feat: add widget support".to_string());
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "merge should succeed");
+
+        // Verify the merge commit message matches the custom commit_message
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        assert_eq!(msg, "feat: add widget support");
+    }
+
+    #[test]
+    fn test_merge_commit_fallback_message_when_none() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/fallback-thread",
+            "feature.txt",
+            "feature content",
+        );
+        // Add a commit on target to create divergence (prevents fast-forward)
+        commit_file(repo.path(), "target.txt", "target content", "target work");
+
+        let op = make_test_merge_op("fallback-ok", "compas/fallback-thread", &target, "merge");
+        // commit_message is None — should use fallback
+        assert!(op.commit_message.is_none());
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "merge should succeed");
+
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        let expected = format!("Merge compas/fallback-thread into {}", target);
+        assert_eq!(msg, expected);
+    }
+
+    #[test]
+    fn test_merge_commit_author_is_not_compas_localhost() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/author-thread",
+            "feature.txt",
+            "feature content",
+        );
+        // Add a commit on target to create divergence (prevents fast-forward)
+        commit_file(repo.path(), "target.txt", "target content", "target work");
+
+        let op = make_test_merge_op("author-ok", "compas/author-thread", &target, "merge");
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "merge should succeed");
+
+        // Verify the merge commit author is NOT compas@localhost
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%ae"])
+            .output()
+            .unwrap();
+        let email = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        assert_ne!(
+            email, "compas@localhost",
+            "merge commit should use repo's git user, not compas@localhost"
+        );
+        assert_eq!(email, "test@test.com");
+    }
+
+    #[test]
+    fn test_squash_commit_uses_custom_message() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/squash-msg-thread",
+            "feature.txt",
+            "feature content",
+        );
+
+        let mut op = make_test_merge_op(
+            "squash-msg-ok",
+            "compas/squash-msg-thread",
+            &target,
+            "squash",
+        );
+        op.commit_message = Some("feat: squashed widget support".to_string());
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "squash merge should succeed");
+
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        assert_eq!(msg, "feat: squashed widget support");
+    }
+
+    #[test]
+    fn test_squash_commit_fallback_message_when_none() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/squash-fallback-thread",
+            "feature.txt",
+            "feature content",
+        );
+
+        let op = make_test_merge_op(
+            "squash-fallback-ok",
+            "compas/squash-fallback-thread",
+            &target,
+            "squash",
+        );
+        assert!(op.commit_message.is_none());
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "squash merge should succeed");
+
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%s"])
+            .output()
+            .unwrap();
+        let msg = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        let expected = format!("Squash merge compas/squash-fallback-thread into {}", target);
+        assert_eq!(msg, expected);
+    }
+
+    #[test]
+    fn test_squash_commit_author_is_not_compas_localhost() {
+        let repo = init_test_repo();
+        let target = default_branch(repo.path());
+
+        commit_file(repo.path(), "base.txt", "base content", "add base file");
+        create_source_branch(
+            repo.path(),
+            "compas/squash-author-thread",
+            "feature.txt",
+            "feature content",
+        );
+
+        let op = make_test_merge_op(
+            "squash-author-ok",
+            "compas/squash-author-thread",
+            &target,
+            "squash",
+        );
+        let result = MergeExecutor::execute(&op, repo.path(), None).unwrap();
+        assert!(result.success, "squash merge should succeed");
+
+        let repo_str = repo.path().to_string_lossy().to_string();
+        let log = Command::new("git")
+            .args(["-C", &repo_str, "log", "-1", "--format=%ae"])
+            .output()
+            .unwrap();
+        let email = String::from_utf8_lossy(&log.stdout).trim().to_string();
+        assert_ne!(
+            email, "compas@localhost",
+            "squash commit should use repo's git user, not compas@localhost"
+        );
+        assert_eq!(email, "test@test.com");
     }
 
     #[test]
@@ -1751,6 +1943,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 

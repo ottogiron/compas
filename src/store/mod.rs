@@ -320,6 +320,7 @@ pub struct MergeOperation {
     pub result_summary: Option<String>,
     pub error_detail: Option<String>,
     pub conflict_files: Option<String>,
+    pub commit_message: Option<String>,
 }
 
 // ── Store ────────────────────────────────────────────────────────────────────
@@ -706,6 +707,18 @@ impl Store {
         )
         .execute(&self.pool)
         .await?;
+
+        // MERGE-2: commit_message column for merge operations
+        let merge_cols: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(merge_operations)")
+                .fetch_all(&self.pool)
+                .await?;
+        let has_commit_message = merge_cols.iter().any(|c| c.1 == "commit_message");
+        if !has_commit_message {
+            sqlx::query("ALTER TABLE merge_operations ADD COLUMN commit_message TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
 
         // CRON-2: schedule_runs table for durable last-fire tracking
         sqlx::query(
@@ -2702,8 +2715,8 @@ impl Store {
              (id, thread_id, source_branch, target_branch, merge_strategy,
               requested_by, status, push_requested, queued_at,
               claimed_at, started_at, finished_at, duration_ms,
-              result_summary, error_detail, conflict_files)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              result_summary, error_detail, conflict_files, commit_message)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&op.id)
         .bind(&op.thread_id)
@@ -2721,6 +2734,7 @@ impl Store {
         .bind(&op.result_summary)
         .bind(&op.error_detail)
         .bind(&op.conflict_files)
+        .bind(&op.commit_message)
         .execute(&self.pool)
         .await
         .map_err(|e| format!("insert_merge_op failed: {}", e))?;
@@ -2781,7 +2795,7 @@ impl Store {
             "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
                     requested_by, status, push_requested, queued_at,
                     claimed_at, started_at, finished_at, duration_ms,
-                    result_summary, error_detail, conflict_files
+                    result_summary, error_detail, conflict_files, commit_message
              FROM merge_operations
              WHERE id = ?",
         )
@@ -2881,7 +2895,7 @@ impl Store {
             "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
                     requested_by, status, push_requested, queued_at,
                     claimed_at, started_at, finished_at, duration_ms,
-                    result_summary, error_detail, conflict_files
+                    result_summary, error_detail, conflict_files, commit_message
              FROM merge_operations
              WHERE id = ?",
         )
@@ -2921,7 +2935,7 @@ impl Store {
             "SELECT id, thread_id, source_branch, target_branch, merge_strategy,
                     requested_by, status, push_requested, queued_at,
                     claimed_at, started_at, finished_at, duration_ms,
-                    result_summary, error_detail, conflict_files
+                    result_summary, error_detail, conflict_files, commit_message
              FROM merge_operations
              {}
              ORDER BY queued_at DESC
@@ -4863,6 +4877,7 @@ mod tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         }
     }
 

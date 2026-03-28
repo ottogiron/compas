@@ -1,0 +1,3 @@
+kind: Fixed
+body: Merge commits now use repo git identity instead of hardcoded compas@localhost; commit message sourced from thread summary
+time: 2026-03-28T23:21:26.008777+01:00

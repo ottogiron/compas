@@ -2101,6 +2101,7 @@ mod lifecycle_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         server.store.insert_merge_op(&op).await.unwrap();
 
@@ -7414,14 +7415,22 @@ mod merge_worker_tests {
             .unwrap();
         assert!(init.status.success(), "git init failed");
 
+        // Set local git config so commits/merges work without -c overrides
+        let cfg_email = Command::new("git")
+            .args(["-C", &dir_str, "config", "user.email", "test@test.com"])
+            .output()
+            .unwrap();
+        assert!(cfg_email.status.success(), "git config user.email failed");
+        let cfg_name = Command::new("git")
+            .args(["-C", &dir_str, "config", "user.name", "Test"])
+            .output()
+            .unwrap();
+        assert!(cfg_name.status.success(), "git config user.name failed");
+
         let commit = Command::new("git")
             .args([
                 "-C",
                 &dir_str,
-                "-c",
-                "user.email=test@test.com",
-                "-c",
-                "user.name=Test",
                 "commit",
                 "--allow-empty",
                 "-m",
@@ -7558,6 +7567,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -7711,6 +7721,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -7828,6 +7839,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -7912,6 +7924,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -8036,6 +8049,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -8162,6 +8176,7 @@ mod merge_worker_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -8242,6 +8257,7 @@ mod merge_tool_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
     }
@@ -8340,6 +8356,7 @@ mod merge_tool_tests {
             result_summary: None,
             error_detail: None,
             conflict_files: None,
+            commit_message: None,
         };
         store.insert_merge_op(&op).await.unwrap();
 
@@ -8516,6 +8533,7 @@ mod merge_tool_tests {
             result_summary: None,
             error_detail: Some("merge conflict detected".to_string()),
             conflict_files: Some(serde_json::to_string(&vec!["file1.rs", "file2.rs"]).unwrap()),
+            commit_message: None,
         };
         server.store.insert_merge_op(&op).await.unwrap();
 
@@ -8576,6 +8594,7 @@ mod merge_tool_tests {
             duration_ms: Some(320),
             result_summary: Some("merged 3 commits".to_string()),
             error_detail: None,
+            commit_message: None,
             conflict_files: None,
         };
         server.store.insert_merge_op(&op).await.unwrap();
@@ -8628,6 +8647,7 @@ mod merge_tool_tests {
             duration_ms: None,
             result_summary: None,
             error_detail: None,
+            commit_message: None,
             conflict_files: None,
         };
         server.store.insert_merge_op(&op).await.unwrap();
