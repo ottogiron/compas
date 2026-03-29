@@ -679,9 +679,13 @@ fn render_ops_list(
                 if is_running_now(row) {
                     if let Some(exec_id) = &row.execution_id {
                         if let Some(summary) = app.get_progress_summary(exec_id) {
-                            let avail = list_width
-                                .saturating_sub(DETAIL_PREFIX_LEN)
-                                .saturating_sub(HINT_SUFFIX_LEN);
+                            let avail = if is_selected {
+                                list_width
+                                    .saturating_sub(DETAIL_PREFIX_LEN)
+                                    .saturating_sub(HINT_SUFFIX_LEN)
+                            } else {
+                                list_width.saturating_sub(DETAIL_PREFIX_LEN)
+                            };
                             let truncated = super::truncate(summary, avail);
                             let padded = if is_selected {
                                 format!("{:<width$}", truncated, width = avail)
@@ -979,7 +983,7 @@ fn render_ops_list(
 
 /// The `[c] conversation` hint occupies a fixed-width suffix so it stays
 /// visually stable as the selection moves across rows with varying text.
-const DETAIL_PREFIX_LEN: usize = 7; // "     └─ "
+const DETAIL_PREFIX_LEN: usize = 7; // "     └ "
 const HINT_SUFFIX_LEN: usize = 20; // " │ [c] conversation"
 
 fn make_thread_detail_line(row: &ThreadStatusView, list_width: usize) -> Line<'static> {
