@@ -27,7 +27,7 @@ use ratatui::{
     DefaultTerminal, Frame,
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     io,
     path::PathBuf,
@@ -228,6 +228,10 @@ pub struct App {
     schedule_run_counts: Option<HashMap<String, (i64, u64)>>,
     /// Timestamp of the last schedule data refresh attempt.
     last_schedule_attempt: Option<Instant>,
+    /// Vertical scroll offset for the Settings tab content.
+    settings_scroll: u16,
+    /// Total number of content lines in the Settings tab (set during render).
+    settings_line_count: Cell<u16>,
     /// Click geometry cache for the Ops tab (populated during render).
     pub(crate) ops_click_cache: RefCell<OpsClickCache>,
     /// Click geometry cache for the History tab (populated during render).
@@ -301,6 +305,8 @@ impl App {
             progress_last_changed: HashMap::new(),
             schedule_run_counts: None,
             last_schedule_attempt: None,
+            settings_scroll: 0,
+            settings_line_count: Cell::new(0),
             ops_click_cache: RefCell::new(OpsClickCache::default()),
             history_click_cache: RefCell::new(HistoryClickCache::default()),
             agents_click_cache: RefCell::new(AgentsClickCache::default()),
@@ -671,6 +677,9 @@ impl App {
             1 => {
                 self.agents_selected = self.agents_selected.saturating_sub(1);
             }
+            3 => {
+                self.settings_scroll = self.settings_scroll.saturating_sub(1);
+            }
             _ => {}
         }
     }
@@ -713,6 +722,10 @@ impl App {
             1 => {
                 let max = self.config.load().agents.len().saturating_sub(1);
                 self.agents_selected = (self.agents_selected + 1).min(max);
+            }
+            3 => {
+                let max = self.settings_line_count.get().saturating_sub(1);
+                self.settings_scroll = (self.settings_scroll + 1).min(max);
             }
             _ => {}
         }
@@ -1017,6 +1030,9 @@ impl App {
             1 => {
                 self.agents_selected = 0;
             }
+            3 => {
+                self.settings_scroll = 0;
+            }
             _ => {}
         }
     }
@@ -1057,6 +1073,9 @@ impl App {
             }
             1 => {
                 self.agents_selected = self.config.load().agents.len().saturating_sub(1);
+            }
+            3 => {
+                self.settings_scroll = self.settings_line_count.get().saturating_sub(1);
             }
             _ => {}
         }
@@ -1510,6 +1529,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
             0 => app.refresh_activity(),
             1 => app.refresh_agents(),
             2 => app.refresh_executions(),
+            3 => app.refresh_schedules(),
             _ => {}
         },
         // Number keys jump directly to a tab (1-4 → index 0-3).
@@ -1871,7 +1891,8 @@ impl App {
             0 => render_activity(frame, self, content),
             1 => agents::render_agents_tab(frame, self, content),
             2 => executions::render_executions(frame, self, content),
-            _ => {} // Settings + fallback handled by Widget impl
+            3 => self.render_settings_with_frame(frame, content),
+            _ => {} // Fallback handled by Widget impl
         }
     }
 
@@ -1893,8 +1914,7 @@ impl App {
 
     fn render_content_widget(&self, area: Rect, buf: &mut Buffer) {
         match self.active_tab {
-            0..=2 => {} // Stateful tabs rendered by render_content_with_frame
-            3 => self.render_settings_widget(area, buf),
+            0..=3 => {} // Stateful tabs rendered by render_content_with_frame
             _ => {
                 let tab_name = TABS[self.active_tab];
                 let body = format!("  {} — coming soon", tab_name);
@@ -1905,11 +1925,13 @@ impl App {
         }
     }
 
-    fn render_settings_widget(&self, area: Rect, buf: &mut Buffer) {
+    fn render_settings_with_frame(&self, frame: &mut Frame, area: Rect) {
         let block = theme::panel("Settings");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
 
-        let label = |s: &str| s.to_string().fg(theme::TEXT_MUTED).bold();
-        let value = |s: String| s.fg(theme::TEXT_NORMAL);
+        let label = |text: &str| -> Span { format!("{:<14} ", text).fg(theme::TEXT_MUTED).bold() };
+        let value = |s: String| -> Span { s.fg(theme::TEXT_NORMAL) };
 
         let poll_secs = self.poll_interval.as_secs();
         let cfg = self.config.load();
@@ -1917,28 +1939,28 @@ impl App {
         let mut lines = vec![
             Line::from(vec![
                 Span::raw("  "),
-                label("Config:       "),
+                label("Config:"),
                 value(self.config_path.display().to_string()),
             ]),
             Line::from(vec![
                 Span::raw("  "),
-                label("DB:           "),
+                label("DB:"),
                 value(cfg.db_path().display().to_string()),
             ]),
             Line::from(vec![
                 Span::raw("  "),
                 label("Poll interval:"),
-                value(format!(" {}s", poll_secs)),
+                value(format!("{}s", poll_secs)),
             ]),
             Line::from(vec![
                 Span::raw("  "),
-                label("Agents:       "),
-                value(format!(" {}", cfg.agents.len())),
+                label("Agents:"),
+                value(format!("{}", cfg.agents.len())),
             ]),
             Line::from(vec![
                 Span::raw("  "),
-                label("Log dir:      "),
-                value(format!(" {}", self.log_dir.display())),
+                label("Log dir:"),
+                value(format!("{}", self.log_dir.display())),
             ]),
         ];
 
@@ -1947,18 +1969,23 @@ impl App {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::raw("  "),
-            label("Schedules:    "),
-            value(format!(" {}", schedules.len())),
+            label("Schedules:"),
+            value(format!("{}", schedules.len())),
         ]));
 
-        if !schedules.is_empty() {
+        if schedules.is_empty() {
             lines.push(Line::from(""));
-            // Header row
+            lines.push(Line::from(
+                "  No schedules configured.".fg(theme::TEXT_MUTED),
+            ));
+        } else {
+            lines.push(Line::from(""));
+            // Header row — fits within 80-col inner width.
             lines.push(Line::from(vec![
                 Span::raw("  "),
                 format!(
-                    "{:<16} {:<12} {:<18} {:<16} {:<12} {}",
-                    "Name", "Agent", "Cron", "Next Fire", "Runs/Max", "Status"
+                    "{:<14} {:<10} {:<14} {:<10} {:<8} {}",
+                    "Name", "Agent", "Cron", "Next", "Runs", "Status"
                 )
                 .fg(theme::TEXT_MUTED)
                 .bold(),
@@ -2003,31 +2030,34 @@ impl App {
 
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    format!("{:<16}", crate::dashboard::views::truncate(&sched.name, 15))
+                    format!("{:<14}", crate::dashboard::views::truncate(&sched.name, 13))
                         .fg(name_color),
                     Span::raw(" "),
-                    format!(
-                        "{:<12}",
-                        crate::dashboard::views::truncate(&sched.agent, 11)
-                    )
-                    .fg(theme::TEXT_NORMAL),
+                    format!("{:<10}", crate::dashboard::views::truncate(&sched.agent, 9))
+                        .fg(theme::TEXT_NORMAL),
                     Span::raw(" "),
-                    format!("{:<18}", crate::dashboard::views::truncate(&sched.cron, 17))
+                    format!("{:<14}", crate::dashboard::views::truncate(&sched.cron, 13))
                         .fg(theme::TEXT_MUTED),
                     Span::raw(" "),
-                    format!("{:<16}", next_fire).fg(theme::ACCENT),
+                    format!("{:<10}", crate::dashboard::views::truncate(&next_fire, 9))
+                        .fg(theme::ACCENT),
                     Span::raw(" "),
-                    format!("{:<12}", runs_label).fg(theme::TEXT_NORMAL),
+                    format!("{:<8}", runs_label).fg(theme::TEXT_NORMAL),
                     Span::raw(" "),
                     status_label.to_string().fg(status_color),
                 ]));
             }
         }
 
-        Paragraph::new(lines)
+        // Track total line count for scroll bounds (interior mutability to
+        // allow updating from an &self method — same pattern as click caches).
+        self.settings_line_count.set(lines.len() as u16);
+
+        let scroll = self.settings_scroll;
+        let paragraph = Paragraph::new(lines)
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
-            .block(block)
-            .render(area, buf);
+            .scroll((scroll, 0));
+        frame.render_widget(paragraph, inner);
     }
 
     fn render_status_bar_widget(&self, area: Rect, buf: &mut Buffer) {
@@ -2073,6 +2103,14 @@ impl App {
                 spans.push(sep());
                 spans.push(key("j/k"));
                 spans.push(Span::raw(": select agent"));
+            }
+            3 => {
+                spans.push(sep());
+                spans.push(key("j/k"));
+                spans.push(Span::raw(": scroll"));
+                spans.push(sep());
+                spans.push(key("r"));
+                spans.push(Span::raw(": refresh"));
             }
             _ => {}
         }
