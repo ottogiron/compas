@@ -3,149 +3,44 @@
 # Pre-commit hook: Enforce ticket tracking for code changes
 #
 # Blocks commits when code files are changed without an active ticket session.
-# Supports multiple concurrent sessions via .sessions/ directory.
+# Sessions are stored in SQLite (.ticket/state.db), managed by `ticket` CLI.
 # To start a session: ticket start <ticket-id>
 #
 
 set -e
 
 # Resolve main repo root — works in both main checkout and worktrees.
-# git-common-dir returns ".git" in the main repo, or an absolute path
-# to the shared .git dir when inside a worktree.
 GIT_COMMON="$(git rev-parse --git-common-dir)"
 if [ "$GIT_COMMON" = ".git" ]; then
     REPO_ROOT="$(git rev-parse --show-toplevel)"
 else
     REPO_ROOT="$(cd "$GIT_COMMON/.." && pwd)"
 fi
-SESSION_DIR="$REPO_ROOT/.sessions"
 
-# Migrate legacy .session file if present
-LEGACY_SESSION="$REPO_ROOT/.session"
-if [ -f "$LEGACY_SESSION" ]; then
-    ticket_id="$(grep -E '^ticket_id:' "$LEGACY_SESSION" | head -n1 | sed -E 's/^ticket_id:[[:space:]]*//')"
-    if [ -n "$ticket_id" ]; then
-        mkdir -p "$SESSION_DIR"
-        cp "$LEGACY_SESSION" "$SESSION_DIR/${ticket_id}.yaml"
-        rm "$LEGACY_SESSION"
-    fi
-fi
-
-# Check if any session exists in .sessions/
-has_valid_session=false
-if [ -d "$SESSION_DIR" ]; then
-    for session_file in "$SESSION_DIR"/*.yaml; do
-        [ -f "$session_file" ] || continue
-
-        ticket_id="$(grep -E '^ticket_id:' "$session_file" | head -n1 | sed -E 's/^ticket_id:[[:space:]]*//')"
-        start_time="$(grep -E '^start:' "$session_file" | head -n1 | sed -E 's/^start:[[:space:]]*//')"
-        backlog_file="$(grep -E '^file:' "$session_file" | head -n1 | sed -E 's/^file:[[:space:]]*//')"
-
-        if [ -z "$ticket_id" ] || [ -z "$start_time" ] || [ -z "$backlog_file" ]; then
-            echo "WARNING: Invalid session file $(basename "$session_file") (missing fields), skipping."
-            continue
-        fi
-
-        if [ ! -f "$backlog_file" ]; then
-            echo "WARNING: Session $(basename "$session_file") references missing backlog: $backlog_file"
-            continue
-        fi
-
-        mode="$(grep -E '^mode:' "$session_file" | head -n1 | sed -E 's/^mode:[[:space:]]*//')"
-
-        if [ "$mode" != "batch" ]; then
-            if ! grep -Eq "^## Ticket ${ticket_id}([[:space:]]|$)" "$backlog_file"; then
-                echo "WARNING: Session $(basename "$session_file") — ticket $ticket_id not found in backlog."
-                continue
-            fi
-        fi
-
-        # This session is valid
-        has_valid_session=true
-
-        # Enforce backlog-first for this session's backlog file
-        if git rev-parse --verify HEAD >/dev/null 2>&1; then
-            backlog_rel="$backlog_file"
-            case "$backlog_file" in
-                "$REPO_ROOT"/*)
-                    backlog_rel="${backlog_file#"$REPO_ROOT"/}"
-                    ;;
-            esac
-
-            if ! git cat-file -e "HEAD:$backlog_rel" 2>/dev/null; then
-                has_code=false
-                for staged in $(git diff --cached --name-only --diff-filter=ACMR); do
-                    case "$staged" in
-                        src/*|tests/*|crates/*|examples/*|*.rs)
-                            has_code=true
-                            break
-                            ;;
-                    esac
-                done
-                if [ "$has_code" = true ]; then
-                    echo "ERROR: Backlog file is not committed in HEAD: $backlog_rel"
-                    echo "Backlog-first rule requires creating and committing backlog before code work."
-                    echo ""
-                    echo "Commit the backlog file first, then commit code changes:"
-                    echo "  git add $backlog_rel && git commit -m 'docs: add backlog'"
-                    exit 1
-                fi
-            fi
-        fi
-    done
-fi
-
-if [ "$has_valid_session" = true ]; then
-    # Reconcile gate: when code files are staged, verify session consistency
-    # against the backlog via `ticket reconcile`. Docs-only commits bypass.
-    code_staged=false
-    for file in $(git diff --cached --name-only --diff-filter=ACMR); do
-        case "$file" in
-            src/*|tests/*|crates/*|examples/*|*.rs)
-                code_staged=true
-                break
-                ;;
-        esac
-    done
-
-    if [ "$code_staged" = true ]; then
-        if ! ticket reconcile --json --repo-root "$REPO_ROOT" >/dev/null 2>&1; then
-            echo "ERROR: ticket reconcile detected stale or inconsistent sessions."
-            echo ""
-            ticket reconcile --repo-root "$REPO_ROOT" || true
-            echo ""
-            echo "Fix the reported issues, then retry your commit."
-            exit 1
-        fi
-    fi
-
-    exit 0
-fi
-
-# No valid session found — check if code files are staged
-STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACMR)
-
-CODE_CHANGED=false
-for file in $STAGED_FILES; do
+# Check if any code files are staged
+CODE_STAGED=false
+for file in $(git diff --cached --name-only --diff-filter=ACMR); do
     case "$file" in
-        src/*|tests/*|crates/*|examples/*)
-            CODE_CHANGED=true
-            break
-            ;;
-        *.rs)
-            CODE_CHANGED=true
+        src/*|tests/*|crates/*|examples/*|*.rs)
+            CODE_STAGED=true
             break
             ;;
     esac
 done
 
-if [ "$CODE_CHANGED" = true ]; then
-    echo "ERROR: No active ticket session."
+# Docs-only commits bypass session enforcement
+if [ "$CODE_STAGED" = false ]; then
+    exit 0
+fi
+
+# Code files are staged — enforce ticket session via reconcile
+if ! ticket reconcile --json --strict --repo-root "$REPO_ROOT" >/dev/null 2>&1; then
+    echo "ERROR: ticket reconcile failed."
     echo ""
-    echo "Code changes require an active ticket. Run:"
-    echo "  ticket start <ticket-id>"
+    ticket reconcile --repo-root "$REPO_ROOT" || true
     echo ""
-    echo "If you don't have a ticket yet, create one in docs/project/backlog/ first."
+    echo "If no active session, run: ticket start <ticket-id>"
+    echo "Fix the reported issues, then retry your commit."
     exit 1
 fi
 

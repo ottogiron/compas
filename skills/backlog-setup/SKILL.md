@@ -27,8 +27,7 @@ Do not use for one-off or trivial changes that do not require multi-ticket gover
    - `Dependencies`
    - `Acceptance criteria`
    - `Verification`
-   - `Status`
-4. Set ticket status to `Todo` and batch header `Status: Active`.
+4. Set batch header `Status: Active`. Ticket status is tracked in SQLite via `ticket` CLI, not in the .md file.
 5. Validate batch session resolution:
 
    ```bash

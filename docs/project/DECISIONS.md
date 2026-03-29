@@ -30,7 +30,7 @@ This avoids SDK dependencies and works with any tool that has a CLI.
 **Date:** 2026-03
 **Status:** Active
 
-Moved from single `.session` file to `.sessions/` directory with per-key YAML files. Multiple batches (e.g., compiler + orchestrator) can run concurrently. Pre-commit hook validates any active session and runs `ticket reconcile` on code commits to catch stale or inconsistent sessions (strict consistency policy, upgraded from the original permissive policy).
+Moved from single `.session` file to `.sessions/` YAML files, then migrated to SQLite (`.ticket/state.db`). Multiple batches (e.g., compiler + orchestrator) can run concurrently. Pre-commit hook runs `ticket reconcile --json --strict` on code commits to catch stale or inconsistent sessions (strict consistency policy). Status and metrics are stored in SQLite, not in backlog .md files.
 
 ## ADR-005: Standalone ticket-tracker repo
 

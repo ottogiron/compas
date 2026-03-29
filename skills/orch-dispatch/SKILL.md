@@ -268,20 +268,13 @@ Based on reviewer response:
 
 After merge + close confirmation:
 
-1. Update ticket status in the backlog file:
-   - Change `- Status: Todo` (or `In Progress`) to `- Status: Done` for the completed ticket(s)
-
-2. Update execution metrics (same backlog file):
-   - Fill in Start, End, Duration from orch timestamps
-   - Add Notes if relevant (e.g., "required 2 review rounds")
-
-3. Clean the NEXT queue (`docs/project/backlog/NEXT.md`):
-   - Remove the completed ticket from the Queue section
-   - Renumber remaining items sequentially
-
-4. Close ticket session:
+1. Close ticket session (records status and metrics in SQLite):
    - `ticket done <ticket-id>`
    - Or `ticket done <batch-id> --batch` if all tickets in the batch are done
+
+2. Clean the NEXT queue (`docs/project/backlog/NEXT.md`):
+   - Remove the completed ticket from the Queue section
+   - Renumber remaining items sequentially
 
 Step 9 runs only on the happy path (merge succeeded). On rejection or abandonment, the ticket stays as-is.
 

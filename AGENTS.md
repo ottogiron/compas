@@ -70,24 +70,26 @@ make mcp-server     # run MCP server
 
 ### Session tracking
 
-This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for session tracking.
+This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for session tracking. Execution state is stored in `.ticket/state.db` (SQLite).
 
 Release operations (changelog batching/merge, version bump, tagging, pushing, and release verification) are exempt from `ticket` session tracking. Feature and bugfix work still requires tickets.
 Backlog files are the authoritative source of truth for ticket status. `ticket` reflects operator session state and must be reconciled to the backlog, not the other way around.
 When a ticket leaves active execution, close or reconcile the matching session in the same work session with `ticket done` or `ticket blocked`.
 
 ```bash
-ticket start <ticket-id>           # start a ticket session
-ticket start <batch-id> --batch    # start a batch session
-ticket done <ticket-id>            # close a ticket
-ticket done <batch-id> --batch     # close a batch
-ticket status                      # show active sessions
+ticket start <ticket-id>           # create a SQLite session
+ticket start <batch-id> --batch    # create a batch session
+ticket done <ticket-id>            # close a session (records metrics in SQLite)
+ticket done <batch-id> --batch     # close a batch session
+ticket status                      # query active sessions from SQLite
 ticket blocked <id> "<reason>"     # mark as blocked
 ticket note <id> "<note>"          # add tracking note
-ticket reconcile                   # repo-side truth check — detects stale/inconsistent sessions
+ticket reconcile                   # validate SQLite sessions against backlog headings
+ticket import                      # populate SQLite from existing .md files (one-shot migration)
+ticket report <id>                 # generate status/metrics output from SQLite
 ```
 
-The pre-commit hook runs `ticket reconcile` on code commits as the authoritative consistency check. Sessions that are stale, reference missing backlogs, or have status mismatches will fail the gate. Run `ticket reconcile` manually to preview what the hook will check.
+The pre-commit hook runs `ticket reconcile --json --strict` on code commits as the authoritative consistency check. Sessions that are stale, reference missing backlogs, or have status mismatches will fail the gate. Run `ticket reconcile` manually to preview what the hook will check.
 
 **Never bypass the pre-commit hook with `--no-verify`.** Run `make setup-hooks` after cloning to install the hook.
 
