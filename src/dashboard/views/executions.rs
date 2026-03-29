@@ -17,9 +17,7 @@ use std::collections::HashMap;
 
 use crate::dashboard::app::App;
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::{
-    format_duration_ms, format_duration_secs, humanize_exec_status, is_running_exec_status,
-};
+use crate::dashboard::views::{format_duration_ms, format_duration_secs, humanize_exec_status};
 use crate::store::ExecutionRow;
 
 pub const HISTORY_UNBATCHED_KEY: &str = "__UNBATCHED__";
@@ -120,7 +118,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         }
 
         // Batch header: full-width styled divider (H3).
-        let progress = format!("({}/{})", group.completed_count, group.total_count);
+        let progress = format!("({}/{})", group.succeeded_count, group.total_count);
         let fill_text = if group.hidden_count > 0 {
             format!("─── +{} more ─────────────────────────", group.hidden_count)
         } else {
@@ -149,22 +147,23 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
             let status_color = theme::exec_status_color(&e.status);
 
-            // H8: elapsed time for running executions.
-            let (duration, duration_style) = if is_running_exec_status(&e.status) {
-                let start = e.started_at.or(e.picked_up_at).unwrap_or(e.queued_at);
-                let elapsed_secs = (now_secs - start).max(0);
-                (
-                    format!("{} {}", MARKER_RUNNING, format_duration_secs(elapsed_secs)),
-                    Style::new().fg(ACCENT),
-                )
-            } else {
-                (
-                    e.duration_ms
-                        .map(format_duration_ms)
-                        .unwrap_or_else(|| "-".to_string()),
-                    Style::new().fg(TEXT_NORMAL),
-                )
-            };
+            // H8: elapsed time for executing/picked_up only (not queued).
+            let (duration, duration_style) =
+                if matches!(e.status.as_str(), "executing" | "picked_up") {
+                    let start = e.started_at.or(e.picked_up_at).unwrap_or(e.queued_at);
+                    let elapsed_secs = (now_secs - start).max(0);
+                    (
+                        format!("{} {}", MARKER_RUNNING, format_duration_secs(elapsed_secs)),
+                        Style::new().fg(ACCENT),
+                    )
+                } else {
+                    (
+                        e.duration_ms
+                            .map(format_duration_ms)
+                            .unwrap_or_else(|| "-".to_string()),
+                        Style::new().fg(TEXT_NORMAL),
+                    )
+                };
 
             let exit_code = e
                 .exit_code
@@ -256,7 +255,7 @@ struct BatchGroup {
     indices: Vec<usize>,
     hidden_count: usize,
     total_count: usize,
-    completed_count: usize,
+    succeeded_count: usize,
 }
 
 fn sort_execution_indices_desc(executions: &[ExecutionRow], indices: &mut [usize]) {
@@ -328,7 +327,7 @@ fn group_execution_indices_by_batch(
             let mut indices = grouped.remove(&key).unwrap_or_default();
             sort_execution_indices_desc(executions, &mut indices);
             let total_count = indices.len();
-            let completed_count = indices
+            let succeeded_count = indices
                 .iter()
                 .filter(|&&idx| executions[idx].status == "completed")
                 .count();
@@ -341,7 +340,7 @@ fn group_execution_indices_by_batch(
                 indices,
                 hidden_count,
                 total_count,
-                completed_count,
+                succeeded_count,
             }
         })
         .collect()
