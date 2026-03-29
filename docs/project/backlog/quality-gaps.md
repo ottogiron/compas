@@ -63,7 +63,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
   - Unit test: simulate N failures, verify circuit opens, verify cooldown resets
   - Integration test: configure a backend with a failing command, verify circuit behavior
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Done
+- Status: In Progress
 - Complexity: S-M
 - Risk: Low
 - Notes: The deprecated `aster-orchestrator` had a circuit breaker (3 failures, 60s cooldown). Restore with the new architecture.
@@ -91,7 +91,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Verification:
   - Unit test: mock backend stderr with stale session patterns, verify retry logic
   - `make verify` (fmt-check + clippy + test + lint-md)
-- Status: Done
+- Status: In Progress
 - Complexity: S
 - Risk: Low
 - Notes: Fixes two known issues from `known-issues.md`. Probe (2026-03-22) showed Claude sessions expire under 27 hours. Codex self-heals. OpenCode hangs (timeout catches it). Fix is Claude-specific: match "No conversation found with session ID" pattern.
@@ -245,6 +245,25 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Risk: Low
 - Notes: Standard package manager installation is expected for CLI tools targeting broad adoption. `cargo install --git` with a Rust toolchain requirement limits trial adoption.
 
+## Ticket GAP-8 — Release Policy Exception for Ticket Tracking
+
+- Goal: Allow release operations to proceed without `ticket` session tracking while keeping tickets required for feature/bug work.
+- In scope:
+  - Update `AGENTS.md` session tracking policy to exempt release operations
+  - Clarify that feature/bug work still requires tickets
+- Out of scope:
+  - Changes to other governance rules (review policy, quality gates)
+  - Changes to backlog workflow
+- Dependencies: None
+- Acceptance criteria:
+  - `AGENTS.md` explicitly states releases are exempt from ticket tracking
+  - Ticket requirement remains for feature/bug work
+- Verification:
+  - Manual: review updated `AGENTS.md` language for clarity
+- Status: Done
+- Complexity: XS
+- Risk: None
+
 ---
 
 ## Deferred: Visual Orchestration Canvas
@@ -287,11 +306,12 @@ Could be a view in the Tauri desktop app (depends on MFE-2).
 2. **GAP-1** (circuit breaker) — small, restores a feature from aster-orchestrator
 3. **GAP-5** (mouse support) — small, pure ergonomic win
 4. **GAP-7** (distribution) — medium, unblocks adoption
-5. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
-6. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
-7. **GAP-6** (shared context) — medium, new coordination primitive
+5. **GAP-8** (release policy exception) — small, governance tweak
+6. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
+7. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
+8. **GAP-6** (shared context) — medium, new coordination primitive
 
-GAP-1 through GAP-5 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
+GAP-1 through GAP-5 and GAP-8 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
 
 ### Cross-backlog priority recommendation (all open tickets across all backlogs)
 
@@ -320,7 +340,16 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 - Record scope changes/deferrals here.
 - Gap analysis: completed 2026-03-22.
 
+- [GAP-7] Session opened to add GAP-8; switching to GAP-8.
 ## Execution Metrics
+- Ticket: GAP-8
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-29 02:45 UTC
+- End: 2026-03-29 02:51 UTC
+- Duration: 00:06:33
+- Notes: (pending)
 
 - Ticket: GAP-1
 - Owner: otto
@@ -387,6 +416,12 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 
 
 - Start: 2026-03-29 02:35 UTC
+
+
+- End: 2026-03-29 02:45 UTC
+
+
+- Duration: 00:09:04
 
 ## Closure Evidence
 

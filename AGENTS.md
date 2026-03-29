@@ -72,6 +72,8 @@ make mcp-server     # run MCP server
 
 This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for session tracking.
 
+Release operations (changelog batching/merge, version bump, tagging, pushing, and release verification) are exempt from `ticket` session tracking. Feature and bugfix work still requires tickets.
+
 ```bash
 ticket start <ticket-id>           # start a ticket session
 ticket start <batch-id> --batch    # start a batch session
