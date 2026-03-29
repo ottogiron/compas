@@ -42,7 +42,7 @@ Created: 2026-03-29
 - Verification:
   - `make verify`
   - Manual: config with `agent_defaults`, verify `orch_list_agents` shows resolved values
-- Status: In Progress
+- Status: Done
 
 ## Execution Order
 
@@ -60,5 +60,7 @@ Created: 2026-03-29
 - Complexity: M
 - Risk: Low
 - Start: 2026-03-29 12:28 UTC
-- Duration:
-- Notes:
+- Duration: 00:47:03
+
+- End: 2026-03-29 13:15 UTC
+
