@@ -173,6 +173,7 @@ Created: 2026-03-29
 - [SEC-1] Closing stale session during GAP-9 cleanup; backlog ticket is already marked Done.
 
 ## Execution Metrics
+
 - Ticket: SEC-6
 - Owner: (pending)
 - Complexity: (pending)

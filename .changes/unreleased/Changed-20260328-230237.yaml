@@ -1,3 +1,0 @@
-kind: Changed
-body: Filter superseded failed merge ops from TUI merge queue when a later success exists for the same (thread_id, target_branch) pair
-time: 2026-03-28T23:02:37.195402+01:00

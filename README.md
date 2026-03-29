@@ -34,7 +34,7 @@ cargo binstall --git-url https://github.com/ottogiron/compas compas
 **From source:**
 
 ```bash
-cargo install --git https://github.com/ottogiron/compas --tag v0.4.3
+cargo install --git https://github.com/ottogiron/compas --tag v0.5.0
 ```
 
 **Upgrading:** `brew upgrade compas` (or `cargo install --force` with the new tag).

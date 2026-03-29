@@ -1,3 +1,0 @@
-kind: Changed
-body: Output tab in execution detail shows agent narrative text instead of raw JSONL protocol events in humanized mode
-time: 2026-03-29T00:27:48.185389+01:00

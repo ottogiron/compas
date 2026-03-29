@@ -1,3 +1,0 @@
-kind: Changed
-body: orch_list_agents now includes handoff routing metadata (handoff_to, await_chain_recommended, max_chain_depth) and orch_dispatch next_step hints are target-agent-aware
-time: 2026-03-29T06:20:10.223965+02:00

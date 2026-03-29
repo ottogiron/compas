@@ -1,3 +1,0 @@
-kind: Changed
-body: 'Execution detail: fix markdown rendering (standalone mode, blank-above-headings, themed inline code, dynamic rules, stronger code blocks), apply markdown to Output tab, reorder tabs to Input | Output | Timeline'
-time: 2026-03-29T00:58:57.540793+01:00

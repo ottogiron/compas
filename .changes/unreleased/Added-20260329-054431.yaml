@@ -1,3 +1,0 @@
-kind: Added
-body: 'SEC-6: Queue depth guard (max_queued_executions), orch_abandon kills subprocesses, orch_abandon_batch tool'
-time: 2026-03-29T05:44:31.06555+02:00

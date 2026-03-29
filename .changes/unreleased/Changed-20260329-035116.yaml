@@ -1,3 +1,0 @@
-kind: Changed
-body: 'History tab UX: drop Thread ID/Prov columns for 80-col Error visibility, batch headers as full-width dividers with completion progress, context-sensitive footer hints, elapsed time for running executions, remove blank separator rows'
-time: 2026-03-29T03:51:16.512167+02:00
