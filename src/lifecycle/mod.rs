@@ -48,6 +48,17 @@ pub struct AbandonOutcome {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct AbandonBatchOutcome {
+    pub batch_id: String,
+    pub threads_abandoned: u64,
+    pub threads_already_terminal: u64,
+    pub total_executions_cancelled: u64,
+    pub total_processes_killed: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ReopenOutcome {
     pub thread_id: String,
     pub previous_status: String,
@@ -213,6 +224,62 @@ impl LifecycleService {
             executions_cancelled: cancelled,
             processes_killed,
             worktree_branch,
+        })
+    }
+
+    pub async fn abandon_batch(
+        &self,
+        batch_id: &str,
+    ) -> Result<AbandonBatchOutcome, LifecycleError> {
+        let threads = self
+            .store
+            .list_threads(Some(batch_id), None, 500)
+            .await
+            .map_err(|e| LifecycleError::LookupFailed {
+                message: format!("failed to list threads for batch '{}': {}", batch_id, e),
+            })?;
+
+        let mut threads_abandoned: u64 = 0;
+        let mut threads_already_terminal: u64 = 0;
+        let mut total_executions_cancelled: u64 = 0;
+        let mut total_processes_killed: u64 = 0;
+        let mut errors: Vec<String> = Vec::new();
+
+        for thread in &threads {
+            let status = match thread.status.parse::<ThreadStatus>() {
+                Ok(s) => s,
+                Err(e) => {
+                    errors.push(format!(
+                        "{}: unrecognized status '{}': {}",
+                        thread.thread_id, thread.status, e
+                    ));
+                    continue;
+                }
+            };
+            if status.is_terminal() {
+                threads_already_terminal += 1;
+                continue;
+            }
+
+            match self.abandon(&thread.thread_id).await {
+                Ok(outcome) => {
+                    threads_abandoned += 1;
+                    total_executions_cancelled += outcome.executions_cancelled;
+                    total_processes_killed += outcome.processes_killed;
+                }
+                Err(e) => {
+                    errors.push(format!("{}: {}", thread.thread_id, e));
+                }
+            }
+        }
+
+        Ok(AbandonBatchOutcome {
+            batch_id: batch_id.to_string(),
+            threads_abandoned,
+            threads_already_terminal,
+            total_executions_cancelled,
+            total_processes_killed,
+            errors,
         })
     }
 
@@ -537,5 +604,103 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.status, "Completed");
+    }
+
+    // ── abandon_batch tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_abandon_batch_all_active() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", Some("b-1"), None).await.unwrap();
+        store.ensure_thread("t-2", Some("b-1"), None).await.unwrap();
+        store.ensure_thread("t-3", Some("b-1"), None).await.unwrap();
+        store.insert_execution("t-1", "focused").await.unwrap();
+        store.insert_execution("t-2", "focused").await.unwrap();
+        store.insert_execution("t-3", "focused").await.unwrap();
+        let svc = LifecycleService::new(store.clone());
+
+        let out = svc.abandon_batch("b-1").await.unwrap();
+        assert_eq!(out.batch_id, "b-1");
+        assert_eq!(out.threads_abandoned, 3);
+        assert_eq!(out.threads_already_terminal, 0);
+        assert!(out.errors.is_empty());
+
+        // All threads should now be Abandoned
+        for tid in &["t-1", "t-2", "t-3"] {
+            let status = store.get_thread_status(tid).await.unwrap().unwrap();
+            assert_eq!(status, "Abandoned");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_mixed_states() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", Some("b-2"), None).await.unwrap();
+        store.ensure_thread("t-2", Some("b-2"), None).await.unwrap();
+        store.ensure_thread("t-3", Some("b-2"), None).await.unwrap();
+        // Set one thread to Completed (terminal)
+        store
+            .update_thread_status("t-2", ThreadStatus::Completed)
+            .await
+            .unwrap();
+        let svc = LifecycleService::new(store.clone());
+
+        let out = svc.abandon_batch("b-2").await.unwrap();
+        assert_eq!(out.threads_abandoned, 2);
+        assert_eq!(out.threads_already_terminal, 1);
+        assert!(out.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_empty() {
+        let store = test_store().await;
+        let svc = LifecycleService::new(store);
+
+        let out = svc.abandon_batch("nonexistent-batch").await.unwrap();
+        assert_eq!(out.threads_abandoned, 0);
+        assert_eq!(out.threads_already_terminal, 0);
+        assert!(out.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_unrecognized_status_collects_error() {
+        let store = test_store().await;
+        store
+            .ensure_thread("t-1", Some("b-err"), None)
+            .await
+            .unwrap();
+        // Force an unrecognized status via raw SQL
+        sqlx::query("UPDATE threads SET status = 'Bogus' WHERE thread_id = 't-1'")
+            .execute(store.pool())
+            .await
+            .unwrap();
+        let svc = LifecycleService::new(store);
+
+        let out = svc.abandon_batch("b-err").await.unwrap();
+        assert_eq!(out.threads_abandoned, 0);
+        assert_eq!(out.threads_already_terminal, 0);
+        assert_eq!(out.errors.len(), 1);
+        assert!(out.errors[0].contains("unrecognized status"));
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_all_terminal() {
+        let store = test_store().await;
+        store.ensure_thread("t-1", Some("b-3"), None).await.unwrap();
+        store.ensure_thread("t-2", Some("b-3"), None).await.unwrap();
+        store
+            .update_thread_status("t-1", ThreadStatus::Completed)
+            .await
+            .unwrap();
+        store
+            .update_thread_status("t-2", ThreadStatus::Completed)
+            .await
+            .unwrap();
+        let svc = LifecycleService::new(store);
+
+        let out = svc.abandon_batch("b-3").await.unwrap();
+        assert_eq!(out.threads_abandoned, 0);
+        assert_eq!(out.threads_already_terminal, 2);
+        assert!(out.errors.is_empty());
     }
 }
