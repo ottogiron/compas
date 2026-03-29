@@ -4,7 +4,7 @@ Last updated: 2026-03-29
 
 ## Active
 
-No tickets currently in-flight.
+- CAP-VIS — Agent capacity visibility in orch_list_agents (`capacity-visibility.md`)
 
 > Update this section from `ticket status` output. Remove entries when their ticket is closed.
 
