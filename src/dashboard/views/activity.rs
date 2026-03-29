@@ -53,6 +53,7 @@ struct BatchProgress {
 #[derive(Debug, Default)]
 struct ClassifiedRows {
     running: Vec<usize>,
+    failures: Vec<usize>,
     scheduled: Vec<usize>,
     active_threads: Vec<usize>,
     uncategorized: Vec<usize>,
@@ -84,6 +85,13 @@ fn is_recently_completed(t: &ThreadStatusView) -> bool {
     t.execution_status.as_deref() == Some("completed") || t.thread_status == "Completed"
 }
 
+fn is_failure(t: &ThreadStatusView) -> bool {
+    matches!(
+        t.execution_status.as_deref(),
+        Some("failed") | Some("crashed") | Some("timed_out")
+    ) || t.thread_status == "Failed"
+}
+
 fn is_scheduled(t: &ThreadStatusView, now_unix: i64) -> bool {
     t.execution_status.as_deref() == Some("queued") && t.eligible_at.is_some_and(|ea| ea > now_unix)
 }
@@ -108,6 +116,8 @@ fn classify_rows(
     for (idx, row) in &filtered {
         if is_running_now(row) {
             out.running.push(*idx);
+        } else if is_failure(row) {
+            out.failures.push(*idx);
         } else if is_scheduled(row, now_unix) {
             out.scheduled.push(*idx);
         } else if is_active_waiting(row, now_unix, stale_after_secs) {
@@ -120,6 +130,7 @@ fn classify_rows(
     }
 
     sort_indices_by_updated(rows, &mut out.running);
+    sort_indices_by_updated(rows, &mut out.failures);
     sort_scheduled_by_eligible_at(rows, &mut out.scheduled);
     sort_indices_by_updated(rows, &mut out.active_threads);
     sort_indices_by_updated(rows, &mut out.uncategorized);
@@ -306,6 +317,7 @@ pub fn ops_selectable_targets(
     let classified = classify_rows(rows, drill_batch, now_unix, stale_after_secs);
     let mut out = Vec::new();
 
+    // 1. Running
     out.extend(
         classified
             .running
@@ -313,13 +325,15 @@ pub fn ops_selectable_targets(
             .copied()
             .map(OpsSelectable::Thread),
     );
+    // 2. Failures
     out.extend(
         classified
-            .scheduled
+            .failures
             .iter()
             .copied()
             .map(OpsSelectable::Thread),
     );
+    // 3. Active Batches
     if drill_batch.is_none() {
         out.extend(
             capped_batches(&classified.active_batches)
@@ -327,6 +341,16 @@ pub fn ops_selectable_targets(
                 .map(|b| OpsSelectable::Batch(b.batch_id.clone())),
         );
     }
+    // 4. Merge Queue — not shown when drilling into a batch.
+    if drill_batch.is_none() {
+        let visible_merge_ops = filter_merge_ops(merge_ops, now_unix);
+        out.extend(
+            visible_merge_ops
+                .iter()
+                .map(|op| OpsSelectable::MergeOp(op.id.clone())),
+        );
+    }
+    // 5. Active Threads
     out.extend(
         classified
             .active_threads
@@ -343,22 +367,22 @@ pub fn ops_selectable_targets(
                 .map(OpsSelectable::Thread),
         );
     }
-    // Merge queue — between Active Threads and Recently Completed.
-    // Not shown when drilling into a batch (merge ops are not batch-scoped).
-    if drill_batch.is_none() {
-        let visible_merge_ops = filter_merge_ops(merge_ops, now_unix);
-        out.extend(
-            visible_merge_ops
-                .iter()
-                .map(|op| OpsSelectable::MergeOp(op.id.clone())),
-        );
-    }
+    // 6. Scheduled
+    out.extend(
+        classified
+            .scheduled
+            .iter()
+            .copied()
+            .map(OpsSelectable::Thread),
+    );
+    // 7. Recently Completed
     out.extend(
         capped_recently_completed(&classified.recently_completed)
             .iter()
             .copied()
             .map(OpsSelectable::Thread),
     );
+    // 8. Batches
     if drill_batch.is_none() {
         out.extend(
             capped_batches(&classified.batches)
@@ -612,6 +636,7 @@ fn render_ops_list(
     }
 
     let all_active_empty = classified.running.is_empty()
+        && classified.failures.is_empty()
         && classified.scheduled.is_empty()
         && (app.drill_batch.is_some() || classified.active_batches.is_empty())
         && classified.active_threads.is_empty();
@@ -621,8 +646,9 @@ fn render_ops_list(
             "  no active work".to_string().fg(theme::TEXT_DIM),
         )));
     } else {
-        let mut rendered_active_section = false;
+        let mut rendered_section = false;
 
+        // 1. Running
         if !classified.running.is_empty() {
             push_section_header(
                 &mut items,
@@ -678,20 +704,21 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
-            rendered_active_section = true;
+            rendered_section = true;
         }
 
-        if !classified.scheduled.is_empty() {
-            if rendered_active_section {
+        // 2. Failures (only when non-empty)
+        if !classified.failures.is_empty() {
+            if rendered_section {
                 items.push(ListItem::new(Line::from(Span::raw(""))));
             }
             push_section_header(
                 &mut items,
-                "Scheduled",
-                classified.scheduled.len(),
-                theme::TEXT_MUTED,
+                "Failures",
+                classified.failures.len(),
+                theme::FAILURE,
             );
-            for src_idx in &classified.scheduled {
+            for src_idx in &classified.failures {
                 let Some(row) = data.rows.get(*src_idx) else {
                     continue;
                 };
@@ -699,16 +726,17 @@ fn render_ops_list(
                 sel_to_row.push(items.len());
                 let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
                 if is_selected {
-                    lines.push(make_scheduled_detail_line(row, now_unix, list_width));
+                    lines.push(make_thread_detail_line(row, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
-            rendered_active_section = true;
+            rendered_section = true;
         }
 
+        // 3. Active Batches
         if app.drill_batch.is_none() && !classified.active_batches.is_empty() {
-            if rendered_active_section {
+            if rendered_section {
                 items.push(ListItem::new(Line::from(Span::raw(""))));
             }
             push_section_header(
@@ -734,11 +762,48 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
-            rendered_active_section = true;
+            rendered_section = true;
         }
 
+        // 4. Merge Queue — not shown when drilling into a batch.
+        let visible_merge_ops = if app.drill_batch.is_none() {
+            filter_merge_ops(&data.merge_ops, now_unix)
+        } else {
+            Vec::new()
+        };
+        if !visible_merge_ops.is_empty() {
+            let has_failed = visible_merge_ops.iter().any(|o| o.status == "failed");
+            let header_color = if has_failed {
+                theme::FAILURE
+            } else {
+                theme::ACCENT
+            };
+
+            if rendered_section {
+                items.push(ListItem::new(Line::from(Span::raw(""))));
+            }
+            push_section_header(
+                &mut items,
+                "Merge Queue",
+                visible_merge_ops.len(),
+                header_color,
+            );
+            for op in &visible_merge_ops {
+                let is_selected = selectable_slot == selected_slot;
+                sel_to_row.push(items.len());
+                let mut lines = vec![make_merge_op_line(op, is_selected, now_unix, list_width)];
+                if is_selected {
+                    lines.push(make_merge_op_detail_line(op, list_width));
+                }
+                items.push(ListItem::new(lines));
+                selectable_slot += 1;
+            }
+            rendered_section = true;
+        }
+
+        // 5. Active Threads
         if !classified.active_threads.is_empty() {
-            if rendered_active_section {
+            if rendered_section {
                 items.push(ListItem::new(Line::from(Span::raw(""))));
             }
             push_section_header(
@@ -760,21 +825,50 @@ fn render_ops_list(
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
             }
+            rendered_section = true;
         }
-    }
 
-    if app.drill_batch.is_some() {
-        items.push(ListItem::new(Line::from(Span::raw(""))));
-        push_section_header(
-            &mut items,
-            "Other",
-            classified.uncategorized.len(),
-            theme::TEXT_DIM,
-        );
-        if classified.uncategorized.is_empty() {
-            items.push(empty_line("  none"));
-        } else {
-            for src_idx in &classified.uncategorized {
+        // (drill mode: uncategorized/other)
+        if app.drill_batch.is_some() {
+            items.push(ListItem::new(Line::from(Span::raw(""))));
+            push_section_header(
+                &mut items,
+                "Other",
+                classified.uncategorized.len(),
+                theme::TEXT_DIM,
+            );
+            if classified.uncategorized.is_empty() {
+                items.push(empty_line("  none"));
+            } else {
+                for src_idx in &classified.uncategorized {
+                    let Some(row) = data.rows.get(*src_idx) else {
+                        continue;
+                    };
+                    let is_selected = selectable_slot == selected_slot;
+                    sel_to_row.push(items.len());
+                    let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
+                    if is_selected {
+                        lines.push(make_thread_detail_line(row, list_width));
+                    }
+                    items.push(ListItem::new(lines));
+                    selectable_slot += 1;
+                }
+            }
+            rendered_section = true;
+        }
+
+        // 6. Scheduled
+        if !classified.scheduled.is_empty() {
+            if rendered_section {
+                items.push(ListItem::new(Line::from(Span::raw(""))));
+            }
+            push_section_header(
+                &mut items,
+                "Scheduled",
+                classified.scheduled.len(),
+                theme::TEXT_MUTED,
+            );
+            for src_idx in &classified.scheduled {
                 let Some(row) = data.rows.get(*src_idx) else {
                     continue;
                 };
@@ -782,7 +876,7 @@ fn render_ops_list(
                 sel_to_row.push(items.len());
                 let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
                 if is_selected {
-                    lines.push(make_thread_detail_line(row, list_width));
+                    lines.push(make_scheduled_detail_line(row, now_unix, list_width));
                 }
                 items.push(ListItem::new(lines));
                 selectable_slot += 1;
@@ -790,40 +884,7 @@ fn render_ops_list(
         }
     }
 
-    // ── Merge Queue section ─────────────────────────────────────────────
-    // Skip merge queue when drilling into a batch — it's not batch-scoped.
-    let visible_merge_ops = if app.drill_batch.is_none() {
-        filter_merge_ops(&data.merge_ops, now_unix)
-    } else {
-        Vec::new()
-    };
-    if !visible_merge_ops.is_empty() {
-        let has_failed = visible_merge_ops.iter().any(|o| o.status == "failed");
-        let header_color = if has_failed {
-            theme::FAILURE
-        } else {
-            theme::ACCENT
-        };
-
-        items.push(ListItem::new(Line::from(Span::raw(""))));
-        push_section_header(
-            &mut items,
-            "Merge Queue",
-            visible_merge_ops.len(),
-            header_color,
-        );
-        for op in &visible_merge_ops {
-            let is_selected = selectable_slot == selected_slot;
-            sel_to_row.push(items.len());
-            let mut lines = vec![make_merge_op_line(op, is_selected, now_unix, list_width)];
-            if is_selected {
-                lines.push(make_merge_op_detail_line(op, list_width));
-            }
-            items.push(ListItem::new(lines));
-            selectable_slot += 1;
-        }
-    }
-
+    // 7. Recently Completed
     items.push(ListItem::new(Line::from(Span::raw(""))));
     push_section_header(
         &mut items,
@@ -849,6 +910,7 @@ fn render_ops_list(
         }
     }
 
+    // 8. Batches
     if app.drill_batch.is_none() {
         items.push(ListItem::new(Line::from(Span::raw(""))));
         push_section_header(
@@ -1114,7 +1176,17 @@ fn make_thread_line(
     ));
 
     // Summary column (between agent and batch_id)
-    let summary_text = t.summary.as_deref().unwrap_or("-");
+    // For failed/crashed/timed_out rows, show error_detail instead of summary.
+    let is_failed_row = is_failure(t);
+    let (summary_text, summary_color) = if is_failed_row {
+        let detail = t
+            .error_detail
+            .as_deref()
+            .unwrap_or_else(|| t.summary.as_deref().unwrap_or("-"));
+        (detail, theme::FAILURE_DIM)
+    } else {
+        (t.summary.as_deref().unwrap_or("-"), theme::TEXT_NORMAL)
+    };
     // Fixed-width columns budget (excluding summary).
     // Wide:   icon(3) + id(10) + status(16) + agent(18) + sep1(3) + sep2(3) + batch(14) + duration(8) = 75
     // Narrow: icon(3) + id(8)  + status(12) + agent(14) + sep1(3) + duration(8)                      = 48
@@ -1127,10 +1199,7 @@ fn make_thread_line(
             super::truncate(summary_text, summary_trunc),
             w = summary_width
         ),
-        Style::new()
-            .fg(theme::TEXT_NORMAL)
-            .bg(bg)
-            .add_modifier(base_mod),
+        Style::new().fg(summary_color).bg(bg).add_modifier(base_mod),
     ));
 
     if is_wide {
@@ -1990,5 +2059,81 @@ mod tests {
                 .any(|t| matches!(t, OpsSelectable::MergeOp(_))),
             "merge ops should not appear when drilling into a batch"
         );
+    }
+
+    #[test]
+    fn test_failures_section_collects_failed_rows() {
+        let rows = vec![
+            make_row("running", None, "Active", Some("executing"), 10),
+            make_row("failed", None, "Failed", Some("failed"), 9),
+            make_row("crashed", None, "Active", Some("crashed"), 8),
+            make_row("timed_out", None, "Active", Some("timed_out"), 7),
+            make_row("active", None, "Active", None, 6),
+        ];
+        let classified = classify_rows(&rows, None, 100, 3600);
+        assert_eq!(classified.running.len(), 1);
+        assert_eq!(classified.failures.len(), 3);
+        let failure_ids: Vec<&str> = classified
+            .failures
+            .iter()
+            .map(|&i| rows[i].thread_id.as_str())
+            .collect();
+        assert!(failure_ids.contains(&"failed"));
+        assert!(failure_ids.contains(&"crashed"));
+        assert!(failure_ids.contains(&"timed_out"));
+        assert_eq!(classified.active_threads.len(), 1);
+    }
+
+    #[test]
+    fn test_failures_section_order_in_selectable_targets() {
+        let rows = vec![
+            make_row("running", None, "Active", Some("executing"), 10),
+            make_row("failed", None, "Failed", Some("failed"), 9),
+            make_row("done", None, "Completed", Some("completed"), 5),
+        ];
+        let targets = ops_selectable_targets(&rows, &[], None, 100, 3600);
+
+        // Order: Running → Failures → ... → Recently Completed
+        let running_pos = targets
+            .iter()
+            .position(|t| matches!(t, OpsSelectable::Thread(i) if rows[*i].thread_id == "running"))
+            .unwrap();
+        let failed_pos = targets
+            .iter()
+            .position(|t| matches!(t, OpsSelectable::Thread(i) if rows[*i].thread_id == "failed"))
+            .unwrap();
+        let done_pos = targets
+            .iter()
+            .position(|t| matches!(t, OpsSelectable::Thread(i) if rows[*i].thread_id == "done"))
+            .unwrap();
+
+        assert!(
+            running_pos < failed_pos,
+            "running should come before failures"
+        );
+        assert!(
+            failed_pos < done_pos,
+            "failures should come before recently completed"
+        );
+    }
+
+    #[test]
+    fn test_failures_empty_when_no_failures() {
+        let rows = vec![
+            make_row("running", None, "Active", Some("executing"), 10),
+            make_row("done", None, "Completed", Some("completed"), 5),
+        ];
+        let classified = classify_rows(&rows, None, 100, 3600);
+        assert!(classified.failures.is_empty());
+    }
+
+    #[test]
+    fn test_thread_status_failed_without_exec_goes_to_failures() {
+        // A thread with status "Failed" but no execution_status should still
+        // be classified as a failure.
+        let rows = vec![make_row("failed-thread", None, "Failed", None, 10)];
+        let classified = classify_rows(&rows, None, 100, 3600);
+        assert_eq!(classified.failures.len(), 1);
+        assert_eq!(rows[classified.failures[0]].thread_id, "failed-thread");
     }
 }

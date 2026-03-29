@@ -71,6 +71,9 @@ pub const SUCCESS_DIM: Color = Color::Rgb(50, 130, 75);
 /// Failure — failed, crashed, timed out.
 pub const FAILURE: Color = Color::Rgb(200, 60, 60);
 
+/// Dimmed failure — error detail text in lists.
+pub const FAILURE_DIM: Color = Color::Rgb(140, 50, 50);
+
 /// Warning — queued items, stale indicators.
 pub const WARNING: Color = Color::Rgb(200, 170, 50);
 
