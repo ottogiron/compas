@@ -92,6 +92,8 @@ pub struct ActivityData {
 pub struct ExecutionSummary {
     pub status: String,
     pub duration_ms: Option<i64>,
+    /// Unix timestamp (seconds) when the execution finished, if available.
+    pub finished_at: Option<i64>,
 }
 
 /// Snapshot of agent-level metrics fetched from SQLite for the Agents tab.
@@ -197,6 +199,8 @@ pub struct App {
     pub drill_batch: Option<String>,
     /// Optional batch drill filter for History tab.
     pub history_drill_batch: Option<String>,
+    /// Optional agent filter for History tab — set when Enter is pressed on an agent card.
+    pub history_agent_filter: Option<String>,
     /// One-time onboarding hint banner.
     show_hint_banner: bool,
     /// Directory where execution log files are stored (`{state_dir}/logs/`).
@@ -287,6 +291,7 @@ impl App {
             show_help: false,
             drill_batch: None,
             history_drill_batch: None,
+            history_agent_filter: None,
             show_hint_banner: true,
             log_dir,
             handle,
@@ -539,6 +544,7 @@ impl App {
                         .map(|e| ExecutionSummary {
                             status: e.status,
                             duration_ms: e.duration_ms,
+                            finished_at: e.finished_at,
                         })
                         .collect();
                     executions_by_agent.push((alias.clone(), summaries));
@@ -604,9 +610,18 @@ impl App {
 
         match result {
             Ok(Ok(executions)) => {
-                // Clamp the selection to the new row count.
+                // Clamp the selection to the new row count (respecting agent filter).
+                let effective: Vec<_> = if let Some(ref agent) = self.history_agent_filter {
+                    executions
+                        .iter()
+                        .filter(|e| e.agent_alias == *agent)
+                        .cloned()
+                        .collect()
+                } else {
+                    executions.clone()
+                };
                 let count = executions::history_selectable_count(
-                    &executions,
+                    &effective,
                     self.history_drill_batch.as_deref(),
                     self.history_group_visible_limit(),
                 );
@@ -697,11 +712,10 @@ impl App {
             }
             2 => {
                 let max = self
-                    .executions_data
-                    .as_ref()
-                    .map(|d| {
+                    .effective_executions()
+                    .map(|execs| {
                         executions::history_selectable_count(
-                            &d.executions,
+                            &execs,
                             self.history_drill_batch.as_deref(),
                             self.history_group_visible_limit(),
                         )
@@ -782,13 +796,13 @@ impl App {
     }
 
     fn open_log_viewer_from_execution(&mut self) {
-        let Some(data) = &self.executions_data else {
+        let Some(execs) = self.effective_executions() else {
             return;
         };
         let Some(HistorySelectable::Execution(exec_idx)) = self.selected_history_target() else {
             return;
         };
-        let Some(row) = data.executions.get(exec_idx) else {
+        let Some(row) = execs.get(exec_idx) else {
             return;
         };
 
@@ -962,10 +976,26 @@ impl App {
         )
     }
 
-    fn selected_history_target(&self) -> Option<HistorySelectable> {
+    /// Return the effective executions list, filtered by agent if the filter is active.
+    fn effective_executions(&self) -> Option<Vec<ExecutionRow>> {
         let data = self.executions_data.as_ref()?;
+        if let Some(ref agent) = self.history_agent_filter {
+            Some(
+                data.executions
+                    .iter()
+                    .filter(|e| e.agent_alias == *agent)
+                    .cloned()
+                    .collect(),
+            )
+        } else {
+            Some(data.executions.clone())
+        }
+    }
+
+    fn selected_history_target(&self) -> Option<HistorySelectable> {
+        let execs = self.effective_executions()?;
         executions::history_selected_target(
-            &data.executions,
+            &execs,
             self.history_drill_batch.as_deref(),
             self.executions_selected,
             self.history_group_visible_limit(),
@@ -985,6 +1015,25 @@ impl App {
             self.history_drill_batch = None;
             self.executions_selected = 0;
         }
+        if self.history_agent_filter.is_some() {
+            self.history_agent_filter = None;
+            self.executions_selected = 0;
+        }
+    }
+
+    /// Switch to the History tab filtered by the currently selected agent.
+    fn enter_agent_drill(&mut self) {
+        let cfg = self.config.load();
+        let alias = cfg
+            .agents
+            .get(self.agents_selected)
+            .map(|a| a.alias.clone());
+        let Some(alias) = alias else { return };
+        self.history_agent_filter = Some(alias);
+        self.history_drill_batch = None;
+        self.executions_selected = 0;
+        self.active_tab = 2; // Switch to History tab
+        self.refresh_executions();
     }
 
     fn enter_batch_drill(&mut self) {
@@ -1042,11 +1091,10 @@ impl App {
             }
             2 => {
                 let max = self
-                    .executions_data
-                    .as_ref()
-                    .map(|d| {
+                    .effective_executions()
+                    .map(|execs| {
                         executions::history_selectable_count(
-                            &d.executions,
+                            &execs,
                             self.history_drill_batch.as_deref(),
                             self.history_group_visible_limit(),
                         )
@@ -1531,7 +1579,7 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Char('c') => {
             app.open_conversation();
         }
-        // Enter: drill batch row in Ops/History, otherwise open execution detail.
+        // Enter: drill batch row in Ops/History, agent drill in Agents, otherwise open execution detail.
         KeyCode::Enter => {
             if app.active_tab == 0
                 && matches!(
@@ -1546,6 +1594,9 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
                 } else {
                     app.open_log_viewer();
                 }
+            } else if app.active_tab == 1 {
+                // Agents tab: drill into History filtered by agent alias.
+                app.enter_agent_drill();
             } else if app.active_tab == 2
                 && matches!(
                     app.selected_history_target(),
@@ -2109,7 +2160,7 @@ impl App {
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
-        let modal = centered_rect(72, 18, area);
+        let modal = centered_rect(72, 22, area);
         let block = Block::bordered()
             .border_style(Style::new().fg(theme::BORDER_FOCUS))
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
@@ -2127,8 +2178,12 @@ impl App {
             Line::from(" Ops"),
             Line::from("   Enter open log or drill batch   c conversation view"),
             Line::from("   Esc/x back from batch drill"),
+            Line::from(" Agents"),
+            Line::from("   ↑/↓ select agent   Enter view executions"),
             Line::from(" History"),
-            Line::from("   Enter drill batch/open execution   Esc back from history batch drill"),
+            Line::from("   Enter drill batch/open execution   Esc back from filter"),
+            Line::from(" Settings"),
+            Line::from("   read-only view   r refresh"),
             Line::from(" Execution Detail"),
             Line::from("   ↑/↓ or j/k section   Enter collapse/expand   g/G top/bottom"),
             Line::from("   Esc back   f follow   J view mode"),
