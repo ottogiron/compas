@@ -2,13 +2,13 @@
 //! recent execution results.
 //!
 //! Layout (vertical list of agent cards):
-//!   ┌ focused ───────────────────────────────────────────────────────────────┐
-//!   │  ● focused       │ backend: claude  │ model: sonnet  │ role: worker    │
-//!   │  Active: 1                                                              │
-//!   │  completed (1234ms)                                                     │
-//!   │  failed (-)                                                             │
-//!   │  completed (890ms)                                                      │
-//!   └────────────────────────────────────────────────────────────────────────┘
+//!   ┌ focused ──────────────────────────────────────────────────────────────┐
+//!   │  ● focused       claude / sonnet-4 / worker                           │
+//!   │  Active: 1                                                            │
+//!   │  Completed (1.2s)  3m ago                                             │
+//!   │  Failed (-)  5m ago                                                   │
+//!   │  Completed (890ms)  12m ago                                           │
+//!   └──────────────────────────────────────────────────────────────────────┘
 
 use ratatui::{
     layout::Rect,
@@ -95,12 +95,27 @@ pub fn render_agents_tab(f: &mut Frame, app: &App, area: Rect) {
 // ── Agent card ────────────────────────────────────────────────────────────────
 
 fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
-    // ── Health dot colour based on heartbeat age ──────────────────────────────
+    // ── Health dot colour based on circuit breaker state ────────────────────────
     let health_color = app
         .agents_data
         .as_ref()
-        .and_then(|d| d.heartbeat_age_secs)
-        .map(|age| if age < 30 { SUCCESS } else { FAILURE })
+        .and_then(|d| {
+            d.circuit_states
+                .iter()
+                .find(|(b, _, _)| *b == agent.backend)
+                .map(|(_, state, _)| match state.as_str() {
+                    "open" => FAILURE,
+                    "half_open" => ACCENT,
+                    _ => SUCCESS, // "closed" or unknown → healthy
+                })
+        })
+        // Fall back to worker heartbeat when no CB data is available.
+        .or_else(|| {
+            app.agents_data
+                .as_ref()
+                .and_then(|d| d.heartbeat_age_secs)
+                .map(|age| if age < 30 { SUCCESS } else { FAILURE })
+        })
         .unwrap_or(TEXT_DIM); // no data yet
 
     // ── Active execution count for this agent ─────────────────────────────────
@@ -130,20 +145,33 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         Some(execs) if execs.is_empty() => {
             vec![Line::from("  No recent executions.".fg(TEXT_DIM))]
         }
-        Some(execs) => execs
-            .iter()
-            .map(|e| {
-                let dur_label = e
-                    .duration_ms
-                    .map(format_duration_ms)
-                    .unwrap_or_else(|| "-".to_string());
-                let color = theme::exec_status_color(&e.status);
-                Line::from(vec![
-                    Span::from("  "),
-                    format!("{} ({})", humanize_exec_status(&e.status), dur_label).fg(color),
-                ])
-            })
-            .collect(),
+        Some(execs) => {
+            let now_unix = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            execs
+                .iter()
+                .map(|e| {
+                    let dur_label = e
+                        .duration_ms
+                        .map(format_duration_ms)
+                        .unwrap_or_else(|| "-".to_string());
+                    let color = theme::exec_status_color(&e.status);
+                    let mut spans: Vec<Span<'static>> = vec![
+                        Span::from("  "),
+                        format!("{} ({})", humanize_exec_status(&e.status), dur_label).fg(color),
+                    ];
+                    // Append relative timestamp when available.
+                    if let Some(finished) = e.finished_at {
+                        let ago = format_relative_time(now_unix - finished);
+                        spans.push(Span::from("  "));
+                        spans.push(ago.fg(TEXT_DIM));
+                    }
+                    Line::from(spans)
+                })
+                .collect()
+        }
     };
 
     // ── Role / model labels ───────────────────────────────────────────────────
@@ -169,27 +197,27 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
     });
 
     // ── Assemble card lines ───────────────────────────────────────────────────
+    // Compact format: ● alias       backend / model / role     CB:STATE
     let mut row1_spans: Vec<Span<'static>> = vec![
         Span::from("  "),
         "● ".fg(health_color),
         format!("{:<12}", agent.alias).fg(TEXT_BRIGHT).bold(),
-        "│ ".fg(BORDER_DIM),
-        Span::from(format!("backend: {}  ", agent.backend)),
-        "│ ".fg(BORDER_DIM),
-        Span::from(format!("model: {}  ", model_label)),
-        "│ ".fg(BORDER_DIM),
-        Span::from(format!("role: {}", role_label)),
+        Span::from(agent.backend.to_string()),
+        " / ".fg(BORDER_DIM),
+        Span::from(model_label.to_string()),
+        " / ".fg(BORDER_DIM),
+        Span::from(role_label.to_string()),
     ];
 
     // Append circuit breaker indicator when not closed.
     if let Some(ref cb_state) = circuit_info {
         match cb_state.as_str() {
             "open" => {
-                row1_spans.push("  ".into());
+                row1_spans.push("     ".into());
                 row1_spans.push("CB:OPEN".fg(FAILURE).bold());
             }
             "half_open" => {
-                row1_spans.push("  ".into());
+                row1_spans.push("     ".into());
                 row1_spans.push("CB:PROBE".fg(ACCENT).bold());
             }
             _ => {} // "closed" — no indicator
@@ -232,4 +260,58 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
     lines.extend(recent_lines);
 
     ListItem::new(lines)
+}
+
+// ── Helpers ───────��──────────────────────────────────────────────────────────
+
+/// Format an age in seconds to a compact relative label: `"3m ago"`, `"2h ago"`, etc.
+fn format_relative_time(age_secs: i64) -> String {
+    let age = age_secs.max(0);
+    if age < 60 {
+        format!("{}s ago", age)
+    } else if age < 3_600 {
+        format!("{}m ago", age / 60)
+    } else if age < 86_400 {
+        format!("{}h ago", age / 3_600)
+    } else {
+        format!("{}d ago", age / 86_400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_relative_time_seconds() {
+        assert_eq!(format_relative_time(0), "0s ago");
+        assert_eq!(format_relative_time(30), "30s ago");
+        assert_eq!(format_relative_time(59), "59s ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_minutes() {
+        assert_eq!(format_relative_time(60), "1m ago");
+        assert_eq!(format_relative_time(180), "3m ago");
+        assert_eq!(format_relative_time(3599), "59m ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_hours() {
+        assert_eq!(format_relative_time(3600), "1h ago");
+        assert_eq!(format_relative_time(7200), "2h ago");
+        assert_eq!(format_relative_time(86399), "23h ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_days() {
+        assert_eq!(format_relative_time(86400), "1d ago");
+        assert_eq!(format_relative_time(172800), "2d ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_negative_clamps_to_zero() {
+        assert_eq!(format_relative_time(-5), "0s ago");
+        assert_eq!(format_relative_time(-100), "0s ago");
+    }
 }

@@ -44,21 +44,37 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
+    // ── Apply agent filter if set ────────────────────────────────────────────
+    let filtered: Vec<ExecutionRow>;
+    let executions: &[ExecutionRow] = if let Some(ref agent) = app.history_agent_filter {
+        filtered = data
+            .executions
+            .iter()
+            .filter(|e| e.agent_alias == *agent)
+            .cloned()
+            .collect();
+        &filtered
+    } else {
+        &data.executions
+    };
+
     // ── Empty state ──────────────────────────────────────────────────────────
-    if data.executions.is_empty() {
-        let block = executions_block("drill/open");
-        let p = Paragraph::new(Line::from(Span::styled(
-            "  No executions recorded",
-            Style::new().fg(TEXT_DIM),
-        )))
-        .block(block);
+    if executions.is_empty() {
+        let msg = if app.history_agent_filter.is_some() {
+            "  No executions for this agent"
+        } else {
+            "  No executions recorded"
+        };
+        let block = executions_block_with_filter(&app.history_agent_filter, "drill/open");
+        let p =
+            Paragraph::new(Line::from(Span::styled(msg, Style::new().fg(TEXT_DIM)))).block(block);
         f.render_widget(p, area);
         return;
     }
 
     // ── Compute selectables and grouping ──────────────────────────────────────
     let selectables = history_selectable_targets(
-        &data.executions,
+        executions,
         app.history_drill_batch.as_deref(),
         app.history_group_visible_limit(),
     );
@@ -66,7 +82,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         .executions_selected
         .min(selectables.len().saturating_sub(1));
     let groups = group_execution_indices_by_batch(
-        &data.executions,
+        executions,
         app.history_drill_batch.as_deref(),
         app.history_group_visible_limit(),
     );
@@ -77,27 +93,39 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         Some(HistorySelectable::Execution(_)) => "open execution",
         None => "drill/open",
     };
-    let block = executions_block(action_hint);
+    let block = executions_block_with_filter(&app.history_agent_filter, action_hint);
 
     // ── Render block border; work with inner area ──────────────────────────────
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // ── Optional filter banner when drilling into a batch ──────────────────────
-    let table_area = if let Some(batch) = app.history_drill_batch.as_deref() {
+    // ── Optional filter banner when drilling into a batch or agent ────────────
+    let has_batch_filter = app.history_drill_batch.is_some();
+    let has_agent_filter = app.history_agent_filter.is_some();
+    let table_area = if has_batch_filter || has_agent_filter {
         let chunks = Layout::vertical([Constraint::Length(2), Constraint::Fill(1)]).split(inner);
-        let banner = Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(
+        let mut banner_spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        if let Some(batch) = app.history_drill_batch.as_deref() {
+            banner_spans.push(Span::styled(
                 format!("Filter: batch {}", history_batch_display(batch)),
                 Style::new().fg(TEXT_MUTED).bold(),
-            ),
-            Span::raw("  "),
-            Span::styled("x", Style::new().fg(ACCENT).bold()),
-            Span::raw("/"),
-            Span::styled("Esc", Style::new().fg(ACCENT).bold()),
-            Span::raw(": back"),
-        ]));
+            ));
+        }
+        if let Some(ref agent) = app.history_agent_filter {
+            if has_batch_filter {
+                banner_spans.push(Span::raw("  "));
+            }
+            banner_spans.push(Span::styled(
+                format!("Filter: agent {}", agent),
+                Style::new().fg(TEXT_MUTED).bold(),
+            ));
+        }
+        banner_spans.push(Span::raw("  "));
+        banner_spans.push(Span::styled("x", Style::new().fg(ACCENT).bold()));
+        banner_spans.push(Span::raw("/"));
+        banner_spans.push(Span::styled("Esc", Style::new().fg(ACCENT).bold()));
+        banner_spans.push(Span::raw(": back"));
+        let banner = Paragraph::new(Line::from(banner_spans));
         f.render_widget(banner, chunks[0]);
         chunks[1]
     } else {
@@ -139,7 +167,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         );
 
         for &exec_idx in &group.indices {
-            let Some(e) = data.executions.get(exec_idx) else {
+            let Some(e) = executions.get(exec_idx) else {
                 continue;
             };
             selectable_to_row.insert(selectable_slot, rows.len());
@@ -239,13 +267,31 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn executions_block(action_hint: &str) -> Block<'static> {
-    theme::panel_focused("Executions").title_bottom(Line::from(vec![
-        Span::raw(" "),
-        Span::styled("↑/↓", Style::new().fg(ACCENT).bold()),
-        Span::raw(": select  "),
-        Span::styled("Enter", Style::new().fg(ACCENT).bold()),
-        Span::raw(format!(": {action_hint} ")),
-    ]))
+    executions_block_with_filter(&None, action_hint)
+}
+
+fn executions_block_with_filter(
+    agent_filter: &Option<String>,
+    action_hint: &str,
+) -> Block<'static> {
+    let title: Line<'static> = if let Some(agent) = agent_filter {
+        Line::from(format!(" Executions (filtered: {}) ", agent))
+    } else {
+        Line::from(" Executions ")
+    };
+    Block::bordered()
+        .border_set(ratatui::symbols::border::ONE_EIGHTH_WIDE)
+        .border_style(Style::new().fg(theme::BORDER_FOCUS))
+        .title(title.style(Style::new().fg(ACCENT)))
+        .title_bottom(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("↑/↓", Style::new().fg(ACCENT).bold()),
+            Span::raw(": select  "),
+            Span::styled("Enter", Style::new().fg(ACCENT).bold()),
+            Span::raw(format!(": {action_hint} ")),
+        ]))
+        .padding(ratatui::widgets::Padding::proportional(1))
+        .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
 }
 
 #[derive(Debug, Clone)]
