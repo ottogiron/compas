@@ -139,6 +139,7 @@ state_dir: ~/.compas/state
 agents:
   - alias: dev
     backend: claude
+    safety_mode: auto_approve
     prompt: "You implement changes. Follow the project's AGENTS.md."
 ```
 
@@ -149,6 +150,7 @@ agents:
   # Implements changes in an isolated worktree
   - alias: dev
     backend: claude
+    safety_mode: auto_approve
     model: claude-sonnet-4-6
     workspace: worktree
     handoff:
@@ -159,11 +161,18 @@ agents:
   # Reviews work and bounces back to dev
   - alias: reviewer
     backend: claude
+    safety_mode: auto_approve
     model: claude-sonnet-4-6
     handoff:
       on_response: dev
     prompt: "Review for correctness and test coverage. Do not implement."
 ```
+
+> **Security note:** Built-in backends (claude, codex, gemini) run agents with
+> full permission bypass (`--dangerously-skip-permissions`, `--full-auto`,
+> `--yolo`). This is required for non-interactive execution. Each agent must
+> declare `safety_mode: auto_approve` to acknowledge this.
+> See the [Security Model](docs/guides/configuration.md#security-model) in the configuration guide.
 
 Key configuration areas: **agents** (backend, model, prompt, workspace isolation, retry, auto-handoff chains) and **schedules** (cron-based recurring dispatches). The worker hot-reloads configuration without restart.
 

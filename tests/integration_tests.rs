@@ -116,6 +116,7 @@ fn test_config() -> OrchestratorConfig {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             },
             AgentConfig {
                 alias: "spark".to_string(),
@@ -132,6 +133,7 @@ fn test_config() -> OrchestratorConfig {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             },
         ],
         worktree_dir: None,
@@ -931,6 +933,7 @@ mod registry_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
 
         let backend = registry.get(&agent_cfg);
@@ -957,6 +960,7 @@ mod registry_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
 
         let result = registry.get(&agent_cfg);
@@ -3622,6 +3626,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -3705,6 +3710,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -3813,6 +3819,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Agent B: no workspace (should inherit worktree)
         let reviewer_config = AgentConfig {
@@ -3830,6 +3837,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -3987,6 +3995,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Reviewer targets a different repo
         let reviewer_config = AgentConfig {
@@ -4004,6 +4013,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -4164,6 +4174,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Reviewer with explicit `workspace: shared` — same repo but opts out
         let reviewer_config = AgentConfig {
@@ -4181,6 +4192,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -4621,6 +4633,7 @@ mod handoff_chain_tests {
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "agent-b".to_string(),
@@ -4637,6 +4650,7 @@ mod handoff_chain_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None, // agent-b does NOT chain further
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -5428,6 +5442,7 @@ agents:
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
@@ -5444,6 +5459,7 @@ agents:
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
@@ -5460,6 +5476,7 @@ agents:
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -6419,6 +6436,7 @@ mod fanout_tests {
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
@@ -6435,6 +6453,7 @@ mod fanout_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
@@ -6451,6 +6470,7 @@ mod fanout_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -6892,6 +6912,7 @@ mod read_log_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),
@@ -7327,6 +7348,7 @@ mod session_resume_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: Some(SafetyMode::AutoApprove),
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),
@@ -7422,6 +7444,7 @@ mod session_resume_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: Some(SafetyMode::AutoApprove),
         }];
 
         let worktree_manager = Arc::new(WorktreeManager::new());
@@ -7743,6 +7766,7 @@ mod merge_worker_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),

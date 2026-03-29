@@ -21,6 +21,7 @@ use tokio::sync::Semaphore;
 
 use crate::backend::registry::BackendRegistry;
 use crate::config::types::{AgentConfig, AgentRole, HandoffTarget};
+use crate::config::validation::{builtin_backend_safety_flag, BUILTIN_BACKEND_NAMES};
 use crate::config::ConfigHandle;
 use crate::events::{EventBus, OrchestratorEvent};
 use crate::merge::MergeExecutor;
@@ -198,6 +199,27 @@ impl WorkerRunner {
         self.store
             .write_heartbeat(&self.worker_id, env!("CARGO_PKG_VERSION"))
             .await?;
+
+        // SEC-1: Log effective safety flags for each agent using a built-in backend.
+        for agent in &startup_config.agents {
+            if BUILTIN_BACKEND_NAMES.contains(&agent.backend.as_str()) {
+                if let Some(flag) = builtin_backend_safety_flag(&agent.backend) {
+                    tracing::warn!(
+                        agent = %agent.alias,
+                        backend = %agent.backend,
+                        "agent '{}' ({}): running with {} (safety_mode: auto_approve)",
+                        agent.alias, agent.backend, flag
+                    );
+                } else {
+                    tracing::warn!(
+                        agent = %agent.alias,
+                        backend = %agent.backend,
+                        "agent '{}' ({}): built-in backend, no permission-bypass flag (safety_mode: auto_approve)",
+                        agent.alias, agent.backend
+                    );
+                }
+            }
+        }
 
         // Concurrency semaphore (global limit — startup-only, restart to change).
         let semaphore = Arc::new(Semaphore::new(max_concurrent));
@@ -2153,6 +2175,7 @@ mod tests {
             max_retries,
             retry_backoff_secs: 10,
             handoff: None,
+            safety_mode: None,
         }
     }
 
@@ -2612,6 +2635,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: Default::default(),

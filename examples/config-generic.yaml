@@ -31,6 +31,7 @@ models:
 agents:
   - alias: implementer
     backend: claude
+    safety_mode: auto_approve
     model: claude-sonnet-4-6
     # workdir: /path/to/other-repo    # Per-agent workdir override (default: default_workdir)
     # workspace: worktree             # "worktree" for git isolation, "shared" (default)
@@ -47,6 +48,7 @@ agents:
       You implement changes in this repository and report verification results.
   - alias: analyst
     backend: codex
+    safety_mode: auto_approve
     model: gpt-5.3-codex
     prompt: >
       You investigate issues and return status updates with clear next steps.
@@ -54,6 +56,7 @@ agents:
   # Example: agent working in a different repository
   # - alias: infra-dev
   #   backend: claude
+  #   safety_mode: auto_approve
   #   model: claude-sonnet-4-6
   #   workdir: /path/to/infra-repo     # Works in a different repo than default_workdir
   #   workspace: worktree              # Each thread gets its own worktree

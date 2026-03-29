@@ -1400,7 +1400,7 @@ mod tests {
 
     #[test]
     fn test_unique_backends_deduplicates() {
-        use crate::config::types::AgentConfig;
+        use crate::config::types::{AgentConfig, SafetyMode};
         let config = OrchestratorConfig {
             default_workdir: PathBuf::from("/tmp"),
             state_dir: PathBuf::from("/tmp/state"),
@@ -1422,6 +1422,7 @@ mod tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: Some(SafetyMode::AutoApprove),
                 },
                 AgentConfig {
                     alias: "b".to_string(),
@@ -1438,6 +1439,7 @@ mod tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: Some(SafetyMode::AutoApprove),
                 },
                 AgentConfig {
                     alias: "c".to_string(),
@@ -1454,6 +1456,7 @@ mod tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: Some(SafetyMode::AutoApprove),
                 },
             ],
             worktree_dir: None,
@@ -1692,7 +1695,7 @@ mod tests {
 
     #[test]
     fn test_doctor_check_schedules_valid() {
-        use crate::config::types::{AgentConfig, ScheduleConfig};
+        use crate::config::types::{AgentConfig, SafetyMode, ScheduleConfig};
 
         let config = OrchestratorConfig {
             default_workdir: PathBuf::from("/tmp"),
@@ -1714,6 +1717,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: Some(SafetyMode::AutoApprove),
             }],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1774,7 +1778,7 @@ mod tests {
 
     #[test]
     fn test_doctor_check_schedules_invalid_cron() {
-        use crate::config::types::{AgentConfig, ScheduleConfig};
+        use crate::config::types::{AgentConfig, SafetyMode, ScheduleConfig};
 
         let config = OrchestratorConfig {
             default_workdir: PathBuf::from("/tmp"),
@@ -1796,6 +1800,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: Some(SafetyMode::AutoApprove),
             }],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1822,7 +1827,7 @@ mod tests {
 
     #[test]
     fn test_doctor_check_schedules_disabled_passes() {
-        use crate::config::types::{AgentConfig, ScheduleConfig};
+        use crate::config::types::{AgentConfig, SafetyMode, ScheduleConfig};
 
         let config = OrchestratorConfig {
             default_workdir: PathBuf::from("/tmp"),
@@ -1844,6 +1849,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: Some(SafetyMode::AutoApprove),
             }],
             worktree_dir: None,
             orchestration: Default::default(),
