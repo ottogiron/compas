@@ -154,7 +154,7 @@ Created: 2026-03-29
   - `make verify`
   - Integration test: dispatch beyond queue cap returns error
   - Integration test: abandon kills running execution
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -173,6 +173,14 @@ Created: 2026-03-29
 - [SEC-1] Closing stale session during GAP-9 cleanup; backlog ticket is already marked Done.
 
 ## Execution Metrics
+- Ticket: SEC-6
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-29 03:36 UTC
+- End: 2026-03-29 03:52 UTC
+- Duration: 00:16:38
+- Notes: (pending)
 
 - Ticket: SEC-1
 - Owner: --
