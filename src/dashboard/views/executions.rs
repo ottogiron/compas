@@ -8,7 +8,8 @@ use ratatui::{
     style::Style,
     text::{Line, Span},
     widgets::{
-        Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, TableState,
+        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+        TableState,
     },
     Frame,
 };
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 
 use crate::dashboard::app::App;
 use crate::dashboard::theme::{self, *};
-use crate::dashboard::views::{format_duration_ms, humanize_exec_status};
+use crate::dashboard::views::{format_duration_ms, format_duration_secs, humanize_exec_status};
 use crate::store::ExecutionRow;
 
 pub const HISTORY_UNBATCHED_KEY: &str = "__UNBATCHED__";
@@ -31,19 +32,9 @@ pub enum HistorySelectable {
 
 /// Render the Executions tab into `area`.
 pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
-    let block = theme::panel_focused("Executions").title_bottom(Line::from(vec![
-        Span::raw(" "),
-        Span::styled("↑/↓", Style::new().fg(ACCENT).bold()),
-        Span::raw(": select  "),
-        Span::styled("Enter", Style::new().fg(ACCENT).bold()),
-        Span::raw(": drill/open "),
-        Span::raw("  "),
-        Span::styled("L/U", Style::new().fg(TEXT_MUTED)),
-        Span::raw(": linked/unlinked"),
-    ]));
-
     // ── No data yet ──────────────────────────────────────────────────────────
     let Some(data) = &app.executions_data else {
+        let block = executions_block("drill/open");
         let p = Paragraph::new(Line::from(Span::styled(
             "  Fetching…",
             Style::new().fg(TEXT_DIM),
@@ -55,6 +46,7 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Empty state ──────────────────────────────────────────────────────────
     if data.executions.is_empty() {
+        let block = executions_block("drill/open");
         let p = Paragraph::new(Line::from(Span::styled(
             "  No executions recorded",
             Style::new().fg(TEXT_DIM),
@@ -78,6 +70,14 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
         app.history_drill_batch.as_deref(),
         app.history_group_visible_limit(),
     );
+
+    // ── Context-sensitive footer (H5) ────────────────────────────────────────
+    let action_hint = match selectables.get(selected) {
+        Some(HistorySelectable::Batch(_)) => "drill into batch",
+        Some(HistorySelectable::Execution(_)) => "open execution",
+        None => "drill/open",
+    };
+    let block = executions_block(action_hint);
 
     // ── Render block border; work with inner area ──────────────────────────────
     let inner = block.inner(area);
@@ -105,9 +105,11 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     };
 
     // ── Build table rows ───────────────────────────────────────────────────────
+    let now_secs = chrono::Utc::now().timestamp();
     let mut rows: Vec<Row<'static>> = Vec::new();
     let mut selectable_to_row: HashMap<usize, usize> = HashMap::new();
     let mut selectable_slot = 0usize;
+    let rule = "────────────────────────────────────────";
 
     for group in groups {
         if app.history_drill_batch.is_none() {
@@ -115,24 +117,25 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             selectable_slot += 1;
         }
 
-        // Batch header row — label in col 0, optional "+N more" in col 1.
-        let batch_label = format!(" Batch {} ", group.label);
-        let hidden_text = if group.hidden_count > 0 {
-            format!(" … +{} more", group.hidden_count)
+        // Batch header: full-width styled divider (H3).
+        let progress = format!("({}/{})", group.succeeded_count, group.total_count);
+        let fill_text = if group.hidden_count > 0 {
+            format!("─── +{} more ─────────────────────────", group.hidden_count)
         } else {
-            String::new()
+            rule.to_string()
         };
         rows.push(
             Row::new([
-                Cell::from(batch_label).style(Style::new().fg(ACCENT).bold()),
-                Cell::from(hidden_text).style(Style::new().fg(TEXT_DIM)),
-                Cell::default(),
-                Cell::default(),
-                Cell::default(),
-                Cell::default(),
-                Cell::default(),
+                Cell::from(Line::from(vec![
+                    Span::styled("── ", Style::new().fg(TEXT_DIM)),
+                    Span::styled(group.label.clone(), Style::new().fg(ACCENT).bold()),
+                ])),
+                Cell::from(Span::styled(progress, Style::new().fg(TEXT_DIM))),
+                Cell::from(Span::styled(rule, Style::new().fg(TEXT_DIM))),
+                Cell::from(Span::styled(rule, Style::new().fg(TEXT_DIM))),
+                Cell::from(Span::styled(fill_text, Style::new().fg(TEXT_DIM))),
             ])
-            .style(Style::new().fg(ACCENT)),
+            .style(Style::new().fg(TEXT_DIM)),
         );
 
         for &exec_idx in &group.indices {
@@ -143,21 +146,25 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             selectable_slot += 1;
 
             let status_color = theme::exec_status_color(&e.status);
-            let thread_id = super::truncate(&e.thread_id, 16);
-            let duration = e
-                .duration_ms
-                .map(format_duration_ms)
-                .unwrap_or_else(|| "-".to_string());
-            let prov_char = if e.dispatch_message_id.is_some() {
-                "L"
-            } else {
-                "U"
-            };
-            let prov_color = if e.dispatch_message_id.is_some() {
-                SUCCESS_DIM
-            } else {
-                FAILURE
-            };
+
+            // H8: elapsed time for executing/picked_up only (not queued).
+            let (duration, duration_style) =
+                if matches!(e.status.as_str(), "executing" | "picked_up") {
+                    let start = e.started_at.or(e.picked_up_at).unwrap_or(e.queued_at);
+                    let elapsed_secs = (now_secs - start).max(0);
+                    (
+                        format!("{} {}", MARKER_RUNNING, format_duration_secs(elapsed_secs)),
+                        Style::new().fg(ACCENT),
+                    )
+                } else {
+                    (
+                        e.duration_ms
+                            .map(format_duration_ms)
+                            .unwrap_or_else(|| "-".to_string()),
+                        Style::new().fg(TEXT_NORMAL),
+                    )
+                };
+
             let exit_code = e
                 .exit_code
                 .map(|c| c.to_string())
@@ -165,31 +172,25 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
             let error_preview = e
                 .error_detail
                 .as_deref()
-                .map(|s| super::truncate(s, 40))
+                .map(|s| super::truncate(s, 80))
                 .unwrap_or_else(|| "-".to_string());
 
             rows.push(Row::new([
                 Cell::from(format!(" {}", e.agent_alias)).style(Style::new().fg(TEXT_NORMAL)),
-                Cell::from(thread_id).style(Style::new().fg(TEXT_NORMAL)),
                 Cell::from(humanize_exec_status(&e.status).to_string())
                     .style(Style::new().fg(status_color)),
-                Cell::from(prov_char).style(Style::new().fg(prov_color)),
-                Cell::from(duration).style(Style::new().fg(TEXT_NORMAL)),
+                Cell::from(duration).style(duration_style),
                 Cell::from(exit_code).style(Style::new().fg(TEXT_NORMAL)),
                 Cell::from(error_preview).style(Style::new().fg(TEXT_NORMAL)),
             ]));
         }
-
-        // Blank separator between groups.
-        rows.push(Row::new([""; 7]));
+        // H4: No blank separator rows — batch headers serve as visual dividers.
     }
 
-    // ── Column header ──────────────────────────────────────────────────────────
+    // ── Column header (H1: 5 columns, no Thread ID or Prov) ──────────────────
     let header = Row::new([
         Cell::from("Agent").style(Style::new().fg(TEXT_MUTED).bold()),
-        Cell::from("Thread ID").style(Style::new().fg(TEXT_MUTED).bold()),
         Cell::from("Status").style(Style::new().fg(TEXT_MUTED).bold()),
-        Cell::from("Prov").style(Style::new().fg(TEXT_MUTED).bold()),
         Cell::from("Duration").style(Style::new().fg(TEXT_MUTED).bold()),
         Cell::from("Exit").style(Style::new().fg(TEXT_MUTED).bold()),
         Cell::from("Error").style(Style::new().fg(TEXT_MUTED).bold()),
@@ -197,12 +198,10 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
     .style(Style::new().bold());
 
     let widths = [
-        Constraint::Length(14),
-        Constraint::Length(19),
-        Constraint::Length(13),
-        Constraint::Length(6),
         Constraint::Length(10),
-        Constraint::Length(6),
+        Constraint::Length(10),
+        Constraint::Length(8),
+        Constraint::Length(4),
         Constraint::Fill(1),
     ];
 
@@ -239,12 +238,24 @@ pub fn render_executions(f: &mut Frame, app: &App, area: Rect) {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+fn executions_block(action_hint: &str) -> Block<'static> {
+    theme::panel_focused("Executions").title_bottom(Line::from(vec![
+        Span::raw(" "),
+        Span::styled("↑/↓", Style::new().fg(ACCENT).bold()),
+        Span::raw(": select  "),
+        Span::styled("Enter", Style::new().fg(ACCENT).bold()),
+        Span::raw(format!(": {action_hint} ")),
+    ]))
+}
+
 #[derive(Debug, Clone)]
 struct BatchGroup {
     key: String,
     label: String,
     indices: Vec<usize>,
     hidden_count: usize,
+    total_count: usize,
+    succeeded_count: usize,
 }
 
 fn sort_execution_indices_desc(executions: &[ExecutionRow], indices: &mut [usize]) {
@@ -315,6 +326,11 @@ fn group_execution_indices_by_batch(
         .map(|key| {
             let mut indices = grouped.remove(&key).unwrap_or_default();
             sort_execution_indices_desc(executions, &mut indices);
+            let total_count = indices.len();
+            let succeeded_count = indices
+                .iter()
+                .filter(|&&idx| executions[idx].status == "completed")
+                .count();
             let visible_limit = per_group_limit.max(1);
             let hidden_count = indices.len().saturating_sub(visible_limit);
             indices.truncate(visible_limit);
@@ -323,6 +339,8 @@ fn group_execution_indices_by_batch(
                 label: history_batch_display(&key),
                 indices,
                 hidden_count,
+                total_count,
+                succeeded_count,
             }
         })
         .collect()
