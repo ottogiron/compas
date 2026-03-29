@@ -170,6 +170,7 @@ Created: 2026-03-29
 - Implementation commits should reference ticket IDs.
 - SEC-1 is a breaking config change — all example configs and test fixtures must be updated.
 - SEC-3 and SEC-5 can be combined into a single dispatch if capacity is limited.
+- [SEC-1] Closing stale session during GAP-9 cleanup; backlog ticket is already marked Done.
 
 ## Execution Metrics
 
@@ -178,8 +179,8 @@ Created: 2026-03-29
 - Complexity: M
 - Risk: Medium
 - Start: 2026-03-29 00:35 UTC
-- End: --
-- Duration: --
+- End: 2026-03-29 03:04 UTC
+- Duration: 02:29:16
 - Notes: --
 
 - Ticket: SEC-2

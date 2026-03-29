@@ -264,6 +264,30 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Complexity: XS
 - Risk: None
 
+## Ticket GAP-9 — Session Tracking and Active Queue Cleanup
+
+- Goal: Eliminate drift between backlog status, `ticket` sessions, and `NEXT.md` active work.
+- In scope:
+  - Clarify in `AGENTS.md` that backlog files are the authoritative source for ticket status
+  - Require `ticket done` or `ticket blocked` when work leaves active execution
+  - Update `NEXT.md` guidance so `Active` lists concrete in-flight tickets, not raw `ticket status`
+  - Close currently proven-stale sessions
+- Out of scope:
+  - Automating stale-session detection
+  - Auditing every historical ticket session
+  - Redefining batch lifecycle semantics
+- Dependencies: None
+- Acceptance criteria:
+  - `AGENTS.md` states backlog status is authoritative and sessions must be reconciled in the same work session
+  - `NEXT.md` no longer tells operators to mirror `ticket status` mechanically
+  - Proven-stale session `SEC-1` is closed
+- Verification:
+  - Manual: compare `ticket status` with backlog files after cleanup
+  - `make verify`
+- Status: Done
+- Complexity: XS
+- Risk: Low
+
 ---
 
 ## Deferred: Visual Orchestration Canvas
@@ -307,11 +331,12 @@ Could be a view in the Tauri desktop app (depends on MFE-2).
 3. **GAP-5** (mouse support) — small, pure ergonomic win
 4. **GAP-7** (distribution) — medium, unblocks adoption
 5. **GAP-8** (release policy exception) — small, governance tweak
-6. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
-7. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
-8. **GAP-6** (shared context) — medium, new coordination primitive
+6. **GAP-9** (session tracking cleanup) — small, governance cleanup
+7. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
+8. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
+9. **GAP-6** (shared context) — medium, new coordination primitive
 
-GAP-1 through GAP-5 and GAP-8 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
+GAP-1 through GAP-5, GAP-8, and GAP-9 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
 
 ### Cross-backlog priority recommendation (all open tickets across all backlogs)
 
@@ -339,9 +364,18 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 - Implementation commits should reference ticket IDs (GAP-N).
 - Record scope changes/deferrals here.
 - Gap analysis: completed 2026-03-22.
-
 - [GAP-7] Session opened to add GAP-8; switching to GAP-8.
+
 ## Execution Metrics
+
+- Ticket: GAP-9
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-29 03:04 UTC
+- End: 2026-03-29 03:10 UTC
+- Duration: 00:06:34
+- Notes: (pending)
 - Ticket: GAP-8
 - Owner: (pending)
 - Complexity: (pending)
@@ -413,14 +447,8 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 - End:
 - Duration:
 - Notes:
-
-
 - Start: 2026-03-29 02:35 UTC
-
-
 - End: 2026-03-29 02:45 UTC
-
-
 - Duration: 00:09:04
 
 ## Closure Evidence

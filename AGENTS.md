@@ -73,6 +73,8 @@ make mcp-server     # run MCP server
 This project uses `ticket` (installed via `cargo install --git https://github.com/ottogiron/ticket-tracker`) for session tracking.
 
 Release operations (changelog batching/merge, version bump, tagging, pushing, and release verification) are exempt from `ticket` session tracking. Feature and bugfix work still requires tickets.
+Backlog files are the authoritative source of truth for ticket status. `ticket` reflects operator session state and must be reconciled to the backlog, not the other way around.
+When a ticket leaves active execution, close or reconcile the matching session in the same work session with `ticket done` or `ticket blocked`.
 
 ```bash
 ticket start <ticket-id>           # start a ticket session
