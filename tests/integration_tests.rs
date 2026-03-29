@@ -45,6 +45,7 @@ impl Backend for StubBackend {
             resume_session_id: None,
             stdout_tx: None,
             pid_tx: None,
+            redactor: None,
         })
     }
 
@@ -3442,6 +3443,7 @@ mod worktree_tests {
             &worktree_manager,
             repo_path,
             None,
+            None,
         )
         .await;
 
@@ -3529,6 +3531,7 @@ mod worktree_tests {
             None,
             &worktree_manager,
             std::path::Path::new("/tmp"),
+            None,
             None,
         )
         .await;
@@ -3655,6 +3658,7 @@ mod worktree_tests {
             &worktree_manager,
             repo_path,
             None,
+            None,
         )
         .await;
         assert!(output_a.success, "agent A execution should succeed");
@@ -3700,6 +3704,7 @@ mod worktree_tests {
             None,
             &worktree_manager,
             repo_path, // same default_workdir as agent A
+            None,
             None,
         )
         .await;
@@ -3827,6 +3832,7 @@ mod worktree_tests {
             &worktree_manager,
             repo_path,
             None,
+            None,
         )
         .await;
         assert!(output_a.success, "agent A should succeed");
@@ -3876,6 +3882,7 @@ mod worktree_tests {
             None,
             &worktree_manager,
             repo_path,
+            None,
             None,
         )
         .await;
@@ -4002,6 +4009,7 @@ mod worktree_tests {
             &worktree_manager,
             repo_path,
             None,
+            None,
         )
         .await;
         assert!(output_a.success, "agent A should succeed");
@@ -4039,6 +4047,7 @@ mod worktree_tests {
             None,
             &worktree_manager,
             repo_path,
+            None,
             None,
         )
         .await;
@@ -7003,6 +7012,7 @@ mod session_resume_tests {
                 resume_session_id: None,
                 stdout_tx: None,
                 pid_tx: None,
+                redactor: None,
             })
         }
 
@@ -7237,6 +7247,7 @@ mod session_resume_tests {
             &worktree_manager,
             std::path::Path::new("/tmp"),
             None,
+            None,
         )
         .await;
         assert!(output1.success, "first execution should succeed");
@@ -7340,6 +7351,7 @@ mod session_resume_tests {
             Some(stdout_tx2),
             &worktree_manager,
             std::path::Path::new("/tmp"),
+            None,
             None,
         )
         .await;

@@ -63,6 +63,9 @@ sha2 = "0.11"
 # Cron expression parsing
 croner = "3"
 
+# Secret redaction
+regex = "1"
+
 # Utils
 thiserror = "2"
 ulid = "1"

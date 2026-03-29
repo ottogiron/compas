@@ -418,6 +418,9 @@ impl WorkerRunner {
                     let agent_configs = trigger_config.agents.clone();
                     let execution_timeout_secs =
                         trigger_config.orchestration.execution_timeout_secs;
+                    let redactor =
+                        crate::redact::Redactor::from_config(&trigger_config.orchestration)
+                            .map(std::sync::Arc::new);
                     let log_dir = Some(trigger_config.log_dir());
                     let thread_id = execution.thread_id.clone();
                     let event_bus = self.event_bus.clone();
@@ -563,6 +566,7 @@ impl WorkerRunner {
                             &worktree_manager,
                             &default_workdir,
                             worktree_override_dir,
+                            redactor,
                         )
                         .await;
 

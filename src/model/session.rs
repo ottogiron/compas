@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+use crate::redact::Redactor;
+
 /// A backend agent session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -24,6 +26,11 @@ pub struct Session {
     /// while the process is still running, enabling orphan detection on crash.
     #[serde(skip)]
     pub pid_tx: Option<std::sync::mpsc::SyncSender<u32>>,
+    /// Optional secret redactor for scrubbing log file output.
+    /// Set by the executor before calling `trigger()`. Backends pass this
+    /// through to `wait_with_timeout()` for log-level redaction.
+    #[serde(skip)]
+    pub redactor: Option<Arc<Redactor>>,
 }
 
 /// Status of an agent session.

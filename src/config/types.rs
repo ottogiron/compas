@@ -245,6 +245,13 @@ pub struct OrchestrationConfig {
     /// Default target branch for merge operations (default: "main").
     #[serde(default = "default_merge_target")]
     pub default_merge_target: String,
+    /// Enable best-effort secret redaction in log files and output previews.
+    /// Defaults to `true`.
+    #[serde(default)]
+    pub redact_secrets: Option<bool>,
+    /// Additional regex patterns for secret redaction (beyond built-in set).
+    #[serde(default)]
+    pub redaction_patterns: Option<Vec<String>>,
     /// Per-backend circuit breaker configuration.
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
@@ -264,6 +271,8 @@ impl Default for OrchestrationConfig {
             merge_timeout_secs: default_merge_timeout_secs(),
             default_merge_strategy: default_merge_strategy(),
             default_merge_target: default_merge_target(),
+            redact_secrets: None,
+            redaction_patterns: None,
             circuit_breaker: CircuitBreakerConfig::default(),
         }
     }
@@ -613,5 +622,41 @@ mod tests {
         assert!(!cb.enabled);
         assert_eq!(cb.failure_threshold, 5);
         assert_eq!(cb.cooldown_secs, 120);
+    }
+
+    #[test]
+    fn test_config_redaction_defaults() {
+        let yaml = r#"
+            default_workdir: /tmp
+            state_dir: /tmp/state
+            agents:
+              - alias: dev
+                backend: claude
+        "#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(config.orchestration.redact_secrets.is_none());
+        assert!(config.orchestration.redaction_patterns.is_none());
+    }
+
+    #[test]
+    fn test_config_redaction_explicit() {
+        let yaml = r#"
+            default_workdir: /tmp
+            state_dir: /tmp/state
+            orchestration:
+              redact_secrets: false
+              redaction_patterns:
+                - 'CUSTOM_[A-Z]{8}'
+                - 'INTERNAL_KEY_[0-9]+'
+            agents:
+              - alias: dev
+                backend: claude
+        "#;
+        let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(config.orchestration.redact_secrets, Some(false));
+        let patterns = config.orchestration.redaction_patterns.as_ref().unwrap();
+        assert_eq!(patterns.len(), 2);
+        assert_eq!(patterns[0], "CUSTOM_[A-Z]{8}");
+        assert_eq!(patterns[1], "INTERNAL_KEY_[0-9]+");
     }
 }

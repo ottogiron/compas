@@ -1,4 +1,5 @@
 use crate::error::{OrchestratorError, Result};
+use crate::redact::Redactor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
@@ -131,6 +132,7 @@ pub fn wait_with_timeout(
     timeout: Option<Duration>,
     log_path: Option<&Path>,
     stdout_tx: Option<std::sync::Arc<std::sync::mpsc::SyncSender<String>>>,
+    redactor: Option<Arc<Redactor>>,
 ) -> Result<Output> {
     // Open (or create) the log file before spawning reader threads so that any
     // open error is surfaced early and doesn't swallow output silently.
@@ -162,6 +164,7 @@ pub fn wait_with_timeout(
     let mut out_thread: Option<std::thread::JoinHandle<()>> = {
         let buf = Arc::clone(&stdout_bytes);
         let lf = log_file.clone();
+        let rd = redactor.clone();
         child_stdout.map(|stream| {
             std::thread::spawn(move || {
                 let reader = BufReader::new(stream);
@@ -172,8 +175,12 @@ pub fn wait_with_timeout(
                         b.push(b'\n');
                     }
                     if let Some(ref f) = lf {
+                        let redacted = match rd {
+                            Some(ref r) => r.redact(&l),
+                            None => l.clone(),
+                        };
                         let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
-                        let _ = writeln!(guard, "{}", l);
+                        let _ = writeln!(guard, "{}", redacted);
                     }
                     if let Some(ref tx) = stdout_tx {
                         if let Err(std::sync::mpsc::TrySendError::Full(_)) = tx.try_send(l.clone())
@@ -200,8 +207,12 @@ pub fn wait_with_timeout(
                         b.push(b'\n');
                     }
                     if let Some(ref f) = lf {
+                        let redacted = match redactor {
+                            Some(ref r) => r.redact(&l),
+                            None => l.clone(),
+                        };
                         let mut guard = f.lock().unwrap_or_else(|e| e.into_inner());
-                        let _ = writeln!(guard, "[stderr] {}", l);
+                        let _ = writeln!(guard, "[stderr] {}", redacted);
                     }
                 }
             })
@@ -586,7 +597,8 @@ mod tests {
     #[test]
     fn test_spawn_cli_echo() {
         let child = spawn_cli("echo", &["hello"], None, None).unwrap();
-        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None, None).unwrap();
+        let output =
+            wait_with_timeout(child, Some(Duration::from_secs(5)), None, None, None).unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.contains("hello"));
     }
@@ -595,7 +607,8 @@ mod tests {
     fn test_spawn_cli_respects_workdir() {
         let dir = tempfile::tempdir().unwrap();
         let child = spawn_cli("pwd", &[], None, Some(dir.path())).unwrap();
-        let output = wait_with_timeout(child, Some(Duration::from_secs(5)), None, None).unwrap();
+        let output =
+            wait_with_timeout(child, Some(Duration::from_secs(5)), None, None, None).unwrap();
         let stdout = String::from_utf8_lossy(&output.stdout);
         let cwd = std::fs::canonicalize(stdout.trim()).unwrap();
         let expected = std::fs::canonicalize(dir.path()).unwrap();
@@ -605,7 +618,7 @@ mod tests {
     #[test]
     fn test_wait_with_timeout_expires() {
         let child = spawn_cli("sleep", &["60"], None, None).unwrap();
-        let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None, None);
+        let result = wait_with_timeout(child, Some(Duration::from_millis(200)), None, None, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("timed out"));
     }
@@ -615,8 +628,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("exec-test.log");
         let child = spawn_cli("echo", &["hello from stdout"], None, None).unwrap();
-        let output =
-            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
+        let output = wait_with_timeout(
+            child,
+            Some(Duration::from_secs(5)),
+            Some(&log_path),
+            None,
+            None,
+        )
+        .unwrap();
         // Output bytes are still collected correctly.
         assert!(String::from_utf8_lossy(&output.stdout).contains("hello from stdout"));
         // Log file contains the line.
@@ -629,8 +648,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("exec-stderr.log");
         let child = spawn_cli("sh", &["-c", "echo 'error line' >&2"], None, None).unwrap();
-        let _ =
-            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
+        let _ = wait_with_timeout(
+            child,
+            Some(Duration::from_secs(5)),
+            Some(&log_path),
+            None,
+            None,
+        )
+        .unwrap();
         let log = std::fs::read_to_string(&log_path).unwrap();
         assert!(log.contains("[stderr] error line"), "log was: {:?}", log);
     }
@@ -640,8 +665,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("logs").join("nested").join("exec.log");
         let child = spawn_cli("echo", &["hi"], None, None).unwrap();
-        let _ =
-            wait_with_timeout(child, Some(Duration::from_secs(5)), Some(&log_path), None).unwrap();
+        let _ = wait_with_timeout(
+            child,
+            Some(Duration::from_secs(5)),
+            Some(&log_path),
+            None,
+            None,
+        )
+        .unwrap();
         assert!(log_path.exists(), "log file should have been created");
     }
 

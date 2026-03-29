@@ -11,6 +11,7 @@ use crate::backend::registry::BackendRegistry;
 use crate::backend::{BackendOutput, ErrorCategory};
 use crate::config::types::AgentConfig;
 use crate::model::agent::Agent;
+use crate::redact::Redactor;
 use crate::store::{ExecutionRow, ExecutionStatus, Store};
 use crate::worktree::WorktreeManager;
 
@@ -69,6 +70,7 @@ pub async fn execute_trigger(
     worktree_manager: &Arc<WorktreeManager>,
     default_workdir: &std::path::Path,
     worktree_override_dir: Option<PathBuf>,
+    redactor: Option<Arc<Redactor>>,
 ) -> TriggerOutput {
     let exec_id = execution.id.clone();
     let thread_id = execution.thread_id.clone();
@@ -321,6 +323,7 @@ pub async fn execute_trigger(
     // orphan detection — if the worker crashes mid-execution, the PID is already
     // persisted and the next startup can kill the orphaned process.
     let instruction = instruction.to_string();
+    let redactor_for_session = redactor.clone();
     let start = Instant::now();
 
     let (pid_sender, pid_receiver) = std::sync::mpsc::sync_channel::<u32>(1);
@@ -362,6 +365,7 @@ pub async fn execute_trigger(
                 session.resume_session_id = resume_session_id;
                 session.stdout_tx = stdout_tx;
                 session.pid_tx = Some(pid_sender);
+                session.redactor = redactor_for_session;
                 let output = backend
                     .trigger(&agent, &session, Some(&instruction))
                     .await
@@ -435,7 +439,13 @@ pub async fn execute_trigger(
             // times with backoff to survive transient SQLITE_BUSY errors that
             // occur when another connection holds the write lock (telemetry
             // flush, heartbeat, stale checker, MCP server).
-            let output_preview = truncate(&output_text, 4096);
+            let output_preview = {
+                let text = truncate(&output_text, 4096);
+                match &redactor {
+                    Some(r) => r.redact(&text),
+                    None => text,
+                }
+            };
             if result.success {
                 let finalized = finalize_with_retry(3, || {
                     store.complete_execution(

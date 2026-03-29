@@ -47,6 +47,9 @@ orchestration:
   merge_timeout_secs: 30                 # Timeout for merge operations (default: 30)
   default_merge_strategy: merge          # Merge strategy: "merge", "rebase", or "squash" (default: "merge")
   default_merge_target: main             # Default target branch for orch_merge operations (default: "main")
+  redact_secrets: true                   # Redact secrets from logs and output_preview (default: true)
+  redaction_patterns:                    # Additional regex patterns beyond built-ins (optional)
+    - 'MY_INTERNAL_TOKEN_[A-Z0-9]{16}'
   circuit_breaker:
     enabled: true                        # Enable per-backend circuit breaker (default: true)
     failure_threshold: 3                 # Consecutive failures before circuit opens (default: 3)
@@ -250,7 +253,7 @@ Define CLI-based backends in YAML via `backend_definitions`. See the [Custom Bac
 
 ## Live Reload
 
-The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`.
+The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`, `redact_secrets`, `redaction_patterns`.
 
 These fields require a worker restart: `default_workdir`, `state_dir`, `database`, `max_concurrent_triggers`, `default_merge_target`, `worktree_dir`.
 

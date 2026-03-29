@@ -196,6 +196,7 @@ impl Backend for ClaudeCodeBackend {
             resume_session_id: None,
             stdout_tx: None,
             pid_tx: None,
+            redactor: None,
         })
     }
 
@@ -235,6 +236,7 @@ impl Backend for ClaudeCodeBackend {
             Some(timeout),
             agent.log_path.as_deref(),
             session.stdout_tx.clone(),
+            session.redactor.clone(),
         );
         self.tracker.untrack(&session.id);
 
@@ -287,7 +289,7 @@ impl Backend for ClaudeCodeBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None, None) {
+                match wait_with_timeout(child, Some(timeout), None, None, None) {
                     Ok(out) => {
                         let latency_ms = start.elapsed().as_millis() as u64;
                         PingResult {

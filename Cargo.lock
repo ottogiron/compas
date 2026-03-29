@@ -330,6 +330,7 @@ dependencies = [
  "notify-debouncer-mini",
  "pulldown-cmark",
  "ratatui",
+ "regex",
  "rmcp",
  "schemars",
  "serde",

@@ -183,6 +183,7 @@ impl Backend for OpenCodeBackend {
             resume_session_id: None,
             stdout_tx: None,
             pid_tx: None,
+            redactor: None,
         })
     }
 
@@ -218,6 +219,7 @@ impl Backend for OpenCodeBackend {
             Some(timeout),
             agent.log_path.as_deref(),
             session.stdout_tx.clone(),
+            session.redactor.clone(),
         );
         self.tracker.untrack(&session.id);
 
@@ -269,7 +271,7 @@ impl Backend for OpenCodeBackend {
         ) {
             Ok(child) => {
                 let timeout = Duration::from_secs(timeout_secs);
-                match wait_with_timeout(child, Some(timeout), None, None) {
+                match wait_with_timeout(child, Some(timeout), None, None, None) {
                     Ok(out) => {
                         // Clean up the throwaway ping session.
                         if let Some(oc_sid) = Self::extract_session_id_from_output(&out.stdout) {
