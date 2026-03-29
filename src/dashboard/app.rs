@@ -232,6 +232,8 @@ pub struct App {
     settings_scroll: u16,
     /// Total number of content lines in the Settings tab (set during render).
     settings_line_count: Cell<u16>,
+    /// Viewport height of the Settings tab inner area (set during render).
+    settings_viewport_height: Cell<u16>,
     /// Click geometry cache for the Ops tab (populated during render).
     pub(crate) ops_click_cache: RefCell<OpsClickCache>,
     /// Click geometry cache for the History tab (populated during render).
@@ -307,6 +309,7 @@ impl App {
             last_schedule_attempt: None,
             settings_scroll: 0,
             settings_line_count: Cell::new(0),
+            settings_viewport_height: Cell::new(0),
             ops_click_cache: RefCell::new(OpsClickCache::default()),
             history_click_cache: RefCell::new(HistoryClickCache::default()),
             agents_click_cache: RefCell::new(AgentsClickCache::default()),
@@ -724,7 +727,10 @@ impl App {
                 self.agents_selected = (self.agents_selected + 1).min(max);
             }
             3 => {
-                let max = self.settings_line_count.get().saturating_sub(1);
+                let max = self
+                    .settings_line_count
+                    .get()
+                    .saturating_sub(self.settings_viewport_height.get());
                 self.settings_scroll = (self.settings_scroll + 1).min(max);
             }
             _ => {}
@@ -1075,7 +1081,10 @@ impl App {
                 self.agents_selected = self.config.load().agents.len().saturating_sub(1);
             }
             3 => {
-                self.settings_scroll = self.settings_line_count.get().saturating_sub(1);
+                self.settings_scroll = self
+                    .settings_line_count
+                    .get()
+                    .saturating_sub(self.settings_viewport_height.get());
             }
             _ => {}
         }
@@ -2015,7 +2024,10 @@ impl App {
                     "—".to_string()
                 };
 
-                let runs_label = format!("{}/{}", run_count, sched.max_runs);
+                let runs_label = crate::dashboard::views::truncate(
+                    &format!("{}/{}", run_count, sched.max_runs),
+                    7,
+                );
                 let status_label = if sched.enabled { "enabled" } else { "disabled" };
                 let status_color = if sched.enabled {
                     theme::SUCCESS
@@ -2052,6 +2064,7 @@ impl App {
         // Track total line count for scroll bounds (interior mutability to
         // allow updating from an &self method — same pattern as click caches).
         self.settings_line_count.set(lines.len() as u16);
+        self.settings_viewport_height.set(inner.height);
 
         let scroll = self.settings_scroll;
         let paragraph = Paragraph::new(lines)
