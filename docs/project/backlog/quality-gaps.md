@@ -333,7 +333,7 @@ Gaps identified from internal review of compas's orchestration quality, develope
   - Recommendation explains how operators should reason about `await_chain` and terminal reviewers
 - Verification:
   - Manual: review architect output for concrete surface recommendation, schema guidance, and tradeoff analysis
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 
@@ -418,6 +418,14 @@ ORCH-TEAM-* (all), visual canvas, spatial computing, automatic model fallback
 
 ## Execution Metrics
 
+- Ticket: GAP-11
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-29 04:02 UTC
+- End: 2026-03-29 04:33 UTC
+- Duration: 00:30:29
+- Notes: (pending)
 - Ticket: GAP-10
 - Owner: (pending)
 - Complexity: (pending)
