@@ -36,11 +36,15 @@ use std::{
 use tokio::runtime::Handle;
 use tokio::sync::broadcast;
 
+use crate::config::types::AgentRole;
 use crate::config::ConfigHandle;
 use crate::dashboard::theme;
 use crate::dashboard::views::activity::{self, render_activity, OpsSelectable};
 use crate::dashboard::views::agents;
 use crate::dashboard::views::conversation::{render_conversation, ConversationViewState};
+use crate::dashboard::views::dispatch_prompt::{
+    render_dispatch_prompt, DispatchPromptState, DispatchStep,
+};
 use crate::dashboard::views::executions::{self, HistorySelectable};
 use crate::dashboard::views::log_viewer::{
     render_execution_detail, ExecutionDetailState, Tab as LogTab,
@@ -59,7 +63,7 @@ const HISTORY_ROW_LIMIT: i64 = 200;
 const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
 /// Total number of content lines in the help overlay (used for scroll bounds).
 /// Must stay in sync with the `lines` vec in `render_help_overlay_widget`.
-const HELP_LINE_COUNT: u16 = 21;
+const HELP_LINE_COUNT: u16 = 22;
 /// Maximum number of timeline events loaded when opening the log viewer.
 const TIMELINE_EVENT_LIMIT: i64 = 500;
 /// Minimum time between displayed progress summary changes per execution.
@@ -198,6 +202,8 @@ pub struct App {
     pub viewing_log: Option<ExecutionDetailState>,
     /// Active conversation view state. `Some` when the conversation overlay is open.
     pub viewing_conversation: Option<ConversationViewState>,
+    /// Active dispatch prompt state. `Some` when the dispatch overlay is open.
+    pub dispatch_prompt: Option<DispatchPromptState>,
     /// Whether the help overlay is visible.
     pub show_help: bool,
     /// Vertical scroll offset for the help overlay content.
@@ -304,6 +310,7 @@ impl App {
             executions_selected: 0,
             viewing_log: None,
             viewing_conversation: None,
+            dispatch_prompt: None,
             show_help: false,
             help_scroll: 0,
             help_viewport_height: Cell::new(0),
@@ -1040,6 +1047,93 @@ impl App {
         }
     }
 
+    // ── Dispatch prompt ──────────────────────────────────────────────────────
+
+    /// Open the dispatch prompt overlay. If a thread is selected in the Ops tab,
+    /// pre-fills thread context for continuing that thread.
+    fn open_dispatch_prompt(&mut self) {
+        let cfg = self.config.load();
+        let agents: Vec<String> = cfg
+            .agents
+            .iter()
+            .filter(|a| a.role == AgentRole::Worker)
+            .map(|a| a.alias.clone())
+            .collect();
+
+        if agents.is_empty() {
+            return; // No worker agents configured
+        }
+
+        // Check if a thread is currently selected for continuation
+        let (thread_id, thread_summary) =
+            if let Some(OpsSelectable::Thread(src_idx)) = self.selected_activity_target() {
+                if let Some(row) = self
+                    .activity_data
+                    .as_ref()
+                    .and_then(|d| d.rows.get(src_idx))
+                {
+                    let tid = row.thread_id.clone();
+                    let summary = row
+                        .summary
+                        .clone()
+                        .unwrap_or_else(|| crate::dashboard::views::truncate_left(&tid, 10));
+                    (Some(tid), Some(summary))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+        self.dispatch_prompt = Some(DispatchPromptState::new(agents, thread_id, thread_summary));
+    }
+
+    /// Execute the dispatch after user confirmation.
+    fn execute_dispatch(&mut self) {
+        let state = match self.dispatch_prompt.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+
+        let agent_alias = match state.selected_agent_alias() {
+            Some(a) => a.to_string(),
+            None => return,
+        };
+        let instruction = state.instruction.clone();
+        let thread_id = state
+            .thread_id
+            .clone()
+            .unwrap_or_else(|| ulid::Ulid::new().to_string());
+        let batch_id = state.batch_id.clone();
+
+        let result = self.handle.block_on(async {
+            self.store
+                .insert_dispatch_message(
+                    &thread_id,
+                    "operator",
+                    &agent_alias,
+                    "dispatch",
+                    &instruction,
+                    batch_id.as_deref(),
+                    None,
+                    false,
+                )
+                .await
+        });
+
+        match result {
+            Ok(_) => {
+                self.dispatch_prompt = None;
+                self.refresh_activity();
+            }
+            Err(e) => {
+                if let Some(ref mut s) = self.dispatch_prompt {
+                    s.error = Some(format!("Dispatch failed: {}", e));
+                }
+            }
+        }
+    }
+
     fn clear_drill_filters(&mut self) {
         if self.active_tab == 0 && self.drill_batch.is_some() {
             self.drill_batch = None;
@@ -1358,6 +1452,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 if app.confirm_quit {
                     app.render_quit_confirm_widget(area, buf);
                 }
+                if let Some(ref state) = app.dispatch_prompt {
+                    render_dispatch_prompt(state, area, buf);
+                }
             }
         })?;
 
@@ -1372,7 +1469,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     app.should_quit = true;
                     continue;
                 }
-                if app.viewing_conversation.is_some() {
+                if app.dispatch_prompt.is_some() {
+                    handle_dispatch_prompt_key(app, key.code);
+                } else if app.viewing_conversation.is_some() {
                     handle_conversation_key(app, key.code);
                 } else if app.viewing_log.is_some() {
                     handle_log_viewer_key(app, key.code);
@@ -1384,7 +1483,9 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     handle_list_key(app, key.code);
                 }
             } else if let Event::Mouse(mouse) = event {
-                if app.viewing_conversation.is_some() {
+                if app.dispatch_prompt.is_some() {
+                    // No-op: no mouse interaction in dispatch prompt.
+                } else if app.viewing_conversation.is_some() {
                     handle_conversation_mouse(app, mouse.kind);
                 } else if app.viewing_log.is_some() {
                     handle_log_viewer_mouse(app, mouse.kind, mouse.column, mouse.row);
@@ -1606,6 +1707,83 @@ fn handle_quit_confirm_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Handle key events while the dispatch prompt overlay is open.
+fn handle_dispatch_prompt_key(app: &mut App, code: KeyCode) {
+    let step = match app.dispatch_prompt.as_ref() {
+        Some(s) => s.step.clone(),
+        None => return,
+    };
+
+    match step {
+        DispatchStep::SelectAgent => match code {
+            KeyCode::Esc => {
+                app.dispatch_prompt = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    s.selected_agent = s.selected_agent.saturating_sub(1);
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    let max = s.agents.len().saturating_sub(1);
+                    s.selected_agent = s.selected_agent.saturating_add(1).min(max);
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    if !s.agents.is_empty() {
+                        s.step = DispatchStep::EnterInstruction;
+                        s.error = None;
+                    }
+                }
+            }
+            _ => {}
+        },
+        DispatchStep::EnterInstruction => match code {
+            KeyCode::Esc => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    s.step = DispatchStep::SelectAgent;
+                    s.error = None;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    if !s.instruction.trim().is_empty() {
+                        s.step = DispatchStep::Confirm;
+                        s.error = None;
+                    }
+                }
+            }
+            KeyCode::Backspace => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    s.instruction.pop();
+                }
+            }
+            KeyCode::Char(c) => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    s.instruction.push(c);
+                }
+            }
+            _ => {}
+        },
+        DispatchStep::Confirm => match code {
+            KeyCode::Char('y') => {
+                app.execute_dispatch();
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.dispatch_prompt = None;
+            }
+            KeyCode::Char('b') => {
+                if let Some(ref mut s) = app.dispatch_prompt {
+                    s.step = DispatchStep::EnterInstruction;
+                    s.error = None;
+                }
+            }
+            _ => {}
+        },
+    }
+}
 /// Handle key events while help overlay is open.
 fn handle_help_key(app: &mut App, code: KeyCode) {
     let max_scroll = HELP_LINE_COUNT.saturating_sub(app.help_viewport_height.get());
@@ -1653,6 +1831,10 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         // Open conversation view for selected thread.
         KeyCode::Char('c') => {
             app.open_conversation();
+        }
+        // Open dispatch prompt (Ops tab only).
+        KeyCode::Char('d') if app.active_tab == 0 => {
+            app.open_dispatch_prompt();
         }
         // Enter: drill batch row in Ops/History, agent drill in Agents, otherwise open execution detail.
         KeyCode::Enter => {
@@ -2275,7 +2457,7 @@ impl App {
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
-        let modal = centered_rect(72, 23, area);
+        let modal = centered_rect(72, 24, area);
         let mut block = Block::bordered()
             .border_style(Style::new().fg(theme::BORDER_FOCUS))
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
@@ -2299,8 +2481,11 @@ impl App {
             Line::from(" Navigation"),
             Line::from("   ↑/↓ or j/k move   g/G first/last"),
             Line::from(" Ops"),
-            Line::from("   Enter open log or drill batch   c conversation view"),
+            Line::from(
+                "   d dispatch to agent   Enter open log or drill batch   c conversation view",
+            ),
             Line::from("   Esc/x back from batch drill"),
+            Line::from("   d with thread selected continues existing thread"),
             Line::from(" Agents"),
             Line::from("   ↑/↓ select agent   Enter view executions"),
             Line::from(" History"),
@@ -2672,6 +2857,7 @@ mod mouse_tests {
             backend_definitions: None,
             hooks: None,
             schedules: None,
+            agent_defaults: None,
         };
         let handle = ConfigHandle::new(config);
         App::new(
@@ -2760,5 +2946,73 @@ mod mouse_tests {
         app.confirm_quit = true;
         handle_quit_confirm_key(&mut app, KeyCode::Esc);
         assert!(!app.confirm_quit);
+    }
+
+    // ── dispatch_prompt ──────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_dispatch_prompt_step_advance() {
+        let mut app = make_test_app().await;
+        app.open_dispatch_prompt();
+        assert!(app.dispatch_prompt.is_some());
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::SelectAgent
+        );
+        // Enter advances to EnterInstruction.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::EnterInstruction
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_prompt_esc_cancels_from_select() {
+        let mut app = make_test_app().await;
+        app.open_dispatch_prompt();
+        assert!(app.dispatch_prompt.is_some());
+        handle_dispatch_prompt_key(&mut app, KeyCode::Esc);
+        assert!(app.dispatch_prompt.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_prompt_esc_from_instruction_goes_back() {
+        let mut app = make_test_app().await;
+        app.open_dispatch_prompt();
+        // Advance to EnterInstruction.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::EnterInstruction
+        );
+        // Esc goes back to SelectAgent.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Esc);
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::SelectAgent
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_prompt_back_from_confirm() {
+        let mut app = make_test_app().await;
+        app.open_dispatch_prompt();
+        // Advance to EnterInstruction.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Enter);
+        // Type something so Enter submits.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Char('h'));
+        handle_dispatch_prompt_key(&mut app, KeyCode::Char('i'));
+        handle_dispatch_prompt_key(&mut app, KeyCode::Enter);
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::Confirm
+        );
+        // 'b' goes back to EnterInstruction.
+        handle_dispatch_prompt_key(&mut app, KeyCode::Char('b'));
+        assert_eq!(
+            app.dispatch_prompt.as_ref().unwrap().step,
+            DispatchStep::EnterInstruction
+        );
     }
 }

@@ -4,6 +4,7 @@ pub mod action_menu;
 pub mod activity;
 pub mod agents;
 pub mod conversation;
+pub mod dispatch_prompt;
 pub mod executions;
 pub mod log_viewer;
 pub mod payload;
