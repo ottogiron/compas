@@ -2144,6 +2144,7 @@ schedules:
     fn test_warning_duplicate_bypass_flag_claude() {
         let mut config = minimal_config();
         config.agents[0].backend = "claude".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
         let warnings = collect_config_warnings(&config);
         assert_eq!(warnings.len(), 1);
@@ -2160,6 +2161,7 @@ schedules:
     fn test_warning_duplicate_bypass_flag_codex() {
         let mut config = minimal_config();
         config.agents[0].backend = "codex".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--full-auto".into()]);
         let warnings = collect_config_warnings(&config);
         assert_eq!(warnings.len(), 1);
@@ -2170,6 +2172,7 @@ schedules:
     fn test_warning_duplicate_bypass_flag_gemini() {
         let mut config = minimal_config();
         config.agents[0].backend = "gemini".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--yolo".into()]);
         let warnings = collect_config_warnings(&config);
         assert_eq!(warnings.len(), 1);
@@ -2180,6 +2183,7 @@ schedules:
     fn test_warning_dangerous_flag_cross_backend() {
         let mut config = minimal_config();
         config.agents[0].backend = "claude".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--yolo".into()]);
         let warnings = collect_config_warnings(&config);
         assert_eq!(warnings.len(), 1);
@@ -2194,6 +2198,7 @@ schedules:
     fn test_warning_multiple_bypass_flags() {
         let mut config = minimal_config();
         config.agents[0].backend = "codex".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec![
             "--full-auto".into(),
             "--dangerously-bypass-approvals-and-sandbox".into(),
@@ -2217,6 +2222,7 @@ schedules:
     fn test_no_warning_for_safe_backend_args() {
         let mut config = minimal_config();
         config.agents[0].backend = "claude".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--model".into(), "opus".into()]);
         let warnings = collect_config_warnings(&config);
         assert!(warnings.is_empty());
@@ -2297,6 +2303,7 @@ schedules:
     fn test_combined_bypass_and_env_warnings() {
         let mut config = minimal_config();
         config.agents[0].backend = "claude".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
         let mut env = std::collections::HashMap::new();
         env.insert("LD_PRELOAD".into(), "/evil.so".into());
