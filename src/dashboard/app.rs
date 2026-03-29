@@ -1006,18 +1006,19 @@ impl App {
         self.show_help = !self.show_help;
     }
 
-    fn clear_batch_drill(&mut self) {
-        if self.drill_batch.is_some() {
+    fn clear_drill_filters(&mut self) {
+        if self.active_tab == 0 && self.drill_batch.is_some() {
             self.drill_batch = None;
             self.activity_selected = 0;
         }
-        if self.history_drill_batch.is_some() {
-            self.history_drill_batch = None;
-            self.executions_selected = 0;
-        }
-        if self.history_agent_filter.is_some() {
-            self.history_agent_filter = None;
-            self.executions_selected = 0;
+        if self.active_tab == 2 {
+            if self.history_drill_batch.is_some() {
+                self.history_drill_batch = None;
+                self.executions_selected = 0;
+            } else if self.history_agent_filter.is_some() {
+                self.history_agent_filter = None;
+                self.executions_selected = 0;
+            }
         }
     }
 
@@ -1573,8 +1574,8 @@ fn handle_list_key(app: &mut App, code: KeyCode) {
         KeyCode::Down | KeyCode::Char('j') => app.select_next_row(),
         KeyCode::Char('g') => app.select_first_row(),
         KeyCode::Char('G') => app.select_last_row(),
-        KeyCode::Esc => app.clear_batch_drill(),
-        KeyCode::Char('x') => app.clear_batch_drill(),
+        KeyCode::Esc => app.clear_drill_filters(),
+        KeyCode::Char('x') => app.clear_drill_filters(),
         // Open conversation view for selected thread.
         KeyCode::Char('c') => {
             app.open_conversation();
@@ -2160,7 +2161,7 @@ impl App {
     }
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
-        let modal = centered_rect(72, 22, area);
+        let modal = centered_rect(72, 23, area);
         let block = Block::bordered()
             .border_style(Style::new().fg(theme::BORDER_FOCUS))
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))

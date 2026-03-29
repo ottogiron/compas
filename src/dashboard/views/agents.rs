@@ -2,13 +2,13 @@
 //! recent execution results.
 //!
 //! Layout (vertical list of agent cards):
-//!   ┌ focused ───────────────────────────────────────────────────────────────┐
-//!   │  ● focused       │ backend: claude  │ model: sonnet  │ role: worker    │
-//!   │  Active: 1                                                              │
-//!   │  completed (1234ms)                                                     │
-//!   │  failed (-)                                                             │
-//!   │  completed (890ms)                                                      │
-//!   └────────────────────────────────────────────────────────────────────────┘
+//!   ┌ focused ──────────────────────────────────────────────────────────────┐
+//!   │  ● focused       claude / sonnet-4 / worker                           │
+//!   │  Active: 1                                                            │
+//!   │  Completed (1.2s)  3m ago                                             │
+//!   │  Failed (-)  5m ago                                                   │
+//!   │  Completed (890ms)  12m ago                                           │
+//!   └──────────────────────────────────────────────────────────────────────┘
 
 use ratatui::{
     layout::Rect,
@@ -275,5 +275,43 @@ fn format_relative_time(age_secs: i64) -> String {
         format!("{}h ago", age / 3_600)
     } else {
         format!("{}d ago", age / 86_400)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_relative_time_seconds() {
+        assert_eq!(format_relative_time(0), "0s ago");
+        assert_eq!(format_relative_time(30), "30s ago");
+        assert_eq!(format_relative_time(59), "59s ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_minutes() {
+        assert_eq!(format_relative_time(60), "1m ago");
+        assert_eq!(format_relative_time(180), "3m ago");
+        assert_eq!(format_relative_time(3599), "59m ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_hours() {
+        assert_eq!(format_relative_time(3600), "1h ago");
+        assert_eq!(format_relative_time(7200), "2h ago");
+        assert_eq!(format_relative_time(86399), "23h ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_days() {
+        assert_eq!(format_relative_time(86400), "1d ago");
+        assert_eq!(format_relative_time(172800), "2d ago");
+    }
+
+    #[test]
+    fn test_format_relative_time_negative_clamps_to_zero() {
+        assert_eq!(format_relative_time(-5), "0s ago");
+        assert_eq!(format_relative_time(-100), "0s ago");
     }
 }
