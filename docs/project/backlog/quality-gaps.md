@@ -288,6 +288,32 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Complexity: XS
 - Risk: Low
 
+## Ticket GAP-10 — Integrate `ticket reconcile` into Compas Hooking
+
+- Goal: Apply the new `ticket reconcile` capability in compas so stale or inconsistent sessions fail the repo's pre-commit gate before they silently satisfy ticket tracking.
+- In scope:
+  - Update `scripts/hooks/pre-commit` to use `ticket reconcile`
+  - Keep code-only gating semantics (docs-only commits should still bypass ticket enforcement)
+  - Update `AGENTS.md` and repo docs to describe reconcile-based validation
+  - Preserve backlog-first checks for active sessions
+- Out of scope:
+  - Changes to the external `ticket-tracker` repo
+  - Exact staged-file-to-ticket ownership validation
+  - Automatic session cleanup from the hook
+- Dependencies: GAP-9
+- Acceptance criteria:
+  - Code commits fail when `ticket reconcile` reports stale or invalid sessions
+  - Valid active ticket and batch sessions still pass pre-commit
+  - Docs mention `ticket reconcile` as the repo-side truth check
+  - `make verify` passes
+- Verification:
+  - `make verify`
+  - Manual: stale session plus staged Rust file fails pre-commit
+  - Manual: valid active session plus staged Rust file passes pre-commit
+- Status: Todo
+- Complexity: S
+- Risk: Low
+
 ---
 
 ## Deferred: Visual Orchestration Canvas
@@ -332,11 +358,12 @@ Could be a view in the Tauri desktop app (depends on MFE-2).
 4. **GAP-7** (distribution) — medium, unblocks adoption
 5. **GAP-8** (release policy exception) — small, governance tweak
 6. **GAP-9** (session tracking cleanup) — small, governance cleanup
-7. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
-8. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
-9. **GAP-6** (shared context) — medium, new coordination primitive
+7. **GAP-10** (reconcile hook integration) — small, repo workflow hardening
+8. **GAP-3** (cost budgets) — medium, builds on OBS-01 telemetry. Ideally after OBS-02 lands.
+9. **GAP-4** (audit trail) — medium, new table + MCP tool + CLI
+10. **GAP-6** (shared context) — medium, new coordination primitive
 
-GAP-1 through GAP-5, GAP-8, and GAP-9 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
+GAP-1 through GAP-5, GAP-8, GAP-9, and GAP-10 can run in parallel with the MFE and MPR backlogs. GAP-6 and GAP-7 are independent of all other backlogs.
 
 ### Cross-backlog priority recommendation (all open tickets across all backlogs)
 
