@@ -112,7 +112,7 @@ Captured raw stream-json from all four backends. Key findings:
 - Verification:
   - `make verify`
   - Integration tests with seeded execution_events and executions data
-- Status: Todo
+- Status: Done
 
 ## Ticket OBS-03 — Surface metrics via MCP
 

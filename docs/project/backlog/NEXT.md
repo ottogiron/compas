@@ -4,20 +4,15 @@ Last updated: 2026-03-29
 
 ## Active
 
-- CAP-VIS — Agent capacity visibility in orch_list_agents (`capacity-visibility.md`)
-
 > List concrete in-flight tickets only. Use backlog status and current work reality as the source of truth; use `ticket status` as a hint, not as a mechanical source. Exclude stale sessions and completed tickets.
 
 ## Queue
 
 Ordered by priority. Work top item when capacity is available.
 
-1. SEC-6 — Recursive dispatch protection (`security-hardening.md`)
-2. EVO-16 — Session resume after crash (`orch-evolution.md`)
-3. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
-4. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-5. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-6. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+1. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+2. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+3. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
 
 ## Backlog
 

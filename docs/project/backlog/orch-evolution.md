@@ -439,7 +439,7 @@ Created: 2026-03-14
   - New test: early-persisted session ID from still-executing row is returned
   - Integration test: dispatch → persist session ID → mark crashed → re-dispatch → verify session ID passed to backend
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket ORCH-EVO-17 — `skip_handoff` Dispatch Flag
 
