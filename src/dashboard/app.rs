@@ -172,6 +172,8 @@ pub struct App {
     pub active_tab: usize,
     /// Set to `true` to break the event loop and exit cleanly.
     pub should_quit: bool,
+    /// When `true`, show the quit confirmation dialog.
+    pub confirm_quit: bool,
     /// Handle to the SQLite store.
     pub store: Store,
     /// Orchestrator configuration — live-reloaded via `ConfigHandle`.
@@ -289,6 +291,7 @@ impl App {
         Self {
             active_tab: 0,
             should_quit: false,
+            confirm_quit: false,
             store,
             config,
             config_path,
@@ -1363,6 +1366,8 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     handle_conversation_key(app, key.code);
                 } else if app.viewing_log.is_some() {
                     handle_log_viewer_key(app, key.code);
+                } else if app.confirm_quit {
+                    handle_quit_confirm_key(app, key.code);
                 } else if app.show_help {
                     handle_help_key(app, key.code);
                 } else {
@@ -1373,6 +1378,8 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                     handle_conversation_mouse(app, mouse.kind);
                 } else if app.viewing_log.is_some() {
                     handle_log_viewer_mouse(app, mouse.kind, mouse.column, mouse.row);
+                } else if app.confirm_quit {
+                    // No-op: no mouse interaction in quit confirmation dialog.
                 } else if app.show_help {
                     // No-op: no mouse interaction in help overlay.
                 } else {
@@ -1580,6 +1587,15 @@ fn handle_conversation_key(app: &mut App, code: KeyCode) {
     }
 }
 
+/// Handle key events while quit confirmation dialog is open.
+fn handle_quit_confirm_key(app: &mut App, code: KeyCode) {
+    match code {
+        KeyCode::Char('y') | KeyCode::Char('Y') => app.should_quit = true,
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.confirm_quit = false,
+        _ => {}
+    }
+}
+
 /// Handle key events while help overlay is open.
 fn handle_help_key(app: &mut App, code: KeyCode) {
     let max_scroll = HELP_LINE_COUNT.saturating_sub(app.help_viewport_height.get());
@@ -1599,7 +1615,7 @@ fn handle_help_key(app: &mut App, code: KeyCode) {
 fn handle_list_key(app: &mut App, code: KeyCode) {
     app.show_hint_banner = false;
     match code {
-        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Char('q') => app.confirm_quit = true,
         KeyCode::Char('?') => app.toggle_help(),
         // Manual refresh.
         KeyCode::Char('r') => match app.active_tab {
@@ -1949,6 +1965,9 @@ impl Widget for &App {
         if self.show_help {
             self.render_help_overlay_widget(area, buf);
         }
+        if self.confirm_quit {
+            self.render_quit_confirm_widget(area, buf);
+        }
     }
 }
 
@@ -2230,6 +2249,28 @@ impl App {
             .render(area, buf);
     }
 
+    fn render_quit_confirm_widget(&self, area: Rect, buf: &mut Buffer) {
+        let modal = centered_rect(50, 5, area);
+        let block = Block::bordered()
+            .border_style(Style::new().fg(theme::BORDER_FOCUS))
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
+            .title(" Quit ");
+        let inner = block.inner(modal);
+        Clear.render(modal, buf);
+        block.render(modal, buf);
+
+        let line = Line::from(vec![
+            Span::raw("Are you sure you want to quit? "),
+            Span::styled("y", Style::new().fg(theme::ACCENT).bold()),
+            Span::raw("/"),
+            Span::styled("n", Style::new().fg(theme::ACCENT).bold()),
+        ]);
+
+        Paragraph::new(line)
+            .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
+            .render(inner, buf);
+    }
+
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
         let modal = centered_rect(72, 23, area);
         let mut block = Block::bordered()
@@ -2248,7 +2289,9 @@ impl App {
 
         let lines = vec![
             Line::from(" Global"),
-            Line::from("   q quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs"),
+            Line::from(
+                "   q confirm quit / Ctrl+C quit   ? toggle help   Tab/Shift+Tab switch tabs",
+            ),
             Line::from("   1-4 jump tabs   r refresh"),
             Line::from(" Navigation"),
             Line::from("   ↑/↓ or j/k move   g/G first/last"),
@@ -2675,5 +2718,43 @@ mod mouse_tests {
         app.toggle_help();
         assert!(app.show_help);
         assert_eq!(app.help_scroll, 0);
+    }
+
+    // ── quit confirmation ────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_handle_list_key_q_sets_confirm_not_quit() {
+        let mut app = make_test_app().await;
+        assert!(!app.confirm_quit);
+        assert!(!app.should_quit);
+
+        handle_list_key(&mut app, KeyCode::Char('q'));
+
+        assert!(app.confirm_quit);
+        assert!(!app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_confirm_key_y_quits() {
+        let mut app = make_test_app().await;
+        app.confirm_quit = true;
+
+        handle_quit_confirm_key(&mut app, KeyCode::Char('y'));
+
+        assert!(app.should_quit);
+    }
+
+    #[tokio::test]
+    async fn test_handle_quit_confirm_key_n_cancels() {
+        let mut app = make_test_app().await;
+        app.confirm_quit = true;
+
+        handle_quit_confirm_key(&mut app, KeyCode::Char('n'));
+        assert!(!app.confirm_quit);
+
+        // Also test Esc
+        app.confirm_quit = true;
+        handle_quit_confirm_key(&mut app, KeyCode::Esc);
+        assert!(!app.confirm_quit);
     }
 }
