@@ -170,16 +170,18 @@ mod tests {
     #[test]
     fn test_redact_stripe_key() {
         let r = Redactor::new();
-        let input = "PLACEHOLDER_STRIPE_LIVE_TESTING";
-        let out = r.redact(input);
+        // Build at runtime to avoid triggering GitHub secret scanning on the literal.
+        let input = format!("sk_{}_FAKEFAKEFAKEFAKEFAKEFAKE", "live");
+        let out = r.redact(&input);
         assert!(out.contains("[REDACTED:stripe_key]"), "got: {}", out);
     }
 
     #[test]
     fn test_redact_stripe_test_key() {
         let r = Redactor::new();
-        let input = "PLACEHOLDER_STRIPE_TEST_TESTING";
-        let out = r.redact(input);
+        // Build at runtime to avoid triggering GitHub secret scanning on the literal.
+        let input = format!("sk_{}_FAKEFAKEFAKEFAKEFAKEFAKE", "test");
+        let out = r.redact(&input);
         assert!(out.contains("[REDACTED:stripe_key]"), "got: {}", out);
     }
 
