@@ -4,6 +4,8 @@
 //! surfaces (for example, dashboard actions) can share exactly the same
 //! transition behavior and error contracts.
 
+pub mod merge;
+
 use serde::Serialize;
 use thiserror::Error;
 

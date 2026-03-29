@@ -15,7 +15,6 @@ use tracing::debug;
 
 use super::params::{MergeCancelParams, MergeParams, MergeStatusParams, WaitMergeParams};
 use super::server::{err_text, json_text, OrchestratorMcpServer};
-use crate::merge::MergeExecutor;
 use crate::store::MergeOperation;
 use crate::wait_merge::{self, WaitMergeOutcome, WaitMergeRequest};
 
@@ -157,99 +156,35 @@ impl OrchestratorMcpServer {
     // ── orch_merge ────────────────────────────────────────────────────────
 
     pub async fn merge_impl(&self, params: MergeParams) -> Result<CallToolResult, rmcp::ErrorData> {
-        let config = self.config.load();
+        let merge_svc =
+            crate::lifecycle::merge::MergeService::new(self.store.clone(), self.config.clone());
 
-        let target_branch = params.target_branch.unwrap_or_else(|| "main".to_string());
-        let strategy = params
-            .strategy
-            .unwrap_or_else(|| config.orchestration.default_merge_strategy.clone());
-
-        // Validate strategy
-        if !["merge", "rebase", "squash"].contains(&strategy.as_str()) {
-            return Ok(err_text(format!(
-                "invalid merge strategy '{}' — must be one of: merge, rebase, squash",
-                strategy
-            )));
-        }
-
-        // Resolve repo_root from thread's worktree_repo_root (per-agent workdir),
-        // falling back to config.default_workdir for shared-workspace or legacy threads.
-        let repo_root = match self.store.get_thread_worktree_info(&params.thread_id).await {
-            Ok(Some((_, root))) => root,
-            Ok(None) => config.default_workdir.clone(),
-            Err(e) => {
-                tracing::warn!(thread_id = %params.thread_id, error = %e,
-                    "get_thread_worktree_info failed, falling back to default_workdir");
-                config.default_workdir.clone()
-            }
-        };
-        let preflight = match MergeExecutor::preflight_check(
-            &self.store,
-            &params.thread_id,
-            &target_branch,
-            &repo_root,
-        )
-        .await
+        let outcome = match merge_svc
+            .queue_merge(
+                &params.thread_id,
+                &params.from,
+                params.target_branch.as_deref(),
+                params.strategy.as_deref(),
+            )
+            .await
         {
-            Ok(pf) => pf,
-            Err(e) => return Ok(err_text(e)),
-        };
-
-        // Generate ULID and insert
-        let op_id = ulid::Ulid::new().to_string();
-        let now = chrono::Utc::now().timestamp();
-
-        // Look up the thread summary for use as the merge commit message
-        let commit_message = match self.store.get_thread(&params.thread_id).await {
-            Ok(Some(thread)) => thread.summary,
-            _ => None,
-        };
-
-        let op = MergeOperation {
-            id: op_id.clone(),
-            thread_id: params.thread_id.clone(),
-            source_branch: preflight.source_branch.clone(),
-            target_branch: target_branch.clone(),
-            merge_strategy: strategy.clone(),
-            requested_by: params.from,
-            status: "queued".to_string(),
-            push_requested: false,
-            queued_at: now,
-            claimed_at: None,
-            started_at: None,
-            finished_at: None,
-            duration_ms: None,
-            result_summary: None,
-            error_detail: None,
-            conflict_files: None,
-            commit_message,
-        };
-
-        if let Err(e) = self.store.insert_merge_op(&op).await {
-            return Ok(err_text(format!("failed to queue merge: {}", e)));
-        }
-
-        let queue_depth = match self.store.count_queued_merge_ops(&target_branch).await {
-            Ok(depth) => depth,
-            Err(e) => {
-                tracing::warn!(target_branch = %target_branch, error = %e, "count_queued_merge_ops failed, defaulting to 1");
-                1
-            }
+            Ok(o) => o,
+            Err(e) => return Ok(err_text(e.to_string())),
         };
 
         let next_step = format!(
             "orch_wait_merge(op_id=\"{}\") or CLI: compas wait merge --op-id {} --timeout 120",
-            op_id, op_id
+            outcome.op_id, outcome.op_id
         );
 
         Ok(json_text(&MergeQueuedResult {
-            op_id,
-            thread_id: params.thread_id,
-            source_branch: preflight.source_branch,
-            target_branch,
-            strategy,
+            op_id: outcome.op_id,
+            thread_id: outcome.thread_id,
+            source_branch: outcome.source_branch,
+            target_branch: outcome.target_branch,
+            strategy: outcome.strategy,
             status: "queued".to_string(),
-            queue_depth,
+            queue_depth: outcome.queue_depth,
             next_step,
         }))
     }
