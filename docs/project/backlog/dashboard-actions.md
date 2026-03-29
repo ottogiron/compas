@@ -35,7 +35,7 @@ Created: 2026-03-29
 - Verification:
   - `cargo test --lib dashboard::actions`
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket DASH-ACT-2 — LifecycleService.abandon_batch()
 
@@ -59,7 +59,7 @@ Created: 2026-03-29
   - `cargo test --lib lifecycle`
   - `cargo test abandon_batch`
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket DASH-ACT-3 — MergeService Extraction
 
@@ -84,7 +84,7 @@ Created: 2026-03-29
   - `cargo test --lib lifecycle::merge`
   - `cargo test merge`
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket DASH-ACT-4 — Action Menu View Widget
 
@@ -111,7 +111,7 @@ Created: 2026-03-29
 - Verification:
   - `cargo test --lib dashboard::views::action_menu`
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket DASH-ACT-5 — Dashboard Integration
 
