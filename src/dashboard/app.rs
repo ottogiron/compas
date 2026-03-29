@@ -1348,6 +1348,16 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
             } else {
                 frame.render_widget(&*app, frame.area());
                 app.render_content_with_frame(frame);
+                // Overlays must render AFTER render_content_with_frame so they
+                // are not overwritten by Frame-based tab content.
+                let area = frame.area();
+                let buf = frame.buffer_mut();
+                if app.show_help {
+                    app.render_help_overlay_widget(area, buf);
+                }
+                if app.confirm_quit {
+                    app.render_quit_confirm_widget(area, buf);
+                }
             }
         })?;
 
@@ -1961,13 +1971,6 @@ impl Widget for &App {
         self.render_tab_bar_widget(tab_bar, buf);
         self.render_content_widget(content, buf);
         self.render_status_bar_widget(status_bar, buf);
-
-        if self.show_help {
-            self.render_help_overlay_widget(area, buf);
-        }
-        if self.confirm_quit {
-            self.render_quit_confirm_widget(area, buf);
-        }
     }
 }
 
