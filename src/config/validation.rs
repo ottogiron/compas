@@ -373,7 +373,84 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         }
     }
 
+    // ── Advisory warnings (SEC-3, SEC-5) ──
+    for warning in collect_config_warnings(config) {
+        tracing::warn!("{}", warning);
+    }
+
     Ok(())
+}
+
+/// Known bypass/dangerous flags and their associated built-in backend.
+///
+/// The backend field indicates which backend **auto-injects** the flag. A sentinel
+/// value `"_none"` means no backend injects this flag — it is always user-supplied
+/// and should always produce a "dangerous flag" warning, never a "duplicate" warning.
+const KNOWN_BYPASS_FLAGS: &[(&str, &str)] = &[
+    ("--dangerously-skip-permissions", "claude"),
+    // codex detects this flag to suppress --full-auto but never injects it
+    ("--dangerously-bypass-approvals-and-sandbox", "_none"),
+    ("--yolo", "gemini"),
+    ("--full-auto", "codex"),
+];
+
+/// Environment variable names that are security-sensitive.
+const SENSITIVE_ENV_VARS: &[&str] = &[
+    "PATH",
+    "HOME",
+    "SHELL",
+    "USER",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+];
+
+/// Collect advisory config warnings without rejecting the config.
+///
+/// Called by [`validate_config`] to emit `tracing::warn!` messages. Tests can
+/// call this directly and assert on the returned `Vec<String>`.
+pub(crate) fn collect_config_warnings(config: &OrchestratorConfig) -> Vec<String> {
+    let mut warnings = Vec::new();
+
+    for agent in &config.agents {
+        // SEC-3: Warn on dangerous flags in backend_args
+        if let Some(ref backend_args) = agent.backend_args {
+            for arg in backend_args {
+                for &(flag, flag_backend) in KNOWN_BYPASS_FLAGS {
+                    if arg == flag {
+                        if agent.backend == flag_backend {
+                            warnings.push(format!(
+                                "agent '{}' backend_args includes '{}' which is already applied by the {} backend (duplicate flag)",
+                                agent.alias, flag, agent.backend
+                            ));
+                        } else {
+                            warnings.push(format!(
+                                "agent '{}' backend_args includes dangerous flag '{}'",
+                                agent.alias, flag
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // SEC-5: Warn on security-sensitive env var overrides
+        if let Some(ref env) = agent.env {
+            let mut keys: Vec<&String> = env.keys().collect();
+            keys.sort();
+            for key in keys {
+                if SENSITIVE_ENV_VARS.contains(&key.as_str()) {
+                    warnings.push(format!(
+                        "agent '{}' env overrides security-sensitive variable '{}'",
+                        agent.alias, key
+                    ));
+                }
+            }
+        }
+    }
+
+    warnings
 }
 
 fn is_valid_intent_slug(intent: &str) -> bool {
@@ -1927,5 +2004,177 @@ schedules:
             "expected 'body must not be empty', got: {}",
             err
         );
+    }
+
+    // ── SEC-3: backend_args bypass-flag warnings ──
+
+    #[test]
+    fn test_warning_duplicate_bypass_flag_claude() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("already applied by the claude backend"),
+            "expected duplicate-flag warning, got: {}",
+            warnings[0]
+        );
+        // Config still loads
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_warning_duplicate_bypass_flag_codex() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "codex".into();
+        config.agents[0].backend_args = Some(vec!["--full-auto".into()]);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("already applied by the codex backend"));
+    }
+
+    #[test]
+    fn test_warning_duplicate_bypass_flag_gemini() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "gemini".into();
+        config.agents[0].backend_args = Some(vec!["--yolo".into()]);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("already applied by the gemini backend"));
+    }
+
+    #[test]
+    fn test_warning_dangerous_flag_cross_backend() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        config.agents[0].backend_args = Some(vec!["--yolo".into()]);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].contains("dangerous flag '--yolo'"),
+            "expected cross-backend dangerous warning, got: {}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn test_warning_multiple_bypass_flags() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "codex".into();
+        config.agents[0].backend_args = Some(vec![
+            "--full-auto".into(),
+            "--dangerously-bypass-approvals-and-sandbox".into(),
+            "--yolo".into(), // cross-backend
+        ]);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 3);
+        // --full-auto is auto-injected by codex → duplicate warning
+        assert!(warnings[0].contains("already applied by the codex backend"));
+        // --dangerously-bypass-approvals-and-sandbox is never auto-injected → dangerous flag
+        assert!(
+            warnings[1].contains("dangerous flag '--dangerously-bypass-approvals-and-sandbox'"),
+            "expected dangerous-flag warning, got: {}",
+            warnings[1]
+        );
+        // --yolo is gemini's flag → dangerous flag on codex agent
+        assert!(warnings[2].contains("dangerous flag '--yolo'"));
+    }
+
+    #[test]
+    fn test_no_warning_for_safe_backend_args() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        config.agents[0].backend_args = Some(vec!["--model".into(), "opus".into()]);
+        let warnings = collect_config_warnings(&config);
+        assert!(warnings.is_empty());
+    }
+
+    // ── SEC-5: sensitive env var warnings ──
+
+    #[test]
+    fn test_warning_sensitive_env_path() {
+        let mut config = minimal_config();
+        let mut env = std::collections::HashMap::new();
+        env.insert("PATH".into(), "/custom/bin".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("security-sensitive variable 'PATH'"));
+        // Config still loads
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_warning_sensitive_env_ld_preload() {
+        let mut config = minimal_config();
+        let mut env = std::collections::HashMap::new();
+        env.insert("LD_PRELOAD".into(), "/evil.so".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("security-sensitive variable 'LD_PRELOAD'"));
+    }
+
+    #[test]
+    fn test_warning_sensitive_env_dyld() {
+        let mut config = minimal_config();
+        let mut env = std::collections::HashMap::new();
+        env.insert("DYLD_INSERT_LIBRARIES".into(), "/evil.dylib".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("security-sensitive variable 'DYLD_INSERT_LIBRARIES'"));
+    }
+
+    #[test]
+    fn test_warning_multiple_sensitive_env_vars() {
+        let mut config = minimal_config();
+        let mut env = std::collections::HashMap::new();
+        env.insert("PATH".into(), "/custom".into());
+        env.insert("HOME".into(), "/evil".into());
+        env.insert("SAFE_VAR".into(), "ok".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 2);
+        // Sorted order: HOME before PATH
+        assert!(warnings[0].contains("'HOME'"));
+        assert!(warnings[1].contains("'PATH'"));
+    }
+
+    #[test]
+    fn test_no_warning_for_safe_env_vars() {
+        let mut config = minimal_config();
+        let mut env = std::collections::HashMap::new();
+        env.insert("ANTHROPIC_API_KEY".into(), "key".into());
+        env.insert("MY_CUSTOM_VAR".into(), "value".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_no_warning_when_env_absent() {
+        let config = minimal_config();
+        assert!(config.agents[0].env.is_none());
+        let warnings = collect_config_warnings(&config);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_combined_bypass_and_env_warnings() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
+        let mut env = std::collections::HashMap::new();
+        env.insert("LD_PRELOAD".into(), "/evil.so".into());
+        config.agents[0].env = Some(env);
+        let warnings = collect_config_warnings(&config);
+        assert_eq!(warnings.len(), 2);
+        let combined = warnings.join(" ");
+        assert!(combined.contains("already applied"));
+        assert!(combined.contains("LD_PRELOAD"));
+        // Config still loads
+        assert!(validate_config(&config).is_ok());
     }
 }

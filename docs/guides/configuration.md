@@ -101,13 +101,15 @@ Custom backends are defined via `backend_definitions`. See the [Custom Backends 
 | `prompt_file` | no | -- | Path to prompt file (takes precedence over `prompt` if both set) |
 | `role` | no | `worker` | `worker` (triggered by dispatches) or `operator` (never triggered) |
 | `timeout_secs` | no | `execution_timeout_secs` | Per-agent timeout override |
-| `env` | no | -- | Environment variables injected into the agent's process |
+| `env` | no | -- | Environment variables passed to the backend subprocess via `Command::env()` |
 | `backend_args` | no | -- | Extra CLI flags appended before instruction text |
 | `workdir` | no | `default_workdir` | Per-agent working directory override |
 | `workspace` | no | `shared` | `"worktree"` for git worktree isolation, `"shared"` for direct access |
 | `max_retries` | no | `0` | Retry attempts for transient failures (0 = disabled) |
 | `retry_backoff_secs` | no | `30` | Base delay between retries (doubles each attempt) |
 | `handoff` | no | -- | Auto-handoff routing (see [Auto-Handoff Chains](#auto-handoff-chains)) |
+
+**Security note:** `env` values are passed directly to the backend subprocess via `Command::env()`. Setting system-critical variables like `PATH`, `LD_PRELOAD`, or `DYLD_INSERT_LIBRARIES` can alter process behavior in unexpected ways. Compas emits a warning during config validation for known sensitive variables but does not block the configuration.
 
 ### Per-Agent Working Directory
 
