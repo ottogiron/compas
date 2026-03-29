@@ -57,6 +57,9 @@ const TICK_RATE: Duration = Duration::from_millis(250);
 const ACTIVITY_ROW_LIMIT: i64 = 250;
 const HISTORY_ROW_LIMIT: i64 = 200;
 const HISTORY_GROUP_VISIBLE_LIMIT: usize = 10;
+/// Total number of content lines in the help overlay (used for scroll bounds).
+/// Must stay in sync with the `lines` vec in `render_help_overlay_widget`.
+const HELP_LINE_COUNT: u16 = 21;
 /// Maximum number of timeline events loaded when opening the log viewer.
 const TIMELINE_EVENT_LIMIT: i64 = 500;
 /// Minimum time between displayed progress summary changes per execution.
@@ -195,6 +198,10 @@ pub struct App {
     pub viewing_conversation: Option<ConversationViewState>,
     /// Whether the help overlay is visible.
     pub show_help: bool,
+    /// Vertical scroll offset for the help overlay content.
+    help_scroll: u16,
+    /// Viewport height of the help overlay inner area (set during render).
+    help_viewport_height: Cell<u16>,
     /// Optional batch drill filter for Ops tab.
     pub drill_batch: Option<String>,
     /// Optional batch drill filter for History tab.
@@ -295,6 +302,8 @@ impl App {
             viewing_log: None,
             viewing_conversation: None,
             show_help: false,
+            help_scroll: 0,
+            help_viewport_height: Cell::new(0),
             drill_batch: None,
             history_drill_batch: None,
             history_agent_filter: None,
@@ -1023,6 +1032,9 @@ impl App {
 
     fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+        if self.show_help {
+            self.help_scroll = 0;
+        }
     }
 
     fn clear_drill_filters(&mut self) {
@@ -1570,8 +1582,15 @@ fn handle_conversation_key(app: &mut App, code: KeyCode) {
 
 /// Handle key events while help overlay is open.
 fn handle_help_key(app: &mut App, code: KeyCode) {
+    let max_scroll = HELP_LINE_COUNT.saturating_sub(app.help_viewport_height.get());
     match code {
         KeyCode::Esc | KeyCode::Enter | KeyCode::Char('?') => app.toggle_help(),
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.help_scroll = app.help_scroll.saturating_sub(1);
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.help_scroll = app.help_scroll.saturating_add(1).min(max_scroll);
+        }
         _ => {}
     }
 }
@@ -2213,11 +2232,17 @@ impl App {
 
     fn render_help_overlay_widget(&self, area: Rect, buf: &mut Buffer) {
         let modal = centered_rect(72, 23, area);
-        let block = Block::bordered()
+        let mut block = Block::bordered()
             .border_style(Style::new().fg(theme::BORDER_FOCUS))
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
             .title(" Help ");
         let inner = block.inner(modal);
+        self.help_viewport_height.set(inner.height);
+
+        if inner.height < HELP_LINE_COUNT {
+            block = block.title_bottom(Line::from(" ↑/↓ scroll ").centered());
+        }
+
         Clear.render(modal, buf);
         block.render(modal, buf);
 
@@ -2245,8 +2270,15 @@ impl App {
             Line::from(" Press Esc, Enter, or ? to close this panel."),
         ];
 
+        debug_assert_eq!(
+            lines.len() as u16,
+            HELP_LINE_COUNT,
+            "HELP_LINE_COUNT out of sync with help lines vec"
+        );
+
         Paragraph::new(lines)
             .style(Style::new().bg(theme::BG_PANEL).fg(theme::TEXT_NORMAL))
+            .scroll((self.help_scroll, 0))
             .render(inner, buf);
     }
 }
@@ -2553,5 +2585,95 @@ mod mouse_tests {
         let table_row = rel_y - header_rows + scroll_offset;
         let slot = selectable_to_row.iter().position(|&r| r == table_row);
         assert_eq!(slot, Some(2));
+    }
+
+    // ── help_scroll ──────────────────────────────────────────────────────
+
+    use crate::config::types::{AgentConfig, OrchestratorConfig};
+    use sqlx::SqlitePool;
+
+    async fn make_test_app() -> App {
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        let store = Store::new(pool);
+        store.setup().await.unwrap();
+        let config = OrchestratorConfig {
+            default_workdir: PathBuf::from("/tmp"),
+            state_dir: PathBuf::from("/tmp/compas-test"),
+            poll_interval_secs: 1,
+            models: None,
+            agents: vec![AgentConfig {
+                alias: "test".to_string(),
+                backend: "stub".to_string(),
+                role: Default::default(),
+                safety_mode: None,
+                model: None,
+                prompt: None,
+                prompt_file: None,
+                timeout_secs: None,
+                backend_args: None,
+                env: None,
+                workdir: None,
+                workspace: None,
+                max_retries: 0,
+                retry_backoff_secs: 30,
+                handoff: None,
+            }],
+            worktree_dir: None,
+            orchestration: Default::default(),
+            database: Default::default(),
+            notifications: Default::default(),
+            backend_definitions: None,
+            hooks: None,
+            schedules: None,
+        };
+        let handle = ConfigHandle::new(config);
+        App::new(
+            store,
+            handle,
+            PathBuf::from("/tmp/config.yaml"),
+            Handle::current(),
+            Duration::from_secs(2),
+            None,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_help_scroll_up_clamps_at_zero() {
+        let mut app = make_test_app().await;
+        app.show_help = true;
+        app.help_scroll = 0;
+        handle_help_key(&mut app, KeyCode::Up);
+        assert_eq!(app.help_scroll, 0);
+        handle_help_key(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn test_help_scroll_down_clamps_at_max() {
+        let mut app = make_test_app().await;
+        app.show_help = true;
+        // Simulate a viewport smaller than content.
+        app.help_viewport_height.set(10);
+        let max_scroll = HELP_LINE_COUNT.saturating_sub(10); // 11
+        app.help_scroll = max_scroll;
+        handle_help_key(&mut app, KeyCode::Down);
+        assert_eq!(app.help_scroll, max_scroll);
+        handle_help_key(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.help_scroll, max_scroll);
+    }
+
+    #[tokio::test]
+    async fn test_help_toggle_resets_scroll() {
+        let mut app = make_test_app().await;
+        // Open help and scroll down.
+        app.toggle_help();
+        assert!(app.show_help);
+        app.help_scroll = 5;
+        // Close and re-open — scroll should reset.
+        app.toggle_help();
+        assert!(!app.show_help);
+        app.toggle_help();
+        assert!(app.show_help);
+        assert_eq!(app.help_scroll, 0);
     }
 }
