@@ -1,6 +1,6 @@
 # Dashboard UX Improvements
 
-Status: Active
+Status: Done
 Owner: operator
 Created: 2026-03-29
 
@@ -30,7 +30,7 @@ Created: 2026-03-29
 - Verification:
   - `make verify`
   - Manual: resize terminal to ~15 rows, press `?`, verify scrollable with j/k
-- Status: Todo
+- Status: Done
 
 ## Ticket DUX-2 — Add quit confirmation dialog
 
@@ -55,7 +55,7 @@ Created: 2026-03-29
 - Verification:
   - `make verify`
   - Manual: press `q`, verify dialog, press `n` (cancels), press `q` then `y` (quits), verify Ctrl+C bypasses
-- Status: Todo
+- Status: Done
 
 ## Execution Order
 
@@ -91,4 +91,8 @@ Created: 2026-03-29
 
 ## Closure Evidence
 
--
+- DUX-1: Help overlay now scrollable with j/k when terminal < 23 rows, scroll indicator shown, debug_assert guards line count sync
+- DUX-2: Quit confirmation dialog on `q` with y/n, Ctrl+C bypasses, help text updated to reflect new behavior
+- Both include unit tests and changelog fragments
+- `make verify` passes (934 tests, clippy clean)
+- Dispatched in parallel, required 1 review round each for changelog + tests, then approved
