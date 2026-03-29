@@ -1,5 +1,6 @@
 //! Tab view renderers for the compas TUI dashboard.
 
+pub mod action_menu;
 pub mod activity;
 pub mod agents;
 pub mod conversation;
