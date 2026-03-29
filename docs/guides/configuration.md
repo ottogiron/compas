@@ -168,6 +168,88 @@ orchestration:
 
 The dashboard shows `CB:OPEN` or `CB:PROBE` indicators on agent cards. `orch_health` includes `circuit_state` and `circuit_failures` per agent.
 
+## Concurrency & Capacity
+
+Two settings control how many agent executions run simultaneously:
+
+| Setting | Scope | Default | Description |
+|---|---|---|---|
+| `max_concurrent_triggers` | Global | Worker agent count | Total concurrent executions across all agents |
+| `max_triggers_per_agent` | Per-agent | 1 | Maximum concurrent executions for a single agent alias |
+
+### Checking capacity at runtime
+
+`orch_list_agents` returns real-time capacity information for every configured agent:
+
+```json
+{
+  "agents": [
+    {
+      "alias": "dev",
+      "backend": "claude",
+      "role": "worker",
+      "model": "claude-sonnet-4-6",
+      "timeout_secs": 900,
+      "max_concurrent": 2,
+      "active": 1,
+      "queued": 0,
+      "available": 1
+    },
+    {
+      "alias": "reviewer",
+      "backend": "claude",
+      "role": "worker",
+      "model": "claude-sonnet-4-6",
+      "timeout_secs": 300,
+      "max_concurrent": 2,
+      "active": 0,
+      "queued": 0,
+      "available": 2
+    }
+  ],
+  "global_max_concurrent": 4,
+  "global_active": 1,
+  "global_available": 3
+}
+```
+
+**Field definitions:**
+
+- `max_concurrent` — global per-agent concurrency limit (`max_triggers_per_agent`) — the same cap applies to every agent alias
+- `active` — executions currently running for this agent (`picked_up` or `executing`)
+- `queued` — executions waiting to be picked up for this agent
+- `available` — remaining slots (`max_concurrent - active`)
+- `global_max_concurrent` — total concurrent execution limit across all agents
+- `global_active` — total executions currently running
+- `global_available` — remaining global slots (`global_max_concurrent - global_active`)
+
+### Example: parallel workers with worktree isolation
+
+```yaml
+orchestration:
+  max_concurrent_triggers: 4
+  max_triggers_per_agent: 2
+
+agents:
+  - alias: dev
+    backend: claude
+    role: worker
+    workspace: worktree      # each thread gets its own worktree branch
+    model: claude-sonnet-4-6
+
+  - alias: reviewer
+    backend: claude
+    role: worker
+    workspace: worktree
+    model: claude-sonnet-4-6
+```
+
+### Best practices
+
+- **Always use `workspace: worktree`** when `max_triggers_per_agent > 1` — concurrent agents in a shared workspace will conflict on files.
+- **Check capacity before dispatching** — call `orch_list_agents` and verify `available > 0` for the target agent and `global_available > 0`.
+- **`max_concurrent_triggers` requires a restart** to take effect. `max_triggers_per_agent` is picked up on config hot-reload.
+
 ## Auto-Handoff Chains
 
 Configure `handoff` on an agent to auto-route its output to another agent. Agents reply naturally — the system assigns `response` intent and handles routing via config.

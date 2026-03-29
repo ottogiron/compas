@@ -1,5 +1,7 @@
 //! orch_session_info and orch_list_agents implementations.
 
+use std::collections::HashMap;
+
 use rmcp::model::CallToolResult;
 use serde::Serialize;
 
@@ -30,9 +32,20 @@ impl OrchestratorMcpServer {
 
     // ── orch_list_agents ─────────────────────────────────────────────────
 
-    pub fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+    pub async fn list_agents_impl(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         // Snapshot live config for this request.
         let config = self.config.load();
+
+        let (active_res, queued_res) = tokio::join!(
+            self.store.active_executions_by_agent(),
+            self.store.queued_executions_by_agent(),
+        );
+
+        let active_map: HashMap<String, i64> = active_res.unwrap_or_default().into_iter().collect();
+        let queued_map: HashMap<String, i64> = queued_res.unwrap_or_default().into_iter().collect();
+
+        let max_per_agent = config.orchestration.max_triggers_per_agent as i64;
+        let global_max = config.effective_max_concurrent_triggers() as i64;
 
         #[derive(Serialize)]
         struct AgentInfo {
@@ -41,20 +54,51 @@ impl OrchestratorMcpServer {
             role: String,
             model: Option<String>,
             timeout_secs: Option<u64>,
+            max_concurrent: i64,
+            active: i64,
+            queued: i64,
+            available: i64,
         }
+
+        #[derive(Serialize)]
+        struct ListAgentsResponse {
+            agents: Vec<AgentInfo>,
+            global_max_concurrent: i64,
+            global_active: i64,
+            global_available: i64,
+        }
+
+        let mut global_active: i64 = 0;
 
         let agents: Vec<AgentInfo> = config
             .agents
             .iter()
-            .map(|a| AgentInfo {
-                alias: a.alias.clone(),
-                backend: a.backend.clone(),
-                role: format!("{:?}", a.role).to_lowercase(),
-                model: a.model.clone(),
-                timeout_secs: a.timeout_secs,
+            .map(|a| {
+                let active = *active_map.get(&a.alias).unwrap_or(&0);
+                let queued = *queued_map.get(&a.alias).unwrap_or(&0);
+                let available = max_per_agent.saturating_sub(active);
+                global_active += active;
+                AgentInfo {
+                    alias: a.alias.clone(),
+                    backend: a.backend.clone(),
+                    role: format!("{:?}", a.role).to_lowercase(),
+                    model: a.model.clone(),
+                    timeout_secs: a.timeout_secs,
+                    max_concurrent: max_per_agent,
+                    active,
+                    queued,
+                    available,
+                }
             })
             .collect();
 
-        Ok(json_text(&agents))
+        let global_available = global_max.saturating_sub(global_active);
+
+        Ok(json_text(&ListAgentsResponse {
+            agents,
+            global_max_concurrent: global_max,
+            global_active,
+            global_available,
+        }))
     }
 }

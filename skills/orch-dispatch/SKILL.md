@@ -53,9 +53,36 @@ The operator does NOT need to do anything differently — retries are transparen
 
 Check `orch_tasks` for `attempt_number` to see if an execution was a retry.
 
+## Parallel Dispatch
+
+When `orch_list_agents` shows `max_concurrent > 1` for a worker and the worker has `available` slots:
+
+1. Dispatch multiple independent tasks to the same agent alias (each gets a separate thread).
+2. Track all dispatches under one `batch` ID.
+3. Use `orch_batch_status(batch="<batch-id>")` to monitor progress.
+4. Use `orch_wait(thread_id=..., await_chain=true)` on each thread individually, or poll the batch.
+
+**Do not** dispatch more than `available` tasks — exceeding the limit queues tasks, adding latency without parallelism benefit.
+
+**Worktree agents** are ideal for parallel dispatch: each thread gets its own worktree branch, so concurrent work cannot conflict on files.
+
 ---
 
 ## Mode A — Worker Delegation
+
+### Step 0 — Capacity check
+
+```text
+orch_list_agents()
+```
+
+Before dispatching, check agent capacity:
+
+- Confirm the target worker has `available > 0` (i.e., `active < max_concurrent`).
+- Check `global_available > 0` to ensure the orchestrator has free slots.
+- If capacity is exhausted, either wait for a running execution to finish (`orch_wait` on an existing thread) or choose a different agent with available slots.
+
+**Parallel dispatch:** When `max_concurrent` for an agent is > 1, you may dispatch multiple tasks to the same alias concurrently — each dispatch gets its own thread. Use `orch_batch_status` to track a group of parallel dispatches. Dispatch up to `available` tasks at once, not more.
 
 ### Step 1 — Health check
 

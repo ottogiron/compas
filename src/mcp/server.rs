@@ -224,10 +224,10 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_list_agents",
-        description = "List all configured agents with their alias, backend, model, and other settings."
+        description = "List all configured agents with their alias, backend, model, capacity, and real-time slot availability (active/queued/available counts)."
     )]
-    fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.list_agents_impl()
+    async fn orch_list_agents(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.list_agents_impl().await
     }
 
     #[tool(

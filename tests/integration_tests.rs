@@ -3209,11 +3209,13 @@ mod session_health_tests {
     async fn test_list_agents() {
         let server = test_server().await;
 
-        let result = server.list_agents_impl().unwrap();
+        let result = server.list_agents_impl().await.unwrap();
 
         assert!(!is_error(&result));
         let json = extract_json(&result);
-        let agents = json.as_array().unwrap();
+
+        // Response is now a wrapper object with agents array and global fields.
+        let agents = json["agents"].as_array().unwrap();
         assert_eq!(agents.len(), 2);
 
         let aliases: Vec<&str> = agents
@@ -3222,6 +3224,82 @@ mod session_health_tests {
             .collect();
         assert!(aliases.contains(&"focused"));
         assert!(aliases.contains(&"spark"));
+
+        // Per-agent capacity fields.
+        for agent in agents {
+            let max_concurrent = agent["max_concurrent"].as_i64().unwrap();
+            assert!(max_concurrent > 0);
+            assert_eq!(agent["active"].as_i64().unwrap(), 0);
+            assert_eq!(agent["queued"].as_i64().unwrap(), 0);
+            assert_eq!(agent["available"].as_i64().unwrap(), max_concurrent);
+        }
+
+        // Global capacity fields.
+        let global_max = json["global_max_concurrent"].as_i64().unwrap();
+        assert!(global_max > 0);
+        assert_eq!(json["global_active"].as_i64().unwrap(), 0);
+        assert_eq!(json["global_available"].as_i64().unwrap(), global_max);
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_with_active_and_queued() {
+        let server = test_server().await;
+
+        // Create a thread and two executions for "focused".
+        server
+            .store
+            .ensure_thread("t-cap-1", None, None)
+            .await
+            .unwrap();
+        let exec_active = server
+            .store
+            .insert_execution("t-cap-1", "focused")
+            .await
+            .unwrap();
+        // Transition to picked_up → executing so it counts as active.
+        let _ = server.store.claim_next_execution(10).await.unwrap();
+        server
+            .store
+            .mark_execution_executing(&exec_active)
+            .await
+            .unwrap();
+
+        // Second execution stays queued.
+        server
+            .store
+            .ensure_thread("t-cap-2", None, None)
+            .await
+            .unwrap();
+        let _exec_queued = server
+            .store
+            .insert_execution("t-cap-2", "focused")
+            .await
+            .unwrap();
+
+        let result = server.list_agents_impl().await.unwrap();
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+
+        let focused = agents.iter().find(|a| a["alias"] == "focused").unwrap();
+        assert_eq!(focused["active"].as_i64().unwrap(), 1);
+        assert_eq!(focused["queued"].as_i64().unwrap(), 1);
+        // max_triggers_per_agent defaults to 1, so available = max(0, 1 - 1) = 0
+        assert_eq!(focused["available"].as_i64().unwrap(), 0);
+
+        let spark = agents.iter().find(|a| a["alias"] == "spark").unwrap();
+        assert_eq!(spark["active"].as_i64().unwrap(), 0);
+        assert_eq!(spark["queued"].as_i64().unwrap(), 0);
+        assert_eq!(
+            spark["available"].as_i64().unwrap(),
+            spark["max_concurrent"].as_i64().unwrap()
+        );
+
+        // Global: 1 active out of effective_max_concurrent_triggers (2 workers → default 2).
+        assert_eq!(json["global_active"].as_i64().unwrap(), 1);
+        assert_eq!(
+            json["global_available"].as_i64().unwrap(),
+            json["global_max_concurrent"].as_i64().unwrap() - 1
+        );
     }
 
     #[tokio::test]

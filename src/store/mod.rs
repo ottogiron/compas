@@ -1985,6 +1985,17 @@ impl Store {
         .await
     }
 
+    /// Count queued executions per agent.
+    pub async fn queued_executions_by_agent(&self) -> Result<Vec<(String, i64)>, sqlx::Error> {
+        sqlx::query_as(
+            "SELECT agent_alias, COUNT(*) FROM executions
+             WHERE status = 'queued'
+             GROUP BY agent_alias",
+        )
+        .fetch_all(&self.pool)
+        .await
+    }
+
     // ── Status view (threads + latest execution) ─────────────────────────
 
     /// Combined thread + latest execution view for orch_status.

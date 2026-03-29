@@ -261,7 +261,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 | Tool | What it does |
 | --- | --- |
 | `orch_health` | Worker heartbeat, backend health pings, circuit breaker state |
-| `orch_list_agents` | List configured agents with backend/model info |
+| `orch_list_agents` | List configured agents with capacity and real-time slot availability (active/queued/available) |
 | `orch_session_info` | Current MCP session metadata |
 | `orch_worktrees` | List active git worktrees for agent isolation |
 
