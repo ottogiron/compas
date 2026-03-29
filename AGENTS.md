@@ -84,7 +84,10 @@ ticket done <batch-id> --batch     # close a batch
 ticket status                      # show active sessions
 ticket blocked <id> "<reason>"     # mark as blocked
 ticket note <id> "<note>"          # add tracking note
+ticket reconcile                   # repo-side truth check — detects stale/inconsistent sessions
 ```
+
+The pre-commit hook runs `ticket reconcile` on code commits as the authoritative consistency check. Sessions that are stale, reference missing backlogs, or have status mismatches will fail the gate. Run `ticket reconcile` manually to preview what the hook will check.
 
 **Never bypass the pre-commit hook with `--no-verify`.** Run `make setup-hooks` after cloning to install the hook.
 
@@ -98,7 +101,7 @@ This matches the CI pipeline (`.github/workflows/ci.yml`). All four checks must 
 
 ### Pre-commit hook vs CI
 
-The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking only** — it does NOT run fmt, clippy, or tests. Those checks are enforced by CI. Agents MUST run `make verify` themselves before pushing.
+The pre-commit hook (`scripts/hooks/pre-commit`) enforces **ticket tracking and session consistency** — it requires an active session for code commits and runs `ticket reconcile` to catch stale or invalid sessions. It does NOT run fmt, clippy, or tests. Those checks are enforced by CI. Agents MUST run `make verify` themselves before pushing.
 
 ### Pre-push Checklist (Mandatory)
 

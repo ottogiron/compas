@@ -96,6 +96,29 @@ if [ -d "$SESSION_DIR" ]; then
 fi
 
 if [ "$has_valid_session" = true ]; then
+    # Reconcile gate: when code files are staged, verify session consistency
+    # against the backlog via `ticket reconcile`. Docs-only commits bypass.
+    code_staged=false
+    for file in $(git diff --cached --name-only --diff-filter=ACMR); do
+        case "$file" in
+            src/*|tests/*|crates/*|examples/*|*.rs)
+                code_staged=true
+                break
+                ;;
+        esac
+    done
+
+    if [ "$code_staged" = true ]; then
+        if ! ticket reconcile --json --repo-root "$REPO_ROOT" >/dev/null 2>&1; then
+            echo "ERROR: ticket reconcile detected stale or inconsistent sessions."
+            echo ""
+            ticket reconcile --repo-root "$REPO_ROOT" || true
+            echo ""
+            echo "Fix the reported issues, then retry your commit."
+            exit 1
+        fi
+    fi
+
     exit 0
 fi
 
