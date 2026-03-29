@@ -314,6 +314,29 @@ Gaps identified from internal review of compas's orchestration quality, develope
 - Complexity: S
 - Risk: Low
 
+## Ticket GAP-11 — Expose Agent Handoff Metadata to Operators
+
+- Goal: Make operator-facing surfaces show the agent routing details that matter in practice, especially whether a worker auto-handoffs and where it routes next.
+- In scope:
+  - Evaluate whether `orch_list_agents` should expose handoff metadata directly
+  - Evaluate whether a new MCP/tool surface is better than expanding `orch_list_agents`
+  - Define the minimal operator-facing fields that improve dispatch/wait decisions without dumping raw config
+  - Recommend rollout guidance for backwards-compatible operator UX
+- Out of scope:
+  - Implementing the chosen MCP or CLI change
+  - Exposing all agent config fields verbatim
+  - Redesigning handoff behavior itself
+- Dependencies: GAP-10
+- Acceptance criteria:
+  - Architect recommendation covers the best operator-facing surface for handoff metadata
+  - Recommendation includes minimal fields/schema and tradeoffs
+  - Recommendation explains how operators should reason about `await_chain` and terminal reviewers
+- Verification:
+  - Manual: review architect output for concrete surface recommendation, schema guidance, and tradeoff analysis
+- Status: Todo
+- Complexity: S
+- Risk: Low
+
 ---
 
 ## Deferred: Visual Orchestration Canvas
