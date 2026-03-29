@@ -1648,7 +1648,10 @@ fn row_duration(t: &ThreadStatusView, now_unix: i64) -> String {
     if let Some(ms) = t.duration_ms {
         return format_duration_ms(ms);
     }
-    format_duration_secs((now_unix - t.thread_updated_at).max(0))
+    if let (Some(finished), Some(started)) = (t.finished_at, t.started_at) {
+        return format_duration_secs((finished - started).max(0));
+    }
+    "-".to_string()
 }
 
 fn compute_scroll(selected: usize, visible: usize, total: usize) -> usize {
@@ -2223,5 +2226,36 @@ mod tests {
             merge_count, 2,
             "merge ops should be selectable even when no threads exist"
         );
+    }
+
+    #[test]
+    fn test_row_duration_terminal_without_duration_ms_uses_timestamps() {
+        let now = 9999; // should not matter for terminal states
+        let mut row = make_row("crashed", None, "Active", Some("crashed"), 100);
+        row.started_at = Some(1000);
+        row.finished_at = Some(1045);
+
+        // Terminal state with finished_at/started_at but no duration_ms → frozen duration
+        let d = row_duration(&row, now);
+        assert_eq!(d, "45s");
+    }
+
+    #[test]
+    fn test_row_duration_terminal_without_timestamps_shows_dash() {
+        let now = 9999;
+        let row = make_row("failed", None, "Failed", Some("failed"), 100);
+        // No started_at, no finished_at, no duration_ms → "-"
+        let d = row_duration(&row, now);
+        assert_eq!(d, "-");
+    }
+
+    #[test]
+    fn test_row_duration_active_shows_live_ticker() {
+        let now = 1060;
+        let mut row = make_row("running", None, "Active", Some("executing"), 100);
+        row.started_at = Some(1000);
+
+        let d = row_duration(&row, now);
+        assert_eq!(d, "1m 0s");
     }
 }
