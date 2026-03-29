@@ -59,6 +59,25 @@ impl OrchestratorMcpServer {
             )));
         }
 
+        // SEC-6: Queue depth guard
+        if let Some(max) = config.orchestration.max_queued_executions {
+            match self.store.total_inflight_executions().await {
+                Ok(current) if current as usize >= max => {
+                    return Ok(err_text(format!(
+                        "Queue depth limit reached: {current}/{max} executions are in-flight \
+                         (queued + active). Wait for running tasks to complete, or abandon \
+                         stale threads with orch_abandon before dispatching new work. \
+                         Check current load with orch_metrics."
+                    )));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "queue depth check failed, allowing dispatch");
+                    // Fail-open: don't block dispatch on transient DB error
+                }
+                _ => {}
+            }
+        }
+
         // Parse and validate scheduled_for if provided.
         let eligible_at = match &params.scheduled_for {
             Some(ts_str) => {

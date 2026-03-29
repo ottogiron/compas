@@ -168,6 +168,12 @@ pub struct ReopenParams {
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AbandonBatchParams {
+    /// Batch/ticket ID whose threads to abandon
+    pub batch_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub struct WorktreesParams {
     /// Optional thread ID filter
     pub thread_id: Option<String>,

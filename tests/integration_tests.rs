@@ -9226,3 +9226,345 @@ mod commit_tests {
         assert!(!json["worktree_path"].as_str().unwrap().is_empty());
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SEC-6: Recursive dispatch protection tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+mod sec6_tests {
+    use super::*;
+
+    /// Build a server with custom max_queued_executions.
+    async fn test_server_with_max_queued(max: Option<usize>) -> OrchestratorMcpServer {
+        let store = test_store().await;
+        let mut config = test_config();
+        config.orchestration.max_queued_executions = max;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry)
+    }
+
+    // ── Queue depth guard tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_dispatch_rejected_when_queue_full() {
+        let server = test_server_with_max_queued(Some(1)).await;
+
+        // Insert one queued execution to fill the limit.
+        server
+            .store
+            .ensure_thread("t-sec6-full", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution("t-sec6-full", "focused")
+            .await
+            .unwrap();
+
+        // Dispatch should be rejected.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "should be rejected".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: None,
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result), "dispatch should be rejected");
+        let text = extract_text(&result);
+        assert!(
+            text.contains("Queue depth limit reached"),
+            "expected queue depth error, got: {}",
+            text
+        );
+        assert!(
+            text.contains("1/1"),
+            "expected current/max count, got: {}",
+            text
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_allowed_when_under_limit() {
+        let server = test_server_with_max_queued(Some(5)).await;
+
+        // Insert one queued execution — well under the limit.
+        server
+            .store
+            .ensure_thread("t-sec6-under", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution("t-sec6-under", "focused")
+            .await
+            .unwrap();
+
+        // Dispatch should succeed.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "should succeed".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: None,
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !is_error(&result),
+            "dispatch should succeed under limit, got: {}",
+            extract_text(&result)
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_no_limit_by_default() {
+        let server = test_server_with_max_queued(None).await;
+
+        // Insert several queued executions.
+        for i in 0..5 {
+            let tid = format!("t-sec6-nomax-{}", i);
+            server.store.ensure_thread(&tid, None, None).await.unwrap();
+            server
+                .store
+                .insert_execution(&tid, "focused")
+                .await
+                .unwrap();
+        }
+
+        // Dispatch should succeed — no limit configured.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "no limit".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: None,
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            !is_error(&result),
+            "dispatch should succeed without limit, got: {}",
+            extract_text(&result)
+        );
+    }
+
+    // ── Abandon outcome tests ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_abandon_outcome_includes_processes_killed() {
+        let server = test_server().await;
+        server
+            .store
+            .ensure_thread("t-sec6-pk", None, None)
+            .await
+            .unwrap();
+        server
+            .store
+            .insert_execution("t-sec6-pk", "focused")
+            .await
+            .unwrap();
+
+        let result = server
+            .abandon_impl(AbandonParams {
+                thread_id: "t-sec6-pk".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        // processes_killed should be present (0 since no real PIDs to kill)
+        assert_eq!(json["processes_killed"], 0);
+        assert!(json["executions_cancelled"].as_u64().unwrap() >= 1);
+    }
+
+    // ── Abandon batch tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_abandon_batch_all_threads() {
+        let server = test_server().await;
+
+        // Create a batch with 3 active threads.
+        for i in 0..3 {
+            let tid = format!("t-sec6-batch-{}", i);
+            server
+                .store
+                .ensure_thread(&tid, Some("batch-sec6"), None)
+                .await
+                .unwrap();
+            server
+                .store
+                .insert_execution(&tid, "focused")
+                .await
+                .unwrap();
+        }
+
+        let result = server
+            .abandon_batch_impl(AbandonBatchParams {
+                batch_id: "batch-sec6".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["batch_id"], "batch-sec6");
+        assert_eq!(json["threads_abandoned"], 3);
+        assert_eq!(json["threads_already_terminal"], 0);
+        assert!(json["total_executions_cancelled"].as_u64().unwrap() >= 3);
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_skips_terminal() {
+        let server = test_server().await;
+
+        // Create 3 threads, mark 2 as terminal.
+        for i in 0..3 {
+            let tid = format!("t-sec6-mix-{}", i);
+            server
+                .store
+                .ensure_thread(&tid, Some("batch-sec6-mix"), None)
+                .await
+                .unwrap();
+        }
+        server
+            .store
+            .update_thread_status("t-sec6-mix-0", ThreadStatus::Completed)
+            .await
+            .unwrap();
+        server
+            .store
+            .update_thread_status("t-sec6-mix-1", ThreadStatus::Failed)
+            .await
+            .unwrap();
+
+        let result = server
+            .abandon_batch_impl(AbandonBatchParams {
+                batch_id: "batch-sec6-mix".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["threads_abandoned"], 1);
+        assert_eq!(json["threads_already_terminal"], 2);
+    }
+
+    #[tokio::test]
+    async fn test_abandon_batch_unknown_batch() {
+        let server = test_server().await;
+
+        let result = server
+            .abandon_batch_impl(AbandonBatchParams {
+                batch_id: "nonexistent-batch".to_string(),
+            })
+            .await
+            .unwrap();
+
+        assert!(is_error(&result));
+        let text = extract_text(&result);
+        assert!(
+            text.contains("No threads found for batch"),
+            "expected actionable error, got: {}",
+            text
+        );
+    }
+
+    // ── Store method tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_total_inflight_executions() {
+        let store = test_store().await;
+
+        // Start with 0.
+        assert_eq!(store.total_inflight_executions().await.unwrap(), 0);
+
+        // Insert a queued execution.
+        store
+            .ensure_thread("t-sec6-inf-1", None, None)
+            .await
+            .unwrap();
+        let exec_id = store
+            .insert_execution("t-sec6-inf-1", "focused")
+            .await
+            .unwrap();
+        assert_eq!(store.total_inflight_executions().await.unwrap(), 1);
+
+        // Move to executing.
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        assert_eq!(store.total_inflight_executions().await.unwrap(), 1);
+
+        // Add another queued.
+        store
+            .ensure_thread("t-sec6-inf-2", None, None)
+            .await
+            .unwrap();
+        store
+            .insert_execution("t-sec6-inf-2", "focused")
+            .await
+            .unwrap();
+        assert_eq!(store.total_inflight_executions().await.unwrap(), 2);
+
+        // Cancel the first — count should decrease.
+        store
+            .cancel_thread_executions("t-sec6-inf-1")
+            .await
+            .unwrap();
+        assert_eq!(store.total_inflight_executions().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_get_executing_pids_for_thread() {
+        let store = test_store().await;
+
+        // Create thread with an executing execution that has a PID.
+        store.ensure_thread("t-sec6-pid", None, None).await.unwrap();
+        let exec_id = store
+            .insert_execution("t-sec6-pid", "focused")
+            .await
+            .unwrap();
+        store.mark_execution_executing(&exec_id).await.unwrap();
+        store.set_execution_pid(&exec_id, 12345).await.unwrap();
+
+        let pids = store
+            .get_executing_pids_for_thread("t-sec6-pid")
+            .await
+            .unwrap();
+        assert_eq!(pids.len(), 1);
+        assert_eq!(pids[0].0, exec_id);
+        assert_eq!(pids[0].1, 12345);
+
+        // Different thread should return empty.
+        store
+            .ensure_thread("t-sec6-pid-other", None, None)
+            .await
+            .unwrap();
+        let pids = store
+            .get_executing_pids_for_thread("t-sec6-pid-other")
+            .await
+            .unwrap();
+        assert!(pids.is_empty());
+    }
+}

@@ -309,6 +309,25 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         }
     }
 
+    // Validate max_queued_executions (SEC-6)
+    if let Some(max) = config.orchestration.max_queued_executions {
+        if max < 1 {
+            return Err(OrchestratorError::Config(
+                "orchestration.max_queued_executions must be >= 1".into(),
+            ));
+        }
+        if let Some(concurrent) = config.orchestration.max_concurrent_triggers {
+            if max < concurrent {
+                tracing::warn!(
+                    "max_queued_executions ({}) is less than max_concurrent_triggers ({}); \
+                     dispatch may be rejected while agents have available capacity",
+                    max,
+                    concurrent
+                );
+            }
+        }
+    }
+
     for intent in &config.orchestration.trigger_intents {
         if !is_valid_intent_slug(intent) {
             return Err(OrchestratorError::Config(format!(
@@ -2314,6 +2333,35 @@ schedules:
         assert!(combined.contains("already applied"));
         assert!(combined.contains("LD_PRELOAD"));
         // Config still loads
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ── SEC-6: max_queued_executions validation ─────────────────────────
+
+    #[test]
+    fn test_max_queued_executions_zero_rejected() {
+        let mut config = minimal_config();
+        config.orchestration.max_queued_executions = Some(0);
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_queued_executions must be >= 1"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_max_queued_executions_one_accepted() {
+        let mut config = minimal_config();
+        config.orchestration.max_queued_executions = Some(1);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_max_queued_executions_none_accepted() {
+        let config = minimal_config();
+        assert!(config.orchestration.max_queued_executions.is_none());
         assert!(validate_config(&config).is_ok());
     }
 }

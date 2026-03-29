@@ -366,3 +366,4 @@ Completion Status: completed / rejected / abandoned
 - **Change-request loop:** After 2 `changes-requested` dispatches on the same worker thread, consider operator takeover.
 - **Reviewer unresponsive:** Check `orch_health(alias="compas-reviewer")`. If unhealthy, operator may do a manual code review as fallback (read the full diff) and document that reviewer was bypassed.
 - **Debugging slow executions:** Use `orch_execution_events(execution_id=...)` to see what tool calls the agent has made so far.
+- **Queue depth rejected:** `orch_dispatch` returns "Queue depth limit reached". Check `orch_metrics` for current load. Abandon stale threads with `orch_abandon` or `orch_abandon_batch`, or wait for running tasks to complete.

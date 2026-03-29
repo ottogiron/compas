@@ -47,6 +47,7 @@ orchestration:
   merge_timeout_secs: 30                 # Timeout for merge operations (default: 30)
   default_merge_strategy: merge          # Merge strategy: "merge", "rebase", or "squash" (default: "merge")
   default_merge_target: main             # Default target branch for orch_merge operations (default: "main")
+  max_queued_executions: 50              # Max in-flight executions before orch_dispatch rejects (default: unlimited)
   redact_secrets: true                   # Redact secrets from logs and output_preview (default: true)
   redaction_patterns:                    # Additional regex patterns beyond built-ins (optional)
     - 'MY_INTERNAL_TOKEN_[A-Z0-9]{16}'
@@ -244,11 +245,23 @@ agents:
     model: claude-sonnet-4-6
 ```
 
+### Queue depth guard
+
+`max_queued_executions` limits the total number of in-flight executions (queued + picked_up + executing). When the limit is reached, `orch_dispatch` rejects new work with an actionable error message directing the caller to wait, abandon stale threads, or check `orch_metrics`.
+
+```yaml
+orchestration:
+  max_queued_executions: 50    # Reject dispatch when >= 50 in-flight (default: unlimited)
+```
+
+This prevents unbounded queue growth from recursive dispatch patterns. The guard is fail-open: transient DB errors during the check allow dispatch to proceed rather than blocking work. The field is hot-reloadable.
+
 ### Best practices
 
 - **Always use `workspace: worktree`** when `max_triggers_per_agent > 1` — concurrent agents in a shared workspace will conflict on files.
 - **Check capacity before dispatching** — call `orch_list_agents` and verify `available > 0` for the target agent and `global_available > 0`.
-- **`max_concurrent_triggers` requires a restart** to take effect. `max_triggers_per_agent` is picked up on config hot-reload.
+- **Set `max_queued_executions`** to prevent runaway recursive dispatch — a value of 2× your normal peak load is a safe starting point.
+- **`max_concurrent_triggers` requires a restart** to take effect. `max_triggers_per_agent` and `max_queued_executions` are picked up on config hot-reload.
 
 ## Auto-Handoff Chains
 
@@ -369,7 +382,7 @@ Define CLI-based backends in YAML via `backend_definitions`. See the [Custom Bac
 
 ## Live Reload
 
-The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`, `redact_secrets`, `redaction_patterns`.
+The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `max_queued_executions`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`, `redact_secrets`, `redaction_patterns`.
 
 These fields require a worker restart: `default_workdir`, `state_dir`, `database`, `max_concurrent_triggers`, `default_merge_target`, `worktree_dir`.
 

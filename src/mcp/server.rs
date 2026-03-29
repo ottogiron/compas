@@ -191,13 +191,24 @@ impl OrchestratorMcpServer {
 
     #[tool(
         name = "orch_abandon",
-        description = "Abandon a thread, removing it from processing. Use for stale or stuck threads."
+        description = "Abandon a thread: cancels queued/active executions and kills running subprocesses. Use for stale or stuck threads."
     )]
     async fn orch_abandon(
         &self,
         Parameters(params): Parameters<AbandonParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.abandon_impl(params).await
+    }
+
+    #[tool(
+        name = "orch_abandon_batch",
+        description = "Abandon all active threads in a batch. Cancels queued/active executions and kills running subprocesses for each thread. Returns per-thread outcomes and aggregate counts."
+    )]
+    async fn orch_abandon_batch(
+        &self,
+        Parameters(params): Parameters<AbandonBatchParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.abandon_batch_impl(params).await
     }
 
     #[tool(

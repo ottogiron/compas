@@ -42,6 +42,7 @@ pub struct AbandonOutcome {
     pub thread_id: String,
     pub status: String,
     pub executions_cancelled: u64,
+    pub processes_killed: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree_branch: Option<String>,
 }
@@ -144,11 +145,48 @@ impl LifecycleService {
     pub async fn abandon(&self, thread_id: &str) -> Result<AbandonOutcome, LifecycleError> {
         self.ensure_thread(thread_id).await?;
 
+        // SEC-6: Query executing PIDs BEFORE cancelling — cancel_thread_executions
+        // flips DB status first, then we kill processes. When the executor's
+        // wait_with_timeout sees the child exit, it tries to finalize — sees
+        // rows_affected=0 (already cancelled) — logs warning and moves on.
+        let executing_pids = match self.store.get_executing_pids_for_thread(thread_id).await {
+            Ok(pids) => pids,
+            Err(e) => {
+                tracing::warn!(thread_id = %thread_id, error = %e,
+                    "failed to query executing PIDs for abandon");
+                vec![]
+            }
+        };
+
         let cancelled = self
             .store
             .cancel_thread_executions(thread_id)
             .await
             .unwrap_or(0);
+
+        // SEC-6: Kill running subprocesses for this thread.
+        let mut processes_killed: u64 = 0;
+        for (exec_id, pid) in executing_pids {
+            tracing::info!(thread_id = %thread_id, exec_id = %exec_id, pid = pid,
+                "killing subprocess for abandoned thread");
+            let kill_result =
+                tokio::task::spawn_blocking(move || crate::backend::process::kill_process(pid))
+                    .await;
+            match kill_result {
+                Ok(Ok(())) => {
+                    tracing::info!(exec_id = %exec_id, pid = pid, "subprocess killed");
+                    processes_killed += 1;
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(exec_id = %exec_id, pid = pid, error = %e,
+                        "failed to kill subprocess (may have already exited)");
+                }
+                Err(e) => {
+                    tracing::warn!(exec_id = %exec_id, pid = pid, error = %e,
+                        "spawn_blocking panicked during subprocess kill");
+                }
+            }
+        }
 
         // Look up worktree info before status transition
         let worktree_branch = match self.store.get_thread_worktree_info(thread_id).await {
@@ -173,6 +211,7 @@ impl LifecycleService {
             thread_id: thread_id.to_string(),
             status: "Abandoned".to_string(),
             executions_cancelled: cancelled,
+            processes_killed,
             worktree_branch,
         })
     }

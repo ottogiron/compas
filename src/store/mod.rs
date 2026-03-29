@@ -1761,6 +1761,22 @@ impl Store {
         Ok(())
     }
 
+    /// Get executing PIDs for a specific thread (SEC-6).
+    /// Used by abandon to kill running subprocesses.
+    pub async fn get_executing_pids_for_thread(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<(String, u32)>, sqlx::Error> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT id, pid FROM executions
+             WHERE thread_id = ? AND status IN ('picked_up', 'executing') AND pid IS NOT NULL",
+        )
+        .bind(thread_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|(id, pid)| (id, pid as u32)).collect())
+    }
+
     /// Get orphaned executions (picked_up/executing) that have a recorded PID.
     ///
     /// Used at startup to kill still-alive backend processes before marking
@@ -1875,6 +1891,17 @@ impl Store {
         let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM executions WHERE status = 'queued'")
             .fetch_one(&self.pool)
             .await?;
+        Ok(row.0)
+    }
+
+    /// Total in-flight executions (queued + picked_up + executing).
+    /// Used by the queue depth guard (SEC-6).
+    pub async fn total_inflight_executions(&self) -> Result<i64, sqlx::Error> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM executions WHERE status IN ('queued', 'picked_up', 'executing')",
+        )
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 

@@ -252,6 +252,11 @@ pub struct OrchestrationConfig {
     /// Additional regex patterns for secret redaction (beyond built-in set).
     #[serde(default)]
     pub redaction_patterns: Option<Vec<String>>,
+    /// Maximum total in-flight executions (queued + picked_up + executing).
+    /// When reached, orch_dispatch rejects new work with an actionable error.
+    /// None = unlimited (default for backward compat).
+    #[serde(default)]
+    pub max_queued_executions: Option<usize>,
     /// Per-backend circuit breaker configuration.
     #[serde(default)]
     pub circuit_breaker: CircuitBreakerConfig,
@@ -273,6 +278,7 @@ impl Default for OrchestrationConfig {
             default_merge_target: default_merge_target(),
             redact_secrets: None,
             redaction_patterns: None,
+            max_queued_executions: None,
             circuit_breaker: CircuitBreakerConfig::default(),
         }
     }

@@ -418,3 +418,25 @@ Git failures are treated as **unsafe** (same as dirty): when status cannot be ve
 - **Dirty-worktree check runs before no-op check** — uncommitted changes are the more actionable failure. If the agent left files uncommitted but also has zero committed divergence, the operator needs to know about the uncommitted files first (they explain *why* divergence is zero). Reversing the order would report "No commits to merge" and hide the root cause.
 - **TOCTOU accepted between preflight and execute** — `preflight_check()` (at merge-request time) validates worktree cleanliness and branch existence. `execute()` (at execution time, potentially seconds/minutes later) rechecks both. The window between checks is small (merge queue claim is near-instant), and the race is benign: if an agent commits between preflight and execute, the execute-time check passes (correct). If an agent dirties the worktree between preflight and execute, the execute-time check catches it (correct). The only uncaught race is an agent dirtying and then cleaning the worktree between checks, which is a no-op from the operator's perspective.
 - **`Err` from `dirty_files` fails the merge** — if we cannot determine worktree status (e.g., corrupt `.git` directory), proceeding risks silent data loss. Failing safe matches the preflight behavior where `worktree_status` errors also block the merge.
+
+## ADR-026: Recursive dispatch protection (SEC-6)
+
+**Date:** 2026-03
+**Status:** Active
+
+**Problem:** Agents can recursively dispatch without limits, creating unbounded queue growth. `orch_abandon` only flipped DB status without killing running subprocesses, leaving orphaned processes consuming resources.
+
+**Decision:** Three complementary protections:
+
+1. **Queue depth guard** — `max_queued_executions` config field limits total in-flight executions (queued + picked_up + executing). When reached, `orch_dispatch` rejects with an actionable error. Default: `None` (unlimited, backward-compatible).
+
+2. **Abandon kills subprocesses** — `orch_abandon` now queries executing PIDs before cancelling DB rows, then sends SIGTERM→SIGKILL to each process. Ordering is intentional: DB cancel runs first so when the executor's `wait_with_timeout` sees the child exit, it finds `rows_affected=0` (already cancelled) and logs a warning rather than racing to update status.
+
+3. **Batch abandon** — `orch_abandon_batch` abandons all non-terminal threads in a batch, applying the same cancel+kill behavior per thread.
+
+**Key choices:**
+
+- **Fail-open queue depth guard** — transient SQLite lock or DB error during the count query allows dispatch to proceed. Rationale: blocking all dispatches on a transient DB issue is worse than allowing one extra dispatch through. The guard is a best-effort safety net, not a hard guarantee.
+- **Serial process kill in abandon/abandon_batch** — each PID is killed sequentially via `spawn_blocking` with up to 5s SIGTERM grace period per process. For `orch_abandon_batch` with many live processes across many threads, this can block for N×5s. Accepted as a known limitation; parallel kill is a future optimization.
+- **PID query before cancel** — PIDs are fetched while executions are still in `picked_up`/`executing` status. After `cancel_thread_executions()` flips status to `cancelled`, a subsequent PID query would return empty. This ordering is load-bearing.
+- **`max_queued_executions` is hot-reloadable** — the guard reads from the live config snapshot on each dispatch, so operators can raise or lower the limit without restarting the worker.
