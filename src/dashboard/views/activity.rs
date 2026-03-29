@@ -426,9 +426,19 @@ fn footer_counts(
     (active, failed, completed, stale, scheduled)
 }
 
-fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) -> Line<'static> {
+/// Width-responsive footer with three tiers:
+///   <90 cols:  Active, Failed, Pending
+///   90–119:    + Stale, Completed, Scheduled (if >0), Merges
+///   ≥120:      + Cost, Tokens (right-aligned)
+fn build_footer_line(
+    data: &ActivityData,
+    now_unix: i64,
+    stale_after_secs: i64,
+    width: u16,
+) -> Line<'static> {
     let (active, failed, completed, stale, scheduled) =
         footer_counts(data, now_unix, stale_after_secs);
+    let w = width as usize;
 
     let label = |s: &str, color: Color| -> Span<'static> {
         Span::styled(s.to_string(), Style::new().fg(color))
@@ -437,24 +447,36 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
         Span::styled(format!("{}  ", n), Style::new().fg(theme::TEXT_BRIGHT))
     };
 
+    // ── Tier 1 (<90): always shown ─────────────────────────────────────
     let mut spans: Vec<Span<'static>> = vec![
         Span::raw(" "),
         label("Active: ", theme::ACCENT),
         val(active),
-        label("Stale: ", theme::TEXT_DIM),
-        val(stale),
-        label("Failed: ", theme::FAILURE),
-        val(failed),
-        label("Completed: ", theme::SUCCESS_DIM),
-        val(completed),
-        label("Pending: ", theme::TEXT_MUTED),
-        Span::styled(
-            format!("{}", data.queue_depth),
-            Style::new().fg(theme::TEXT_BRIGHT),
-        ),
     ];
 
-    if scheduled > 0 {
+    // ── Tier 2 (≥90): Stale before Failed ──────────────────────────────
+    if w >= 90 {
+        spans.push(label("Stale: ", theme::TEXT_DIM));
+        spans.push(val(stale));
+    }
+
+    // Always: Failed, Pending
+    spans.push(label("Failed: ", theme::FAILURE));
+    spans.push(val(failed));
+
+    if w >= 90 {
+        spans.push(label("Completed: ", theme::SUCCESS_DIM));
+        spans.push(val(completed));
+    }
+
+    spans.push(label("Pending: ", theme::TEXT_MUTED));
+    spans.push(Span::styled(
+        format!("{}", data.queue_depth),
+        Style::new().fg(theme::TEXT_BRIGHT),
+    ));
+
+    // Tier 2: Scheduled (only when >0)
+    if w >= 90 && scheduled > 0 {
         spans.push(Span::styled(
             "  ".to_string(),
             Style::new().fg(theme::TEXT_BRIGHT),
@@ -466,67 +488,83 @@ fn build_footer_line(data: &ActivityData, now_unix: i64, stale_after_secs: i64) 
         ));
     }
 
-    // Merge counts: show when any active merge ops exist
-    let merge_executing = data
-        .merge_ops
-        .iter()
-        .filter(|o| o.status == "executing" || o.status == "claimed")
-        .count();
-    let merge_queued = data
-        .merge_ops
-        .iter()
-        .filter(|o| o.status == "queued")
-        .count();
-    if merge_executing + merge_queued > 0 {
-        spans.push(Span::styled(
-            "  │  ".to_string(),
-            Style::new().fg(theme::BORDER_DIM),
-        ));
-        spans.push(label("Merges: ", theme::TEXT_MUTED));
-        if merge_executing > 0 {
-            spans.push(Span::styled(
-                format!("{}▸", merge_executing),
-                Style::new().fg(theme::ACCENT),
-            ));
-        }
-        if merge_queued > 0 {
-            if merge_executing > 0 {
-                spans.push(Span::styled(
-                    " ".to_string(),
-                    Style::new().fg(theme::TEXT_BRIGHT),
-                ));
-            }
-            spans.push(Span::styled(
-                format!("{}◌", merge_queued),
-                Style::new().fg(theme::WARNING),
-            ));
-        }
-    }
-
-    if let Some(cost) = &data.cost_summary {
-        if cost.total_cost_usd > 0.0 || cost.total_tokens_in > 0 {
+    // Tier 2: Merge counts
+    if w >= 90 {
+        let merge_executing = data
+            .merge_ops
+            .iter()
+            .filter(|o| o.status == "executing" || o.status == "claimed")
+            .count();
+        let merge_queued = data
+            .merge_ops
+            .iter()
+            .filter(|o| o.status == "queued")
+            .count();
+        if merge_executing + merge_queued > 0 {
             spans.push(Span::styled(
                 "  │  ".to_string(),
                 Style::new().fg(theme::BORDER_DIM),
             ));
-            spans.push(label("Cost: ", theme::TEXT_MUTED));
-            spans.push(Span::styled(
-                format_cost_usd(cost.total_cost_usd),
-                Style::new().fg(theme::TEXT_BRIGHT),
-            ));
-            spans.push(Span::styled(
-                "  ".to_string(),
-                Style::new().fg(theme::TEXT_BRIGHT),
-            ));
-            spans.push(label("Tok: ", theme::TEXT_MUTED));
-            spans.push(Span::styled(
-                format!(
-                    "{}/{}",
-                    format_tokens(cost.total_tokens_in),
-                    format_tokens(cost.total_tokens_out)
-                ),
-                Style::new().fg(theme::TEXT_BRIGHT),
-            ));
+            spans.push(label("Merges: ", theme::TEXT_MUTED));
+            if merge_executing > 0 {
+                spans.push(Span::styled(
+                    format!("{}▸", merge_executing),
+                    Style::new().fg(theme::ACCENT),
+                ));
+            }
+            if merge_queued > 0 {
+                if merge_executing > 0 {
+                    spans.push(Span::styled(
+                        " ".to_string(),
+                        Style::new().fg(theme::TEXT_BRIGHT),
+                    ));
+                }
+                spans.push(Span::styled(
+                    format!("{}◌", merge_queued),
+                    Style::new().fg(theme::WARNING),
+                ));
+            }
+        }
+    }
+
+    // ── Tier 3 (≥120): Cost and Tokens — right-aligned ─────────────────
+    if w >= 120 {
+        if let Some(cost) = &data.cost_summary {
+            if cost.total_cost_usd > 0.0 || cost.total_tokens_in > 0 {
+                let right_spans: Vec<Span<'static>> = vec![
+                    Span::styled("│  ".to_string(), Style::new().fg(theme::BORDER_DIM)),
+                    label("Cost: ", theme::TEXT_MUTED),
+                    Span::styled(
+                        format_cost_usd(cost.total_cost_usd),
+                        Style::new().fg(theme::TEXT_BRIGHT),
+                    ),
+                    Span::styled("  ".to_string(), Style::new().fg(theme::TEXT_BRIGHT)),
+                    label("Tok: ", theme::TEXT_MUTED),
+                    Span::styled(
+                        format!(
+                            "{}/{}",
+                            format_tokens(cost.total_tokens_in),
+                            format_tokens(cost.total_tokens_out)
+                        ),
+                        Style::new().fg(theme::TEXT_BRIGHT),
+                    ),
+                ];
+
+                let left_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+                let right_width: usize =
+                    right_spans.iter().map(|s| s.content.chars().count()).sum();
+                let padding = w.saturating_sub(left_width).saturating_sub(right_width);
+
+                if padding > 0 {
+                    spans.push(Span::raw(" ".repeat(padding)));
+                } else {
+                    spans.push(Span::styled(
+                        "  ".to_string(),
+                        Style::new().fg(theme::TEXT_BRIGHT),
+                    ));
+                }
+                spans.extend(right_spans);
+            }
         }
     }
 
@@ -637,7 +675,7 @@ fn render_ops_list(
                 let is_selected = selectable_slot == selected_slot;
                 sel_to_row.push(items.len());
                 let mut lines = vec![make_thread_line(row, is_selected, now_unix, list_width)];
-                // Add progress summary as a second line if available and still running.
+                // Always add a sub-line for running items: progress summary or fallback.
                 if is_running_now(row) {
                     if let Some(exec_id) = &row.execution_id {
                         if let Some(summary) = app.get_progress_summary(exec_id) {
@@ -668,9 +706,13 @@ fn render_ops_list(
                             lines.push(Line::from(spans));
                         } else if is_selected {
                             lines.push(make_thread_detail_line(row, list_width));
+                        } else {
+                            lines.push(make_running_fallback_line(row, list_width));
                         }
                     } else if is_selected {
                         lines.push(make_thread_detail_line(row, list_width));
+                    } else {
+                        lines.push(make_running_fallback_line(row, list_width));
                     }
                 } else if is_selected {
                     lines.push(make_thread_detail_line(row, list_width));
@@ -906,8 +948,13 @@ fn render_ops_list(
     f.render_stateful_widget(scrollbar, list_area, &mut scrollbar_state);
 
     f.render_widget(
-        Paragraph::new(build_footer_line(data, now_unix, stale_after_secs))
-            .style(Style::new().bg(theme::BG_PRIMARY).fg(theme::TEXT_DIM)),
+        Paragraph::new(build_footer_line(
+            data,
+            now_unix,
+            stale_after_secs,
+            footer_area.width,
+        ))
+        .style(Style::new().bg(theme::BG_PRIMARY).fg(theme::TEXT_DIM)),
         footer_area,
     );
 
@@ -950,6 +997,21 @@ fn make_thread_detail_line(row: &ThreadStatusView, list_width: usize) -> Line<'s
         Span::styled(" \u{2502} ", Style::default().fg(theme::BORDER_DIM)),
         Span::styled("[c]", Style::default().fg(theme::ACCENT)),
         Span::styled(" conversation", Style::default().fg(theme::TEXT_DIM)),
+    ])
+}
+
+/// Sub-line for running items when no progress summary is available and the
+/// item is not selected.  Shows thread summary/intent without the `[c]` hint.
+fn make_running_fallback_line(row: &ThreadStatusView, list_width: usize) -> Line<'static> {
+    let detail = row
+        .summary
+        .as_deref()
+        .unwrap_or_else(|| row.parsed_intent.as_deref().unwrap_or("\u{2026}"));
+    let avail = list_width.saturating_sub(DETAIL_PREFIX_LEN);
+    let truncated = super::truncate(detail, avail);
+    Line::from(vec![
+        Span::raw("     \u{2514} "),
+        Span::styled(truncated.to_string(), Style::default().fg(theme::TEXT_DIM)),
     ])
 }
 
