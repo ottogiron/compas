@@ -2857,7 +2857,6 @@ mod mouse_tests {
             backend_definitions: None,
             hooks: None,
             schedules: None,
-            agent_defaults: None,
         };
         let handle = ConfigHandle::new(config);
         App::new(
