@@ -185,6 +185,7 @@ Created: 2026-03-22
 - Implementation plan: local only (not committed)
 
 ## Execution Metrics
+
 - Ticket: MCP-4
 - Owner: (pending)
 - Complexity: (pending)
