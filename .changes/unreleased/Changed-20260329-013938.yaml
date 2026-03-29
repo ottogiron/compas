@@ -1,0 +1,3 @@
+kind: Changed
+body: Enforce restrictive file permissions (0700/0600) on state directory and files (Unix)
+time: 2026-03-29T01:39:38.851624+01:00

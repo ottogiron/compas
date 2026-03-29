@@ -35,12 +35,17 @@ pub async fn acquire_worker_lock(
     fs::create_dir_all(state_dir).map_err(OrchestratorError::Io)?;
 
     let lock_path = state_dir.join("worker.lock");
-    let lock_file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)
-        .map_err(OrchestratorError::Io)?;
+    let lock_file = {
+        let mut opts = OpenOptions::new();
+        opts.create(true).write(true).truncate(false);
+        // SEC-4: restrict lock file to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&lock_path).map_err(OrchestratorError::Io)?
+    };
 
     // Try non-blocking exclusive lock.
     // On non-unix platforms, flock is unavailable — the guard falls through to the

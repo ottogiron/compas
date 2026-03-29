@@ -140,12 +140,19 @@ pub fn wait_with_timeout(
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .ok()
-            .map(|f| Arc::new(Mutex::new(f)))
+        {
+            let mut opts = std::fs::OpenOptions::new();
+            opts.create(true).append(true);
+            // SEC-4: restrict log files to owner-only on Unix
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            opts.open(path)
+        }
+        .ok()
+        .map(|f| Arc::new(Mutex::new(f)))
     } else {
         None
     };

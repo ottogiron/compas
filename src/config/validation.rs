@@ -202,6 +202,19 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 e
             ))
         })?;
+        // SEC-4: restrict state directory to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&config.state_dir, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| {
+                    OrchestratorError::Config(format!(
+                        "cannot set permissions on state_dir '{}': {}",
+                        config.state_dir.display(),
+                        e
+                    ))
+                })?;
+        }
     }
 
     // Database pool bounds
@@ -776,6 +789,12 @@ agents:
         config.state_dir = new_path.clone();
         assert!(validate_config(&config).is_ok());
         assert!(new_path.exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&new_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700, "state_dir must be created with mode 0700");
+        }
     }
 
     #[test]

@@ -151,6 +151,13 @@ The `orch_dispatch` → `orch_wait` flow has friction for MCP-connected agents:
 
 **Design goal:** The basic dispatch → wait → act protocol should work without loading any skill. Tool descriptions, parameter defaults, and response hints should be sufficient for any MCP-connected agent to use compas correctly on first contact. The `orch-dispatch` skill should only add advanced workflows (reviewer loops, ticket lifecycle, merge queue), not basic operational knowledge.
 
+## SQLite WAL/SHM sidecar files inherit default permissions
+
+**Severity:** Low
+**Status:** Open
+
+WAL-mode SQLite creates `jobs.sqlite-wal` and `jobs.sqlite-shm` with default umask permissions. These files may be world-readable even when `jobs.sqlite` is restricted to `0600`. Mitigation: ensure `state_dir` has `0700` permissions (which it does for new directories).
+
 ## Dashboard: No mouse support
 
 **Severity:** Low

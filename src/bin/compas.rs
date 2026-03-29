@@ -322,6 +322,7 @@ async fn connect_db(
     config: &compas::config::types::OrchestratorConfig,
 ) -> Result<sqlx::SqlitePool, Box<dyn std::error::Error>> {
     let db_url = format!("sqlite:{}?mode=rwc", db_path.display());
+    let db_already_existed = db_path.exists();
     // Per-connection PRAGMAs: busy_timeout and journal_mode MUST be set on
     // every connection in the pool, not just once during setup(). SQLite
     // PRAGMAs like busy_timeout are per-connection state — without this,
@@ -338,6 +339,12 @@ async fn connect_db(
         .await?;
     let store = compas::store::Store::new(pool.clone());
     store.setup().await?;
+    // SEC-4: restrict SQLite DB file to owner-only on Unix (only on creation)
+    #[cfg(unix)]
+    if !db_already_existed && db_path.exists() {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(db_path, std::fs::Permissions::from_mode(0o600))?;
+    }
     Ok(pool)
 }
 
@@ -639,17 +646,30 @@ async fn spawn_worker_process(
     config_path: &Path,
 ) -> Result<Option<u32>, Box<dyn std::error::Error>> {
     let state_dir = config_handle.load().state_dir.clone();
+    let state_dir_created = !state_dir.exists();
     tokio::fs::create_dir_all(&state_dir).await?;
+    // SEC-4: restrict state directory to owner-only on Unix (only on creation)
+    #[cfg(unix)]
+    if state_dir_created {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).await?;
+    }
 
     // Acquire an exclusive lock to prevent TOCTOU races when multiple
     // dashboards start simultaneously. The lock is held through heartbeat
     // check + spawn, then released.
     let lock_path = state_dir.join("worker.lock");
-    let lock_file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(&lock_path)?;
+    let lock_file = {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).write(true).truncate(false);
+        // SEC-4: restrict lock file to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&lock_path)?
+    };
 
     #[cfg(unix)]
     {
@@ -680,10 +700,17 @@ async fn spawn_worker_process(
     // Worker log lives in state_dir (not logs/) to avoid collision with
     // the per-execution log pruner in loop_runner.rs.
     let worker_log_path = state_dir.join("worker.log");
-    let worker_log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&worker_log_path)?;
+    let worker_log = {
+        let mut opts = std::fs::OpenOptions::new();
+        opts.create(true).append(true);
+        // SEC-4: restrict worker log to owner-only on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        opts.open(&worker_log_path)?
+    };
     let worker_log_err = worker_log.try_clone()?;
 
     // Write a separator so restarts are visible in the append log.
