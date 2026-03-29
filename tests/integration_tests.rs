@@ -116,6 +116,7 @@ fn test_config() -> OrchestratorConfig {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             },
             AgentConfig {
                 alias: "spark".to_string(),
@@ -132,6 +133,7 @@ fn test_config() -> OrchestratorConfig {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             },
         ],
         worktree_dir: None,
@@ -931,6 +933,7 @@ mod registry_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
 
         let backend = registry.get(&agent_cfg);
@@ -957,6 +960,7 @@ mod registry_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
 
         let result = registry.get(&agent_cfg);
@@ -1369,6 +1373,222 @@ mod dispatch_tests {
         // No scheduled_for or execution_id in the response.
         assert!(json.get("scheduled_for").is_none());
         assert!(json.get("execution_id").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_failed_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch creates the thread.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "First attempt".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-fail".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Simulate the thread reaching Failed state.
+        server
+            .store
+            .update_thread_status("t-reopen-fail", ThreadStatus::Failed)
+            .await
+            .unwrap();
+
+        // Dispatch again to the failed thread — should auto-reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Retry after failure".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-fail".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["thread_id"], "t-reopen-fail");
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Failed");
+
+        // Thread should now be Active.
+        let status = server
+            .store
+            .get_thread_status("t-reopen-fail")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_completed_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Do work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-done".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Mark completed.
+        server
+            .store
+            .update_thread_status("t-reopen-done", ThreadStatus::Completed)
+            .await
+            .unwrap();
+
+        // Dispatch again — should reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Follow-up work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-done".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Completed");
+
+        let status = server
+            .store
+            .get_thread_status("t-reopen-done")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_active_thread_not_reopened() {
+        let server = test_server().await;
+
+        // Initial dispatch — thread starts Active.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "First message".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-no-reopen".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Dispatch again to still-active thread — should NOT set reopened.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Second message".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-no-reopen".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        // reopened should be absent (skip_serializing_if = Not::not)
+        assert!(json.get("reopened").is_none());
+        assert!(json.get("previous_status").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_abandoned_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Initial work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-abandon".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Mark abandoned.
+        server
+            .store
+            .update_thread_status("t-reopen-abandon", ThreadStatus::Abandoned)
+            .await
+            .unwrap();
+
+        // Dispatch again — should reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Revived work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-abandon".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Abandoned");
+
+        let status = server
+            .store
+            .get_thread_status("t-reopen-abandon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
     }
 }
 
@@ -3406,6 +3626,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -3489,6 +3710,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         }];
 
         let mut registry = BackendRegistry::new();
@@ -3597,6 +3819,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Agent B: no workspace (should inherit worktree)
         let reviewer_config = AgentConfig {
@@ -3614,6 +3837,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -3771,6 +3995,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Reviewer targets a different repo
         let reviewer_config = AgentConfig {
@@ -3788,6 +4013,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -3948,6 +4174,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         // Reviewer with explicit `workspace: shared` — same repo but opts out
         let reviewer_config = AgentConfig {
@@ -3965,6 +4192,7 @@ mod worktree_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         };
         let agent_configs = vec![dev_config, reviewer_config];
 
@@ -4405,6 +4633,7 @@ mod handoff_chain_tests {
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "agent-b".to_string(),
@@ -4421,6 +4650,7 @@ mod handoff_chain_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None, // agent-b does NOT chain further
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -5212,6 +5442,7 @@ agents:
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
@@ -5228,6 +5459,7 @@ agents:
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
@@ -5244,6 +5476,7 @@ agents:
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -6203,6 +6436,7 @@ mod fanout_tests {
                         handoff_prompt: None,
                         max_chain_depth: Some(3),
                     }),
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
@@ -6219,6 +6453,7 @@ mod fanout_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
@@ -6235,6 +6470,7 @@ mod fanout_tests {
                     max_retries: 0,
                     retry_backoff_secs: 30,
                     handoff: None,
+                    safety_mode: None,
                 },
             ],
             worktree_dir: None,
@@ -6676,6 +6912,7 @@ mod read_log_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),
@@ -7111,6 +7348,7 @@ mod session_resume_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: Some(SafetyMode::AutoApprove),
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),
@@ -7206,6 +7444,7 @@ mod session_resume_tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: Some(SafetyMode::AutoApprove),
         }];
 
         let worktree_manager = Arc::new(WorktreeManager::new());
@@ -7527,6 +7766,7 @@ mod merge_worker_tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: OrchestrationConfig::default(),

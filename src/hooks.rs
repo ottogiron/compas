@@ -527,6 +527,7 @@ mod tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         });
 
         let config_handle = ConfigHandle::new(config);

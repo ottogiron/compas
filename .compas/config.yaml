@@ -22,6 +22,7 @@ database:
 agents:
   - alias: dev
     backend: claude
+    safety_mode: auto_approve
     model: claude-sonnet-4-6
     prompt: >
       You are a development agent for compas.

@@ -1,9 +1,19 @@
-use super::types::{AgentRole, HandoffTarget, OrchestratorConfig, OutputFormat};
+use super::types::{AgentRole, HandoffTarget, OrchestratorConfig, OutputFormat, SafetyMode};
 use crate::error::{OrchestratorError, Result};
 use std::collections::HashSet;
 
 /// Built-in backend names that cannot be used in `backend_definitions`.
-const BUILTIN_BACKEND_NAMES: &[&str] = &["claude", "codex", "gemini", "opencode"];
+pub const BUILTIN_BACKEND_NAMES: &[&str] = &["claude", "codex", "gemini", "opencode"];
+
+/// Return the permission-bypass flag used by a built-in backend, if any.
+pub fn builtin_backend_safety_flag(backend: &str) -> Option<&'static str> {
+    match backend {
+        "claude" => Some("--dangerously-skip-permissions"),
+        "codex" => Some("--full-auto"),
+        "gemini" => Some("--yolo"),
+        _ => None,
+    }
+}
 
 /// Validate an orchestrator configuration.
 pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
@@ -87,6 +97,44 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                     agent.alias, ws
                 )));
             }
+        }
+    }
+
+    // ── Safety mode validation (SEC-1) ──
+    // Agents using built-in backends must declare safety_mode: auto_approve.
+    // Custom backend_definitions are exempt.
+    let custom_backend_names: HashSet<&str> = config
+        .backend_definitions
+        .as_ref()
+        .map(|defs| defs.iter().map(|d| d.name.as_str()).collect())
+        .unwrap_or_default();
+
+    for agent in &config.agents {
+        let is_builtin = BUILTIN_BACKEND_NAMES.contains(&agent.backend.as_str())
+            && !custom_backend_names.contains(agent.backend.as_str());
+        if is_builtin && agent.safety_mode.is_none() {
+            let detail = match builtin_backend_safety_flag(&agent.backend) {
+                Some(flag) => format!(
+                    "Built-in backends run agents with full permission bypass (e.g. {} for {}).",
+                    flag, agent.backend
+                ),
+                None => format!(
+                    "Built-in backends run as your user account ({} uses no permission bypass flag but is still an unconfined agent).",
+                    agent.backend
+                ),
+            };
+            return Err(OrchestratorError::Config(format!(
+                "agent '{}' (backend: {}) requires explicit safety_mode field.\n\
+                 {}\n\
+                 Set safety_mode: auto_approve to acknowledge this behavior.",
+                agent.alias, agent.backend, detail
+            )));
+        }
+        if is_builtin && agent.safety_mode != Some(SafetyMode::AutoApprove) {
+            return Err(OrchestratorError::Config(format!(
+                "agent '{}' (backend: {}): only safety_mode: auto_approve is currently supported",
+                agent.alias, agent.backend
+            )));
         }
     }
 
@@ -517,6 +565,7 @@ mod tests {
                 max_retries: 0,
                 retry_backoff_secs: 30,
                 handoff: None,
+                safety_mode: None,
             }],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -540,6 +589,65 @@ mod tests {
     #[test]
     fn test_config_validation_minimal_valid() {
         let config = minimal_config();
+        assert!(validate_config(&config).is_ok());
+    }
+
+    // ── Safety mode validation tests (SEC-1) ──
+
+    #[test]
+    fn test_safety_mode_required_for_builtin_backend() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        // safety_mode is None — should fail
+        let err = validate_config(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("requires explicit safety_mode field"), "{msg}");
+        assert!(msg.contains("--dangerously-skip-permissions"), "{msg}");
+    }
+
+    #[test]
+    fn test_safety_mode_accepted_for_builtin_backend() {
+        let mut config = minimal_config();
+        config.agents[0].backend = "claude".into();
+        config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_safety_mode_not_required_for_custom_backend() {
+        let config = minimal_config(); // uses backend: "stub"
+        assert!(config.agents[0].safety_mode.is_none());
+        assert!(validate_config(&config).is_ok());
+    }
+
+    #[test]
+    fn test_safety_mode_required_for_each_builtin() {
+        for backend in &["claude", "codex", "gemini", "opencode"] {
+            let mut config = minimal_config();
+            config.agents[0].backend = backend.to_string();
+            let err = validate_config(&config).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("requires explicit safety_mode field"),
+                "backend '{backend}' should require safety_mode"
+            );
+        }
+    }
+
+    #[test]
+    fn test_safety_mode_not_required_for_backend_definition() {
+        use crate::config::types::BackendDefinition;
+        let mut config = minimal_config();
+        config.backend_definitions = Some(vec![BackendDefinition {
+            name: "aider".into(),
+            command: "aider".into(),
+            args: vec![],
+            resume: None,
+            output: Default::default(),
+            ping: None,
+            env_remove: None,
+        }]);
+        config.agents[0].backend = "aider".into();
         assert!(validate_config(&config).is_ok());
     }
 
@@ -604,6 +712,7 @@ mod tests {
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         });
         let err = validate_config(&config).unwrap_err();
         assert!(err.to_string().contains("duplicate agent alias"));
@@ -628,6 +737,7 @@ agents:
     backend: stub
   - alias: chill
     backend: opencode
+    safety_mode: auto_approve
 "#;
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.agents.len(), 2);
@@ -839,6 +949,7 @@ agents:
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -859,6 +970,7 @@ agents:
             max_retries: 0,
             retry_backoff_secs: 30,
             handoff: None,
+            safety_mode: None,
         });
         assert_eq!(config.effective_max_concurrent_triggers(), 2);
 
@@ -949,6 +1061,7 @@ agents:
   - alias: a1
     backend: claude
     model: opus
+    safety_mode: auto_approve
 "#;
         let config = crate::config::load_config_from_str(yaml).unwrap();
         let global = config.models.unwrap();

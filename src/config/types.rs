@@ -322,6 +322,17 @@ fn default_merge_target() -> String {
     "main".to_string()
 }
 
+/// Safety acknowledgment for built-in backend permission bypass.
+///
+/// Built-in backends (claude, codex, gemini, opencode) run agents with full
+/// permission bypass flags (e.g. `--dangerously-skip-permissions`). This enum
+/// requires explicit operator acknowledgment of that behavior.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SafetyMode {
+    AutoApprove,
+}
+
 /// Agent role determines worker behavior.
 /// - `Worker`: triggered on matching intents (default).
 /// - `Operator`: coordinator driven via MCP tools, never triggered.
@@ -392,6 +403,10 @@ pub struct AgentConfig {
     pub backend: String,
     #[serde(default)]
     pub role: AgentRole,
+    /// Explicit acknowledgment of built-in backend permission bypass behavior.
+    /// Required for agents using built-in backends (claude, codex, gemini, opencode).
+    #[serde(default)]
+    pub safety_mode: Option<SafetyMode>,
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
@@ -595,6 +610,7 @@ mod tests {
             agents:
               - alias: dev
                 backend: claude
+                safety_mode: auto_approve
         "#;
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
         let cb = &config.orchestration.circuit_breaker;
@@ -616,6 +632,7 @@ mod tests {
             agents:
               - alias: dev
                 backend: claude
+                safety_mode: auto_approve
         "#;
         let config: OrchestratorConfig = serde_yaml::from_str(yaml).unwrap();
         let cb = &config.orchestration.circuit_breaker;

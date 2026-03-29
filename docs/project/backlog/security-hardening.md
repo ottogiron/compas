@@ -37,7 +37,7 @@ Created: 2026-03-29
   - `make verify`
   - Manual: remove `safety_mode` from a test config → validation error
   - Manual: worker startup logs show safety flags
-- Status: In Progress
+- Status: Done
 
 ## Ticket SEC-2 — Secret redaction in execution logs and output previews
 
@@ -63,7 +63,7 @@ Created: 2026-03-29
 - Verification:
   - `make verify`
   - Unit tests for redaction patterns
-- Status: Todo
+- Status: Done
 
 ## Ticket SEC-3 — Warn on dangerous flags in `backend_args`
 
@@ -85,7 +85,7 @@ Created: 2026-03-29
   - Unit test covers each warning case
 - Verification:
   - `make verify`
-- Status: Todo
+- Status: Done
 
 ## Ticket SEC-4 — Restrictive file permissions on state directory
 
@@ -109,7 +109,7 @@ Created: 2026-03-29
 - Verification:
   - `make verify`
   - Manual: `ls -la` on newly created state_dir and files
-- Status: Todo
+- Status: Done
 
 ## Ticket SEC-5 — Warn on security-sensitive env vars in agent config
 
@@ -130,6 +130,30 @@ Created: 2026-03-29
   - Unit test covers PATH and LD_PRELOAD warnings
 - Verification:
   - `make verify`
+- Status: Done
+
+## Ticket SEC-6 — Recursive dispatch protection
+
+- Goal: Prevent unbounded recursive dispatch chains when agents use compas MCP tools to dispatch sub-work.
+- In scope:
+  - Global queue depth guard (`max_queued_executions` in orchestration config) — reject `orch_dispatch` when queued+active executions exceed threshold
+  - Cancellation polling in executor — periodic check during `wait_with_timeout`, kill subprocess if execution cancelled
+  - `orch_abandon_batch` MCP tool — abandon all threads in a batch at once
+  - Per-batch execution budget (`max_executions_per_batch`) — optional stretch
+- Out of scope:
+  - Lineage tracking / `parent_execution_id` (deferred post-v1)
+  - Agent-level MCP tool restrictions
+  - `orch_kill` / `orch_stop` tool (fix `orch_abandon` semantics instead)
+- Dependencies: none
+- Acceptance criteria:
+  - `orch_dispatch` rejects when global queue depth exceeds `max_queued_executions`
+  - `orch_abandon` on an executing thread kills the subprocess (not just DB update)
+  - `orch_abandon_batch` abandons all threads in a batch
+  - Error messages are AX-friendly (tell the agent what happened and what to do)
+- Verification:
+  - `make verify`
+  - Integration test: dispatch beyond queue cap returns error
+  - Integration test: abandon kills running execution
 - Status: Todo
 
 ## Execution Order

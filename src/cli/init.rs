@@ -232,6 +232,9 @@ fn generate_minimal_config(
     yaml.push_str("agents:\n");
     yaml.push_str(&format!("  - alias: {}\n", yaml_quote(alias)));
     yaml.push_str(&format!("    backend: {}\n", backend));
+    if crate::config::validation::BUILTIN_BACKEND_NAMES.contains(&backend) {
+        yaml.push_str("    safety_mode: auto_approve\n");
+    }
     if let Some(m) = model {
         yaml.push_str(&format!("    model: {}\n", yaml_quote(m)));
     }
@@ -289,6 +292,9 @@ fn generate_commented_config(
     yaml.push_str("agents:\n");
     yaml.push_str(&format!("  - alias: {}\n", yaml_quote(alias)));
     yaml.push_str(&format!("    backend: {}\n", backend));
+    if crate::config::validation::BUILTIN_BACKEND_NAMES.contains(&backend) {
+        yaml.push_str("    safety_mode: auto_approve\n");
+    }
     if let Some(m) = model {
         yaml.push_str(&format!("    model: {}\n", yaml_quote(m)));
     }

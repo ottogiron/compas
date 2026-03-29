@@ -66,6 +66,7 @@ notifications:
 agents:
   - alias: dev                           # Unique name for dispatching (required)
     backend: claude                      # claude | codex | gemini | opencode | <custom> (required)
+    safety_mode: auto_approve            # Required for built-in backends (see Security Model)
     model: claude-sonnet-4-6             # Model to use
     prompt: "..."                        # System prompt for the agent
     prompt_file: prompts/dev.md          # Load prompt from file (takes precedence over prompt)
@@ -110,6 +111,7 @@ Custom backends are defined via `backend_definitions`. See the [Custom Backends 
 | `workspace` | no | `shared` | `"worktree"` for git worktree isolation, `"shared"` for direct access |
 | `max_retries` | no | `0` | Retry attempts for transient failures (0 = disabled) |
 | `retry_backoff_secs` | no | `30` | Base delay between retries (doubles each attempt) |
+| `safety_mode` | conditional | -- | Required for built-in backends (`auto_approve`). See [Security Model](#security-model) |
 | `handoff` | no | -- | Auto-handoff routing (see [Auto-Handoff Chains](#auto-handoff-chains)) |
 
 **Security note:** `env` values are passed directly to the backend subprocess via `Command::env()`. Setting system-critical variables like `PATH`, `LD_PRELOAD`, or `DYLD_INSERT_LIBRARIES` can alter process behavior in unexpected ways. Compas emits a warning during config validation for known sensitive variables but does not block the configuration.
@@ -236,6 +238,38 @@ Each hook entry takes: `command` (required), `args` (optional), `timeout_secs` (
 **`filter`** — optional map of key-value pairs matched against the event payload. The hook runs only when all filter keys match. Missing payload fields cause the hook to be skipped (no error). Non-string payload values are stringified for comparison (`true` → `"true"`, `5000` → `"5000"`).
 
 Hooks receive JSON event data on stdin. `thread_summary` may be null. Multiple hooks per point run sequentially. Failures are logged as warnings only. Hooks are hot-reloaded.
+
+## Security Model
+
+Built-in backends run agents with full permission bypass to enable non-interactive execution. Each agent using a built-in backend must declare `safety_mode: auto_approve` to acknowledge this behavior.
+
+### Permission bypass flags by backend
+
+| Backend | Flag | Effect |
+| --- | --- | --- |
+| `claude` | `--dangerously-skip-permissions` | Skips all tool-use permission prompts |
+| `codex` | `--full-auto` | Auto-approves code execution |
+| `gemini` | `--yolo` | Auto-approves all tool use |
+| `opencode` | *(none)* | No permission bypass flag |
+
+### Why bypass flags are necessary
+
+Compas dispatches work to agents as background CLI processes. Interactive permission prompts would block indefinitely — there is no human at the terminal. The bypass flags allow agents to run autonomously.
+
+### Custom backends are exempt
+
+Agents referencing a `backend_definitions` entry do not require `safety_mode`. Custom backend authors control their own CLI flags and should handle permission models as appropriate for their tool.
+
+### What this means in practice
+
+When `safety_mode: auto_approve` is set, the agent process runs as your user account with the same filesystem and network access. The agent can read, write, and delete any file your user can access.
+
+### Recommendations
+
+- **Scope prompts carefully** — clear instructions reduce unintended actions.
+- **Use worktree isolation** (`workspace: worktree`) — agents work in disposable branches, limiting blast radius.
+- **Protect `state_dir`** — it contains execution logs and the SQLite database. Restrict read access to authorized users.
+- **Treat MCP as a trust boundary** — any tool connected to the MCP server can dispatch work to agents. Only connect MCP clients you trust.
 
 ## Custom Backends
 

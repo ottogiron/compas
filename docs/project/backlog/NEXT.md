@@ -1,6 +1,6 @@
 # Priority Queue
 
-Last updated: 2026-03-28
+Last updated: 2026-03-29
 
 ## Active
 
@@ -12,11 +12,12 @@ No tickets currently in-flight.
 
 Ordered by priority. Work top item when capacity is available.
 
-1. EVO-16 — Session resume after crash (`orch-evolution.md`)
-2. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
-3. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
-4. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
-5. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
+1. SEC-6 — Recursive dispatch protection (`security-hardening.md`)
+2. EVO-16 — Session resume after crash (`orch-evolution.md`)
+3. ISESS-SPIKE — Interactive sessions validation spike (`interactive-sessions.md`)
+4. EVO-6 — Quick dispatch from TUI (`orch-evolution.md`)
+5. OBS-02 — Tool metrics aggregation (`orch-observability.md`)
+6. SCHED-3 — Schedule dashboard visibility (`delayed-dispatch.md`)
 
 ## Backlog
 
