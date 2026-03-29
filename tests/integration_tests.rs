@@ -1370,6 +1370,222 @@ mod dispatch_tests {
         assert!(json.get("scheduled_for").is_none());
         assert!(json.get("execution_id").is_none());
     }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_failed_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch creates the thread.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "First attempt".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-fail".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Simulate the thread reaching Failed state.
+        server
+            .store
+            .update_thread_status("t-reopen-fail", ThreadStatus::Failed)
+            .await
+            .unwrap();
+
+        // Dispatch again to the failed thread — should auto-reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Retry after failure".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-fail".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["thread_id"], "t-reopen-fail");
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Failed");
+
+        // Thread should now be Active.
+        let status = server
+            .store
+            .get_thread_status("t-reopen-fail")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_completed_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Do work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-done".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Mark completed.
+        server
+            .store
+            .update_thread_status("t-reopen-done", ThreadStatus::Completed)
+            .await
+            .unwrap();
+
+        // Dispatch again — should reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Follow-up work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-done".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Completed");
+
+        let status = server
+            .store
+            .get_thread_status("t-reopen-done")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_active_thread_not_reopened() {
+        let server = test_server().await;
+
+        // Initial dispatch — thread starts Active.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "First message".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-no-reopen".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Dispatch again to still-active thread — should NOT set reopened.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Second message".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-no-reopen".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        // reopened should be absent (skip_serializing_if = Not::not)
+        assert!(json.get("reopened").is_none());
+        assert!(json.get("previous_status").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_reopens_abandoned_thread() {
+        let server = test_server().await;
+
+        // Initial dispatch.
+        server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Initial work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-abandon".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        // Mark abandoned.
+        server
+            .store
+            .update_thread_status("t-reopen-abandon", ThreadStatus::Abandoned)
+            .await
+            .unwrap();
+
+        // Dispatch again — should reopen.
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "Revived work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-reopen-abandon".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        assert_eq!(json["reopened"], true);
+        assert_eq!(json["previous_status"], "Abandoned");
+
+        let status = server
+            .store
+            .get_thread_status("t-reopen-abandon")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(status, "Active");
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

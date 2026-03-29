@@ -215,7 +215,7 @@ After dispatching work via `orch_dispatch`, use `orch_wait` to block for the res
 
 | Tool | What it does |
 | --- | --- |
-| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Accepts optional `summary`, `scheduled_for` (ISO 8601) for delayed execution, and `skip_handoff` to suppress auto-handoff on the response |
+| `orch_dispatch` | Send a task to an agent (creates a thread, queues execution). Auto-reopens threads in terminal states (Completed/Failed/Abandoned) — response includes `reopened` and `previous_status` when this happens. Accepts optional `summary`, `scheduled_for` (ISO 8601) for delayed execution, and `skip_handoff` to suppress auto-handoff on the response |
 | `orch_wait` | Block until a matching message arrives or timeout; sends progress notifications every 10s |
 | `orch_close` | Close a thread as `completed` or `failed`. Completed worktree threads require a completed `orch_merge` first |
 | `orch_commit` | Commit all uncommitted changes in a thread's worktree. For MCP-only agents that cannot run git directly |

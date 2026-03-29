@@ -1,9 +1,9 @@
 //! orch_dispatch implementation.
 //!
-//! Dispatch is a pure message-insertion operation. It validates the target
-//! agent alias and inserts the message into the store. Trigger eligibility
-//! (whether the message should spawn an execution) is determined by the
-//! worker poll loop, not here.
+//! Dispatch validates the target agent alias, auto-reopens threads in terminal
+//! states (Completed/Failed/Abandoned), and inserts the message into the store.
+//! Trigger eligibility (whether the message should spawn an execution) is
+//! determined by the worker poll loop, not here.
 //!
 //! When `scheduled_for` is provided, dispatch also pre-creates a queued
 //! execution with `eligible_at` set so the worker defers pickup until the
@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use super::params::DispatchParams;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
+use crate::store::ThreadStatus;
 
 #[derive(Serialize)]
 struct DispatchResult {
@@ -28,6 +29,12 @@ struct DispatchResult {
     /// Pre-created execution ID for scheduled dispatches.
     #[serde(skip_serializing_if = "Option::is_none")]
     execution_id: Option<String>,
+    /// True when the thread was in a terminal state and was auto-reopened.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    reopened: bool,
+    /// The thread's status before it was reopened.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_status: Option<String>,
 }
 
 impl OrchestratorMcpServer {
@@ -89,6 +96,28 @@ impl OrchestratorMcpServer {
             .thread_id
             .unwrap_or_else(|| ulid::Ulid::new().to_string());
 
+        // If dispatching to an existing thread in a terminal state, auto-reopen it.
+        // This intentionally diverges from `lifecycle::reopen()` by also cancelling
+        // any stale queued/active executions — defensive cleanup to prevent
+        // double-execution when the worker polls immediately after the new message.
+        let mut reopened = false;
+        let mut previous_status: Option<String> = None;
+        if let Ok(Some(thread)) = self.store.get_thread(&thread_id).await {
+            let status: ThreadStatus = thread.status.parse().unwrap_or(ThreadStatus::Active);
+            if status.is_terminal() {
+                let _ = self.store.cancel_thread_executions(&thread_id).await;
+                if let Err(e) = self
+                    .store
+                    .update_thread_status(&thread_id, ThreadStatus::Active)
+                    .await
+                {
+                    return Ok(err_text(format!("failed to reopen thread: {}", e)));
+                }
+                previous_status = Some(thread.status.clone());
+                reopened = true;
+            }
+        }
+
         // Insert message — trigger eligibility is determined by the worker.
         let skip_handoff = params.skip_handoff.unwrap_or(false);
         let message_id = match self
@@ -148,6 +177,8 @@ impl OrchestratorMcpServer {
             next_step,
             scheduled_for: params.scheduled_for,
             execution_id,
+            reopened,
+            previous_status,
         }))
     }
 }
