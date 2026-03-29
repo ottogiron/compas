@@ -163,7 +163,7 @@ Created: 2026-03-22
   - Integration test: call with numeric timeout, verify no deserialization error
   - Manual: call `orch_wait_merge` with explicit `timeout_secs` via MCP
   - `make verify`
-- Status: Todo
+- Status: Done
 - Complexity: S
 - Risk: Low
 - Notes: Found during smoke testing on 2026-03-28. Works fine when `timeout_secs` is omitted (uses default 120).
@@ -175,6 +175,7 @@ Created: 2026-03-22
 3. ~~CLI-WAIT-1~~ (done) — parallel with MCP-2
 4. ~~MCP-3~~ (done)
 5. ~~CLI-WAIT-2~~ (done) — after CLI-WAIT-1
+6. ~~MCP-4~~ (done) — timeout_secs deserialization fix
 
 ## Tracking Notes
 
@@ -184,6 +185,14 @@ Created: 2026-03-22
 - Implementation plan: local only (not committed)
 
 ## Execution Metrics
+- Ticket: MCP-4
+- Owner: (pending)
+- Complexity: (pending)
+- Risk: (pending)
+- Start: 2026-03-28 23:15 UTC
+- End: 2026-03-28 23:26 UTC
+- Duration: 00:10:52
+- Notes: (pending)
 
 - Ticket: MCP-3
 - Owner: (pending)

@@ -1283,7 +1283,7 @@ fn event_loop(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 if app.viewing_conversation.is_some() {
                     handle_conversation_mouse(app, mouse.kind);
                 } else if app.viewing_log.is_some() {
-                    handle_log_viewer_mouse(app, mouse.kind);
+                    handle_log_viewer_mouse(app, mouse.kind, mouse.column, mouse.row);
                 } else if app.show_help {
                     // No-op: no mouse interaction in help overlay.
                 } else {
@@ -1588,8 +1588,18 @@ fn handle_conversation_mouse(app: &mut App, kind: MouseEventKind) {
 }
 
 /// Handle mouse events when the log viewer is open.
-fn handle_log_viewer_mouse(app: &mut App, kind: MouseEventKind) {
+fn handle_log_viewer_mouse(app: &mut App, kind: MouseEventKind, col: u16, row: u16) {
     match kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            if let Some(ref mut viewer) = app.viewing_log {
+                if let Some(tab_rect) = viewer.tab_bar_rect {
+                    let event_count = viewer.timeline_events.len();
+                    if let Some(idx) = detect_log_tab_click(col, row, tab_rect, event_count) {
+                        viewer.set_tab(LogTab::from_index(idx));
+                    }
+                }
+            }
+        }
         MouseEventKind::ScrollUp => {
             if let Some(ref mut viewer) = app.viewing_log {
                 viewer.scroll_up(MOUSE_SCROLL_STEP);
@@ -1602,6 +1612,41 @@ fn handle_log_viewer_mouse(app: &mut App, kind: MouseEventKind) {
         }
         _ => {}
     }
+}
+
+/// Detect which log viewer tab label was clicked based on cumulative x-offsets.
+///
+/// The tab bar layout is: `"╶ "` prefix (2 chars), then tab labels separated
+/// by 4-space gaps. The "Timeline" label is dynamic: `"Timeline (N)"`.
+fn detect_log_tab_click(col: u16, row: u16, tab_rect: Rect, event_count: usize) -> Option<usize> {
+    if row != tab_rect.y {
+        return None;
+    }
+    if col < tab_rect.x || col >= tab_rect.x + tab_rect.width {
+        return None;
+    }
+    let rel_x = (col - tab_rect.x) as usize;
+
+    let prefix_len = 2; // "╶ "
+    let labels: [String; 3] = [
+        "Input".to_string(),
+        format!("Timeline ({})", event_count),
+        "Output".to_string(),
+    ];
+    let gap = 4; // 4 spaces between labels
+
+    let mut offset = prefix_len;
+    for (i, label) in labels.iter().enumerate() {
+        let label_width = label.len();
+        if rel_x >= offset && rel_x < offset + label_width {
+            return Some(i);
+        }
+        offset += label_width;
+        if i < labels.len() - 1 {
+            offset += gap;
+        }
+    }
+    None
 }
 
 /// Handle mouse events when the normal list/tab view is active.
@@ -2192,6 +2237,92 @@ mod mouse_tests {
         // Inner starts at x=11. First tab at absolute col 11.
         assert_eq!(detect_tab_click(11, bar), Some(0));
         assert_eq!(detect_tab_click(10, bar), None); // border
+    }
+
+    // ── detect_log_tab_click ──────────────────────────────────────────────
+    //
+    // Log tab bar layout (no border, 1 row):
+    //   "╶ " (2 chars) + "Input" (5) + "    " (4) + "Timeline (N)" (dynamic) + "    " (4) + "Output" (6)
+    //
+    // With event_count=3: "Timeline (3)" = 12 chars
+    // Offsets: Input starts at 2, ends at 6 (exclusive 7)
+    //          gap 7..11, Timeline starts at 11, ends at 22 (exclusive 23)
+    //          gap 23..27, Output starts at 27, ends at 32 (exclusive 33)
+
+    fn make_log_tab_rect(x: u16, y: u16, w: u16) -> Rect {
+        Rect::new(x, y, w, 1)
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_input_first_char() {
+        let r = make_log_tab_rect(0, 0, 80);
+        // "Input" starts at offset 2 (after "╶ ")
+        assert_eq!(detect_log_tab_click(2, 0, r, 3), Some(0));
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_input_last_char() {
+        let r = make_log_tab_rect(0, 0, 80);
+        // "Input" is 5 chars: offsets 2..6 inclusive
+        assert_eq!(detect_log_tab_click(6, 0, r, 3), Some(0));
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_timeline() {
+        let r = make_log_tab_rect(0, 0, 80);
+        // event_count=3 → "Timeline (3)" = 12 chars, starts at 2+5+4=11
+        assert_eq!(detect_log_tab_click(11, 0, r, 3), Some(1));
+        assert_eq!(detect_log_tab_click(22, 0, r, 3), Some(1)); // last char
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_output() {
+        let r = make_log_tab_rect(0, 0, 80);
+        // "Output" starts at 2+5+4+12+4=27 (with event_count=3)
+        assert_eq!(detect_log_tab_click(27, 0, r, 3), Some(2));
+        assert_eq!(detect_log_tab_click(32, 0, r, 3), Some(2)); // last char
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_gap_between_tabs() {
+        let r = make_log_tab_rect(0, 0, 80);
+        // Gap between Input (ends at 7) and Timeline (starts at 11): offsets 7..10
+        assert_eq!(detect_log_tab_click(7, 0, r, 3), None);
+        assert_eq!(detect_log_tab_click(10, 0, r, 3), None);
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_wrong_row() {
+        let r = make_log_tab_rect(0, 5, 80);
+        // Click on correct col but wrong row
+        assert_eq!(detect_log_tab_click(2, 4, r, 3), None); // above
+        assert_eq!(detect_log_tab_click(2, 6, r, 3), None); // below
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_col_before_rect() {
+        let r = make_log_tab_rect(5, 0, 80);
+        // col < tab_rect.x
+        assert_eq!(detect_log_tab_click(4, 0, r, 3), None);
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_col_past_rect() {
+        let r = make_log_tab_rect(0, 0, 30);
+        // col >= tab_rect.x + tab_rect.width
+        assert_eq!(detect_log_tab_click(30, 0, r, 3), None);
+    }
+
+    #[test]
+    fn test_detect_log_tab_click_nonzero_origin() {
+        let r = make_log_tab_rect(5, 10, 80);
+        // "Input" starts at tab_rect.x + 2 = 7
+        assert_eq!(detect_log_tab_click(7, 10, r, 3), Some(0));
+        assert_eq!(detect_log_tab_click(11, 10, r, 3), Some(0)); // last char of Input
+                                                                 // "Timeline (3)" starts at 5 + 11 = 16
+        assert_eq!(detect_log_tab_click(16, 10, r, 3), Some(1));
+        // "Output" starts at 5 + 27 = 32
+        assert_eq!(detect_log_tab_click(32, 10, r, 3), Some(2));
     }
 
     // ── Slot geometry lookup (Ops click mapping) ─────────────────────────

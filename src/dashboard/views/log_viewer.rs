@@ -49,7 +49,7 @@ pub enum Tab {
 }
 
 impl Tab {
-    fn from_index(i: usize) -> Self {
+    pub fn from_index(i: usize) -> Self {
         match i {
             0 => Tab::Input,
             1 => Tab::Output,
@@ -94,6 +94,8 @@ pub struct ExecutionDetailState {
     pub timeline_events: Vec<ExecutionEventRow>,
     /// True when the initial load hit the event limit (indicates truncation).
     pub timeline_truncated: bool,
+    /// Cached tab bar rect from the last render pass (used for mouse click detection).
+    pub tab_bar_rect: Option<Rect>,
     active_tab: Tab,
     tab_states: [TabState; 3],
 }
@@ -142,6 +144,7 @@ impl ExecutionDetailState {
             input_linked,
             timeline_events,
             timeline_truncated,
+            tab_bar_rect: None,
             active_tab: default_tab,
             tab_states,
         };
@@ -374,6 +377,7 @@ pub fn render_execution_detail(f: &mut Frame, state: &mut ExecutionDetailState, 
     // Tab bar.
     if y < bottom {
         let tab_area = Rect::new(inner.x, y, inner.width, 1);
+        state.tab_bar_rect = Some(tab_area);
         render_tab_bar(f, state.active_tab, &state.timeline_events, tab_area);
         y += 1;
     }
