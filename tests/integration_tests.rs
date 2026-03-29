@@ -100,10 +100,11 @@ fn test_config() -> OrchestratorConfig {
         state_dir: PathBuf::from("/tmp/compas-test"),
         poll_interval_secs: 1,
         models: None,
+        agent_defaults: None,
         agents: vec![
             AgentConfig {
                 alias: "focused".to_string(),
-                backend: "stub".to_string(),
+                backend: Some("stub".to_string()),
                 role: AgentRole::Worker,
                 model: Some("test-model".to_string()),
                 prompt: Some("You are a test agent.".to_string()),
@@ -113,14 +114,14 @@ fn test_config() -> OrchestratorConfig {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             },
             AgentConfig {
                 alias: "spark".to_string(),
-                backend: "stub".to_string(),
+                backend: Some("stub".to_string()),
                 role: AgentRole::Worker,
                 model: Some("test-model".to_string()),
                 prompt: None,
@@ -130,8 +131,8 @@ fn test_config() -> OrchestratorConfig {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             },
@@ -920,7 +921,7 @@ mod registry_tests {
 
         let agent_cfg = AgentConfig {
             alias: "test".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: None,
             prompt: None,
@@ -930,8 +931,8 @@ mod registry_tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
@@ -947,7 +948,7 @@ mod registry_tests {
 
         let agent_cfg = AgentConfig {
             alias: "test".to_string(),
-            backend: "nonexistent".to_string(),
+            backend: Some("nonexistent".to_string()),
             role: AgentRole::Worker,
             model: None,
             prompt: None,
@@ -957,8 +958,8 @@ mod registry_tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
@@ -3242,6 +3243,49 @@ mod session_health_tests {
         assert_eq!(json["global_available"].as_i64().unwrap(), global_max);
     }
 
+    // ── agent_defaults integration test (CFG-DEFAULTS) ──
+
+    #[tokio::test]
+    async fn test_list_agents_with_agent_defaults() {
+        let store = test_store().await;
+        // Load via YAML so the full pipeline (apply_agent_defaults → resolve_paths → validate)
+        // runs end-to-end. reviewer has no backend or model — both inherited from defaults.
+        let config = compas::config::load_config_from_str(
+            r#"
+default_workdir: /tmp
+state_dir: /tmp/compas-test
+agent_defaults:
+  backend: stub
+  model: default-model
+agents:
+  - alias: dev
+    model: override-model
+  - alias: reviewer
+"#,
+        )
+        .unwrap();
+
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server.list_agents_impl().await.unwrap();
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+        assert_eq!(agents.len(), 2);
+
+        // dev overrides model; backend inherited from defaults.
+        let dev = agents.iter().find(|a| a["alias"] == "dev").unwrap();
+        assert_eq!(dev["backend"].as_str().unwrap(), "stub");
+        assert_eq!(dev["model"].as_str().unwrap(), "override-model");
+
+        // reviewer inherits both backend and model from defaults.
+        let reviewer = agents.iter().find(|a| a["alias"] == "reviewer").unwrap();
+        assert_eq!(reviewer["backend"].as_str().unwrap(), "stub");
+        assert_eq!(reviewer["model"].as_str().unwrap(), "default-model");
+    }
+
     #[tokio::test]
     async fn test_list_agents_with_active_and_queued() {
         let server = test_server().await;
@@ -3930,7 +3974,7 @@ mod worktree_tests {
         // Configure agent with worktree mode
         let agent_configs = vec![AgentConfig {
             alias: "focused".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("You are a test agent.".to_string()),
@@ -3940,8 +3984,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("worktree".to_string()),
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         }];
@@ -4014,7 +4058,7 @@ mod worktree_tests {
 
         let agent_configs = vec![AgentConfig {
             alias: "focused".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("You are a test agent.".to_string()),
@@ -4024,8 +4068,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: None, // shared (default)
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         }];
@@ -4123,7 +4167,7 @@ mod worktree_tests {
         // Agent A: worktree mode
         let dev_config = AgentConfig {
             alias: "dev".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Dev agent.".to_string()),
@@ -4133,15 +4177,15 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("worktree".to_string()),
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
         // Agent B: no workspace (should inherit worktree)
         let reviewer_config = AgentConfig {
             alias: "reviewer".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Reviewer agent.".to_string()),
@@ -4151,8 +4195,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
@@ -4299,7 +4343,7 @@ mod worktree_tests {
 
         let dev_config = AgentConfig {
             alias: "dev".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Dev agent.".to_string()),
@@ -4309,15 +4353,15 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("worktree".to_string()),
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
         // Reviewer targets a different repo
         let reviewer_config = AgentConfig {
             alias: "reviewer".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Reviewer agent.".to_string()),
@@ -4327,8 +4371,8 @@ mod worktree_tests {
             env: None,
             workdir: Some(other_repo_path.to_path_buf()),
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
@@ -4478,7 +4522,7 @@ mod worktree_tests {
 
         let dev_config = AgentConfig {
             alias: "dev".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Dev agent.".to_string()),
@@ -4488,15 +4532,15 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("worktree".to_string()),
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
         // Reviewer with explicit `workspace: shared` — same repo but opts out
         let reviewer_config = AgentConfig {
             alias: "reviewer".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("Reviewer agent.".to_string()),
@@ -4506,8 +4550,8 @@ mod worktree_tests {
             env: None,
             workdir: None,
             workspace: Some("shared".to_string()),
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         };
@@ -4930,10 +4974,11 @@ mod handoff_chain_tests {
             state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![
                 AgentConfig {
                     alias: "agent-a".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -4943,8 +4988,8 @@ mod handoff_chain_tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: Some(HandoffConfig {
                         on_response: Some(HandoffTarget::Single("agent-b".to_string())),
                         handoff_prompt: None,
@@ -4954,7 +4999,7 @@ mod handoff_chain_tests {
                 },
                 AgentConfig {
                     alias: "agent-b".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -4964,8 +5009,8 @@ mod handoff_chain_tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None, // agent-b does NOT chain further
                     safety_mode: None,
                 },
@@ -5736,10 +5781,11 @@ agents:
             state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![
                 AgentConfig {
                     alias: "agent-a".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -5749,8 +5795,8 @@ agents:
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: Some(HandoffConfig {
                         on_response: Some(HandoffTarget::FanOut(vec![
                             "reviewer".to_string(),
@@ -5763,7 +5809,7 @@ agents:
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -5773,14 +5819,14 @@ agents:
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -5790,8 +5836,8 @@ agents:
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: None,
                 },
@@ -6730,10 +6776,11 @@ mod fanout_tests {
             state_dir: PathBuf::from("/tmp/compas-test"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![
                 AgentConfig {
                     alias: "agent-a".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -6743,8 +6790,8 @@ mod fanout_tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: Some(HandoffConfig {
                         on_response: Some(HandoffTarget::FanOut(vec![
                             "reviewer".to_string(),
@@ -6757,7 +6804,7 @@ mod fanout_tests {
                 },
                 AgentConfig {
                     alias: "reviewer".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -6767,14 +6814,14 @@ mod fanout_tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: None,
                 },
                 AgentConfig {
                     alias: "reviewer-2".to_string(),
-                    backend: "stub".to_string(),
+                    backend: Some("stub".to_string()),
                     role: AgentRole::Worker,
                     model: None,
                     prompt: None,
@@ -6784,8 +6831,8 @@ mod fanout_tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: None,
                 },
@@ -7214,9 +7261,10 @@ mod read_log_tests {
             state_dir,
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "focused".to_string(),
-                backend: "stub".to_string(),
+                backend: Some("stub".to_string()),
                 role: AgentRole::Worker,
                 model: None,
                 prompt: None,
@@ -7226,8 +7274,8 @@ mod read_log_tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             }],
@@ -7650,9 +7698,10 @@ mod session_resume_tests {
             state_dir: PathBuf::from("/tmp/compas-test-stream"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "focused".to_string(),
-                backend: "claude".to_string(),
+                backend: Some("claude".to_string()),
                 role: AgentRole::Worker,
                 model: Some("test-model".to_string()),
                 prompt: Some("You are a test agent.".to_string()),
@@ -7662,8 +7711,8 @@ mod session_resume_tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: Some(SafetyMode::AutoApprove),
             }],
@@ -7748,7 +7797,7 @@ mod session_resume_tests {
 
         let agent_configs = vec![AgentConfig {
             alias: "focused".to_string(),
-            backend: "claude".to_string(),
+            backend: Some("claude".to_string()),
             role: AgentRole::Worker,
             model: Some("test-model".to_string()),
             prompt: Some("You are a test agent.".to_string()),
@@ -7758,8 +7807,8 @@ mod session_resume_tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: Some(SafetyMode::AutoApprove),
         }];
@@ -8068,9 +8117,10 @@ mod merge_worker_tests {
             state_dir: PathBuf::from("/tmp/compas-merge-test"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "focused".to_string(),
-                backend: "stub".to_string(),
+                backend: Some("stub".to_string()),
                 role: AgentRole::Worker,
                 model: None,
                 prompt: None,
@@ -8080,8 +8130,8 @@ mod merge_worker_tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             }],

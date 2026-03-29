@@ -320,7 +320,7 @@ mod tests {
         let config = crate::config::load_config_from_str(&yaml).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.agents[0].alias, "dev");
-        assert_eq!(config.agents[0].backend, "claude");
+        assert_eq!(config.agents[0].backend(), "claude");
     }
 
     #[test]
@@ -329,7 +329,7 @@ mod tests {
         let config = crate::config::load_config_from_str(&yaml).unwrap();
         assert_eq!(config.agents.len(), 1);
         assert_eq!(config.agents[0].alias, "dev");
-        assert_eq!(config.agents[0].backend, "claude");
+        assert_eq!(config.agents[0].backend(), "claude");
     }
 
     #[test]
@@ -344,7 +344,7 @@ mod tests {
     fn test_generate_config_minimal_with_model() {
         let yaml = generate_config("/tmp", "codex", "dev", Some("gpt-5"), true);
         let config = crate::config::load_config_from_str(&yaml).unwrap();
-        assert_eq!(config.agents[0].backend, "codex");
+        assert_eq!(config.agents[0].backend(), "codex");
         assert_eq!(config.agents[0].model.as_deref(), Some("gpt-5"));
     }
 
@@ -394,7 +394,7 @@ mod tests {
         // File should now contain valid YAML config
         let content = std::fs::read_to_string(&config_path).unwrap();
         let config = crate::config::load_config_from_str(&content).unwrap();
-        assert_eq!(config.agents[0].backend, "claude");
+        assert_eq!(config.agents[0].backend(), "claude");
     }
 
     #[test]
@@ -417,7 +417,7 @@ mod tests {
         let content = std::fs::read_to_string(&config_path).unwrap();
         let config = crate::config::load_config_from_str(&content).unwrap();
         assert_eq!(config.agents[0].alias, "my-agent");
-        assert_eq!(config.agents[0].backend, "gemini");
+        assert_eq!(config.agents[0].backend(), "gemini");
         assert_eq!(config.agents[0].model.as_deref(), Some("gemini-2.5-pro"));
     }
 
@@ -443,7 +443,7 @@ mod tests {
         let content = std::fs::read_to_string(&config_path).unwrap();
         let config = crate::config::load_config_from_str(&content).unwrap();
         assert_eq!(config.agents[0].alias, "dev");
-        assert_eq!(config.agents[0].backend, "claude");
+        assert_eq!(config.agents[0].backend(), "claude");
         assert!(config.agents[0].model.is_none());
     }
 

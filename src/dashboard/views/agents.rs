@@ -102,7 +102,7 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         .and_then(|d| {
             d.circuit_states
                 .iter()
-                .find(|(b, _, _)| *b == agent.backend)
+                .find(|(b, _, _)| *b == agent.backend())
                 .map(|(_, state, _)| match state.as_str() {
                     "open" => FAILURE,
                     "half_open" => ACCENT,
@@ -192,7 +192,7 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
     let circuit_info = app.agents_data.as_ref().and_then(|d| {
         d.circuit_states
             .iter()
-            .find(|(b, _, _)| *b == agent.backend)
+            .find(|(b, _, _)| *b == agent.backend())
             .map(|(_, state, _failures)| state.clone())
     });
 
@@ -202,7 +202,7 @@ fn build_agent_item(app: &App, agent: &AgentConfig) -> ListItem<'static> {
         Span::from("  "),
         "● ".fg(health_color),
         format!("{:<12}", agent.alias).fg(TEXT_BRIGHT).bold(),
-        Span::from(agent.backend.to_string()),
+        Span::from(agent.backend().to_string()),
         " / ".fg(BORDER_DIM),
         Span::from(model_label.to_string()),
         " / ".fg(BORDER_DIM),

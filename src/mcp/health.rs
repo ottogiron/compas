@@ -139,14 +139,14 @@ impl OrchestratorMcpServer {
 
         for (i, agent_cfg) in agents_to_check.iter().enumerate() {
             let (circuit_state, circuit_failures) = cb_states
-                .get(&agent_cfg.backend)
+                .get(agent_cfg.backend())
                 .cloned()
                 .unwrap_or_else(|| ("closed".to_string(), 0));
 
             if let Some(cached) = self.ping_cache.get(&agent_cfg.alias, cache_ttl) {
                 agent_health.push(AgentHealth {
                     alias: agent_cfg.alias.clone(),
-                    backend: agent_cfg.backend.clone(),
+                    backend: agent_cfg.backend().to_string(),
                     ping_alive: cached.alive,
                     ping_latency_ms: cached.latency_ms,
                     ping_detail: cached.detail,
@@ -158,7 +158,7 @@ impl OrchestratorMcpServer {
                 // Placeholder; will be filled after parallel pings.
                 agent_health.push(AgentHealth {
                     alias: agent_cfg.alias.clone(),
-                    backend: agent_cfg.backend.clone(),
+                    backend: agent_cfg.backend().to_string(),
                     ping_alive: false,
                     ping_latency_ms: 0,
                     ping_detail: None,
@@ -178,7 +178,7 @@ impl OrchestratorMcpServer {
                 let agent_cfg = agents_to_check[idx];
                 let agent = Agent {
                     alias: agent_cfg.alias.clone(),
-                    backend: agent_cfg.backend.clone(),
+                    backend: agent_cfg.backend().to_string(),
                     model: agent_cfg.model.clone(),
                     prompt: agent_cfg.prompt.clone(),
                     prompt_file: agent_cfg.prompt_file.clone(),

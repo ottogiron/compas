@@ -47,11 +47,14 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
                 "agent alias must not be empty".into(),
             ));
         }
-        if agent.backend.is_empty() {
-            return Err(OrchestratorError::Config(format!(
-                "agent '{}' backend must not be empty",
-                agent.alias
-            )));
+        match agent.backend.as_deref() {
+            None | Some("") => {
+                return Err(OrchestratorError::Config(format!(
+                    "agent '{}' has no backend — set it on the agent or in agent_defaults",
+                    agent.alias
+                )));
+            }
+            _ => {}
         }
         if !aliases.insert(&agent.alias) {
             return Err(OrchestratorError::Config(format!(
@@ -110,30 +113,34 @@ pub fn validate_config(config: &OrchestratorConfig) -> Result<()> {
         .unwrap_or_default();
 
     for agent in &config.agents {
-        let is_builtin = BUILTIN_BACKEND_NAMES.contains(&agent.backend.as_str())
-            && !custom_backend_names.contains(agent.backend.as_str());
+        let is_builtin = BUILTIN_BACKEND_NAMES.contains(&agent.backend())
+            && !custom_backend_names.contains(agent.backend());
         if is_builtin && agent.safety_mode.is_none() {
-            let detail = match builtin_backend_safety_flag(&agent.backend) {
+            let detail = match builtin_backend_safety_flag(agent.backend()) {
                 Some(flag) => format!(
                     "Built-in backends run agents with full permission bypass (e.g. {} for {}).",
-                    flag, agent.backend
+                    flag,
+                    agent.backend()
                 ),
                 None => format!(
                     "Built-in backends run as your user account ({} uses no permission bypass flag but is still an unconfined agent).",
-                    agent.backend
+                    agent.backend()
                 ),
             };
             return Err(OrchestratorError::Config(format!(
                 "agent '{}' (backend: {}) requires explicit safety_mode field.\n\
                  {}\n\
                  Set safety_mode: auto_approve to acknowledge this behavior.",
-                agent.alias, agent.backend, detail
+                agent.alias,
+                agent.backend(),
+                detail
             )));
         }
         if is_builtin && agent.safety_mode != Some(SafetyMode::AutoApprove) {
             return Err(OrchestratorError::Config(format!(
                 "agent '{}' (backend: {}): only safety_mode: auto_approve is currently supported",
-                agent.alias, agent.backend
+                agent.alias,
+                agent.backend()
             )));
         }
     }
@@ -499,10 +506,10 @@ pub(crate) fn collect_config_warnings(config: &OrchestratorConfig) -> Vec<String
             for arg in backend_args {
                 for &(flag, flag_backend) in KNOWN_BYPASS_FLAGS {
                     if arg == flag {
-                        if agent.backend == flag_backend {
+                        if agent.backend() == flag_backend {
                             warnings.push(format!(
                                 "agent '{}' backend_args includes '{}' which is already applied by the {} backend (duplicate flag)",
-                                agent.alias, flag, agent.backend
+                                agent.alias, flag, agent.backend()
                             ));
                         } else {
                             warnings.push(format!(
@@ -567,10 +574,11 @@ mod tests {
             state_dir: PathBuf::from("/tmp/test-mail"),
             poll_interval_secs: 5,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "focused".into(),
                 role: AgentRole::Worker,
-                backend: "stub".into(),
+                backend: Some("stub".into()),
 
                 model: None,
                 prompt: None,
@@ -581,8 +589,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             }],
@@ -616,7 +624,7 @@ mod tests {
     #[test]
     fn test_safety_mode_required_for_builtin_backend() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         // safety_mode is None — should fail
         let err = validate_config(&config).unwrap_err();
         let msg = err.to_string();
@@ -627,7 +635,7 @@ mod tests {
     #[test]
     fn test_safety_mode_accepted_for_builtin_backend() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         assert!(validate_config(&config).is_ok());
     }
@@ -643,7 +651,7 @@ mod tests {
     fn test_safety_mode_required_for_each_builtin() {
         for backend in &["claude", "codex", "gemini", "opencode"] {
             let mut config = minimal_config();
-            config.agents[0].backend = backend.to_string();
+            config.agents[0].backend = Some(backend.to_string());
             let err = validate_config(&config).unwrap_err();
             assert!(
                 err.to_string()
@@ -666,7 +674,7 @@ mod tests {
             ping: None,
             env_remove: None,
         }]);
-        config.agents[0].backend = "aider".into();
+        config.agents[0].backend = Some("aider".into());
         assert!(validate_config(&config).is_ok());
     }
 
@@ -707,9 +715,17 @@ mod tests {
     #[test]
     fn test_config_validation_empty_backend() {
         let mut config = minimal_config();
-        config.agents[0].backend = String::new();
+        config.agents[0].backend = Some(String::new());
         let err = validate_config(&config).unwrap_err();
-        assert!(err.to_string().contains("backend must not be empty"));
+        assert!(err.to_string().contains("has no backend"));
+    }
+
+    #[test]
+    fn test_config_validation_no_backend() {
+        let mut config = minimal_config();
+        config.agents[0].backend = None;
+        let err = validate_config(&config).unwrap_err();
+        assert!(err.to_string().contains("has no backend"));
     }
 
     #[test]
@@ -717,7 +733,7 @@ mod tests {
         let mut config = minimal_config();
         config.agents.push(AgentConfig {
             alias: "focused".into(),
-            backend: "stub".into(),
+            backend: Some("stub".into()),
             role: AgentRole::Worker,
             model: None,
             prompt: None,
@@ -728,8 +744,8 @@ mod tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         });
@@ -954,7 +970,7 @@ agents:
         // Add a second worker
         config.agents.push(AgentConfig {
             alias: "spark".into(),
-            backend: "stub".into(),
+            backend: Some("stub".into()),
             role: AgentRole::Worker,
             model: None,
             prompt: None,
@@ -965,8 +981,8 @@ agents:
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         });
@@ -975,7 +991,7 @@ agents:
         // Operator agents don't count
         config.agents.push(AgentConfig {
             alias: "operator".into(),
-            backend: "stub".into(),
+            backend: Some("stub".into()),
             role: AgentRole::Operator,
             model: None,
             prompt: None,
@@ -986,8 +1002,8 @@ agents:
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         });
@@ -2162,7 +2178,7 @@ schedules:
     #[test]
     fn test_warning_duplicate_bypass_flag_claude() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
         let warnings = collect_config_warnings(&config);
@@ -2179,7 +2195,7 @@ schedules:
     #[test]
     fn test_warning_duplicate_bypass_flag_codex() {
         let mut config = minimal_config();
-        config.agents[0].backend = "codex".into();
+        config.agents[0].backend = Some("codex".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--full-auto".into()]);
         let warnings = collect_config_warnings(&config);
@@ -2190,7 +2206,7 @@ schedules:
     #[test]
     fn test_warning_duplicate_bypass_flag_gemini() {
         let mut config = minimal_config();
-        config.agents[0].backend = "gemini".into();
+        config.agents[0].backend = Some("gemini".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--yolo".into()]);
         let warnings = collect_config_warnings(&config);
@@ -2201,7 +2217,7 @@ schedules:
     #[test]
     fn test_warning_dangerous_flag_cross_backend() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--yolo".into()]);
         let warnings = collect_config_warnings(&config);
@@ -2216,7 +2232,7 @@ schedules:
     #[test]
     fn test_warning_multiple_bypass_flags() {
         let mut config = minimal_config();
-        config.agents[0].backend = "codex".into();
+        config.agents[0].backend = Some("codex".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec![
             "--full-auto".into(),
@@ -2240,7 +2256,7 @@ schedules:
     #[test]
     fn test_no_warning_for_safe_backend_args() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--model".into(), "opus".into()]);
         let warnings = collect_config_warnings(&config);
@@ -2321,7 +2337,7 @@ schedules:
     #[test]
     fn test_combined_bypass_and_env_warnings() {
         let mut config = minimal_config();
-        config.agents[0].backend = "claude".into();
+        config.agents[0].backend = Some("claude".into());
         config.agents[0].safety_mode = Some(SafetyMode::AutoApprove);
         config.agents[0].backend_args = Some(vec!["--dangerously-skip-permissions".into()]);
         let mut env = std::collections::HashMap::new();

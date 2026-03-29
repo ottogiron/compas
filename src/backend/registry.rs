@@ -22,8 +22,8 @@ impl BackendRegistry {
 
     /// Look up the backend for an agent configuration.
     pub fn get(&self, agent: &AgentConfig) -> Result<Arc<dyn Backend>> {
-        self.backends.get(&agent.backend).cloned().ok_or_else(|| {
-            OrchestratorError::Backend(format!("no backend registered for '{}'", agent.backend))
+        self.backends.get(agent.backend()).cloned().ok_or_else(|| {
+            OrchestratorError::Backend(format!("no backend registered for '{}'", agent.backend()))
         })
     }
 

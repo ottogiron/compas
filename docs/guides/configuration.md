@@ -64,9 +64,14 @@ database:                                # SQLite connection pool (requires rest
 notifications:
   desktop: false                         # macOS desktop notifications (default: false, requires worker restart)
 
+agent_defaults:                          # Shared defaults inherited by all agents (optional)
+  backend: claude
+  safety_mode: auto_approve
+  workspace: worktree
+
 agents:
   - alias: dev                           # Unique name for dispatching (required)
-    backend: claude                      # claude | codex | gemini | opencode | <custom> (required)
+    backend: claude                      # claude | codex | gemini | opencode | <custom> (required unless in agent_defaults)
     safety_mode: auto_approve            # Required for built-in backends (see Security Model)
     model: claude-sonnet-4-6             # Model to use
     prompt: "..."                        # System prompt for the agent
@@ -100,7 +105,7 @@ Custom backends are defined via `backend_definitions`. See the [Custom Backends 
 | Field | Required | Default | Description |
 | --- | --- | --- | --- |
 | `alias` | yes | -- | Unique name used for dispatching |
-| `backend` | yes | -- | Backend: `claude`, `codex`, `gemini`, `opencode`, or a custom name from `backend_definitions` |
+| `backend` | yes* | -- | Backend: `claude`, `codex`, `gemini`, `opencode`, or a custom name from `backend_definitions`. *Can be inherited from `agent_defaults` |
 | `model` | no | -- | Model identifier passed to the backend CLI |
 | `prompt` | no | -- | Inline system prompt |
 | `prompt_file` | no | -- | Path to prompt file (takes precedence over `prompt` if both set) |
@@ -116,6 +121,53 @@ Custom backends are defined via `backend_definitions`. See the [Custom Backends 
 | `handoff` | no | -- | Auto-handoff routing (see [Auto-Handoff Chains](#auto-handoff-chains)) |
 
 **Security note:** `env` values are passed directly to the backend subprocess via `Command::env()`. Setting system-critical variables like `PATH`, `LD_PRELOAD`, or `DYLD_INSERT_LIBRARIES` can alter process behavior in unexpected ways. Compas emits a warning during config validation for known sensitive variables but does not block the configuration.
+
+### Agent Defaults
+
+Use `agent_defaults` to set shared field values inherited by all agents. Per-agent values always win.
+
+**Before:**
+
+```yaml
+agents:
+  - alias: dev
+    backend: claude
+    safety_mode: auto_approve
+    workspace: worktree
+  - alias: reviewer
+    backend: claude
+    safety_mode: auto_approve
+    workspace: worktree
+  - alias: planner
+    backend: claude
+    safety_mode: auto_approve
+    workspace: worktree
+```
+
+**After:**
+
+```yaml
+agent_defaults:
+  backend: claude
+  safety_mode: auto_approve
+  workspace: worktree
+
+agents:
+  - alias: dev
+  - alias: reviewer
+  - alias: planner
+```
+
+**Merge rules:**
+
+| Field | Strategy |
+| --- | --- |
+| `env` | Shallow merge — defaults as base, agent keys override per-key |
+| `backend_args` | Replace — agent block wins entirely if present |
+| `handoff` | Replace — agent block wins entirely if present |
+| All other fields | Agent value wins if present, otherwise defaults |
+
+`agent_defaults` hot-reloads with the rest of the config.
 
 ### Per-Agent Working Directory
 
@@ -390,7 +442,7 @@ Define CLI-based backends in YAML via `backend_definitions`. See the [Custom Bac
 
 ## Live Reload
 
-The worker hot-reloads these fields without restart: `agents`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `max_queued_executions`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`, `redact_secrets`, `redaction_patterns`.
+The worker hot-reloads these fields without restart: `agents`, `agent_defaults`, `schedules`, `hooks`, `trigger_intents`, `max_triggers_per_agent`, `max_queued_executions`, `ping_timeout_secs`, `ping_cache_ttl_secs`, `log_retention_count`, `notifications`, `execution_timeout_secs`, `redact_secrets`, `redaction_patterns`.
 
 These fields require a worker restart: `default_workdir`, `state_dir`, `database`, `max_concurrent_triggers`, `default_merge_target`, `worktree_dir`.
 

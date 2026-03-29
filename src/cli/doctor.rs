@@ -445,15 +445,15 @@ async fn check_backend_pings(
     // Pick one agent per backend to ping.
     let mut seen_backends: HashSet<String> = HashSet::new();
     for agent_config in &config.agents {
-        if !installed_backends.contains(&agent_config.backend) {
+        if !installed_backends.contains(agent_config.backend()) {
             continue;
         }
-        if seen_backends.contains(&agent_config.backend) {
+        if seen_backends.contains(agent_config.backend()) {
             continue;
         }
-        seen_backends.insert(agent_config.backend.clone());
+        seen_backends.insert(agent_config.backend().to_string());
 
-        let label = format!("Ping: {}", agent_config.backend);
+        let label = format!("Ping: {}", agent_config.backend());
         let backend = match registry.get(agent_config) {
             Ok(b) => b,
             Err(_) => {
@@ -852,8 +852,8 @@ fn unique_backends(config: &OrchestratorConfig) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for agent in &config.agents {
-        if !generic_names.contains(&agent.backend) && seen.insert(agent.backend.clone()) {
-            result.push(agent.backend.clone());
+        if !generic_names.contains(agent.backend()) && seen.insert(agent.backend().to_string()) {
+            result.push(agent.backend().to_string());
         }
     }
     result
@@ -908,7 +908,7 @@ fn build_doctor_registry(config: &OrchestratorConfig) -> BackendRegistry {
 fn agent_from_config(ac: &crate::config::types::AgentConfig) -> Agent {
     Agent {
         alias: ac.alias.clone(),
-        backend: ac.backend.clone(),
+        backend: ac.backend().to_string(),
         model: ac.model.clone(),
         prompt: ac.prompt.clone(),
         prompt_file: ac.prompt_file.clone(),
@@ -1255,6 +1255,7 @@ mod tests {
             state_dir: dir.path().join("state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1406,10 +1407,11 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![
                 AgentConfig {
                     alias: "a".to_string(),
-                    backend: "claude".to_string(),
+                    backend: Some("claude".to_string()),
                     role: Default::default(),
                     model: None,
                     prompt: None,
@@ -1419,14 +1421,14 @@ mod tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: Some(SafetyMode::AutoApprove),
                 },
                 AgentConfig {
                     alias: "b".to_string(),
-                    backend: "claude".to_string(),
+                    backend: Some("claude".to_string()),
                     role: Default::default(),
                     model: None,
                     prompt: None,
@@ -1436,14 +1438,14 @@ mod tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: Some(SafetyMode::AutoApprove),
                 },
                 AgentConfig {
                     alias: "c".to_string(),
-                    backend: "codex".to_string(),
+                    backend: Some("codex".to_string()),
                     role: Default::default(),
                     model: None,
                     prompt: None,
@@ -1453,8 +1455,8 @@ mod tests {
                     env: None,
                     workdir: None,
                     workspace: None,
-                    max_retries: 0,
-                    retry_backoff_secs: 30,
+                    max_retries: None,
+                    retry_backoff_secs: None,
                     handoff: None,
                     safety_mode: Some(SafetyMode::AutoApprove),
                 },
@@ -1481,6 +1483,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1504,6 +1507,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1544,6 +1548,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1579,6 +1584,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1605,6 +1611,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1645,6 +1652,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1679,6 +1687,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1702,9 +1711,10 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "dev".to_string(),
-                backend: "claude".to_string(),
+                backend: Some("claude".to_string()),
                 role: Default::default(),
                 model: None,
                 prompt: None,
@@ -1714,8 +1724,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: Some(SafetyMode::AutoApprove),
             }],
@@ -1752,6 +1762,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -1785,9 +1796,10 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "dev".to_string(),
-                backend: "claude".to_string(),
+                backend: Some("claude".to_string()),
                 role: Default::default(),
                 model: None,
                 prompt: None,
@@ -1797,8 +1809,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: Some(SafetyMode::AutoApprove),
             }],
@@ -1834,9 +1846,10 @@ mod tests {
             state_dir: PathBuf::from("/tmp/state"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![AgentConfig {
                 alias: "dev".to_string(),
-                backend: "claude".to_string(),
+                backend: Some("claude".to_string()),
                 role: Default::default(),
                 model: None,
                 prompt: None,
@@ -1846,8 +1859,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: Some(SafetyMode::AutoApprove),
             }],

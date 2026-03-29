@@ -124,7 +124,7 @@ impl OrchestratorMcpServer {
                 let (handoff_to, await_chain_recommended, max_chain_depth) = handoff_metadata(a);
                 AgentInfo {
                     alias: a.alias.clone(),
-                    backend: a.backend.clone(),
+                    backend: a.backend().to_string(),
                     role: format!("{:?}", a.role).to_lowercase(),
                     model: a.model.clone(),
                     timeout_secs: a.timeout_secs,

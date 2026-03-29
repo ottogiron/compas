@@ -19,6 +19,9 @@ pub struct OrchestratorConfig {
     /// agent's `model` field directly.
     #[serde(default)]
     pub models: Option<Vec<ModelEntry>>,
+    /// Shared defaults applied to all agents before per-agent overrides.
+    #[serde(default)]
+    pub agent_defaults: Option<AgentDefaults>,
     pub agents: Vec<AgentConfig>,
     /// Optional override for worktree parent directory.
     /// Default: `{repo_root}/.compas-worktrees/`
@@ -401,12 +404,35 @@ impl<'de> serde::Deserialize<'de> for ModelEntry {
     }
 }
 
+/// Shared defaults applied to all agents before per-agent overrides.
+///
+/// Mirrors `AgentConfig` with all fields optional. Agents inherit defaults
+/// field-by-field; per-agent values win. See `apply_agent_defaults()`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentDefaults {
+    pub backend: Option<String>,
+    pub safety_mode: Option<SafetyMode>,
+    pub model: Option<String>,
+    pub prompt: Option<String>,
+    pub prompt_file: Option<PathBuf>,
+    pub timeout_secs: Option<u64>,
+    pub backend_args: Option<Vec<String>>,
+    pub env: Option<HashMap<String, String>>,
+    pub workdir: Option<PathBuf>,
+    pub workspace: Option<String>,
+    pub max_retries: Option<u32>,
+    pub retry_backoff_secs: Option<u64>,
+    pub handoff: Option<HandoffConfig>,
+}
+
 /// Configuration for a single agent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     pub alias: String,
-    pub backend: String,
+    #[serde(default)]
+    pub backend: Option<String>,
     #[serde(default)]
     pub role: AgentRole,
     /// Explicit acknowledgment of built-in backend permission bypass behavior.
@@ -434,17 +460,22 @@ pub struct AgentConfig {
     pub workspace: Option<String>,
     /// Maximum number of retry attempts for transient failures (default 0 = no retry).
     #[serde(default)]
-    pub max_retries: u32,
+    pub max_retries: Option<u32>,
     /// Backoff base in seconds between retries (exponential: base * 2^attempt). Default 30.
-    #[serde(default = "default_retry_backoff_secs")]
-    pub retry_backoff_secs: u64,
+    #[serde(default)]
+    pub retry_backoff_secs: Option<u64>,
     /// Handoff routing: auto-chain to another agent based on reply intent.
     #[serde(default)]
     pub handoff: Option<HandoffConfig>,
 }
 
-fn default_retry_backoff_secs() -> u64 {
-    30
+impl AgentConfig {
+    /// Access the backend name. Panics if backend is None (must be set after validation).
+    pub fn backend(&self) -> &str {
+        self.backend
+            .as_deref()
+            .expect("backend must be set after validation")
+    }
 }
 
 /// Target for auto-handoff routing.

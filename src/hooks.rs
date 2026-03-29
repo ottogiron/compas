@@ -502,6 +502,7 @@ mod tests {
             state_dir: PathBuf::from("/tmp/test"),
             poll_interval_secs: 1,
             models: None,
+            agent_defaults: None,
             agents: vec![],
             worktree_dir: None,
             orchestration: Default::default(),
@@ -514,7 +515,7 @@ mod tests {
         // Suppress validation error for empty agents
         config.agents.push(crate::config::types::AgentConfig {
             alias: "stub".to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: Default::default(),
             model: None,
             prompt: None,
@@ -524,8 +525,8 @@ mod tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries: 0,
-            retry_backoff_secs: 30,
+            max_retries: None,
+            retry_backoff_secs: None,
             handoff: None,
             safety_mode: None,
         });

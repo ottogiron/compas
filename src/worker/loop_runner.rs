@@ -202,20 +202,20 @@ impl WorkerRunner {
 
         // SEC-1: Log effective safety flags for each agent using a built-in backend.
         for agent in &startup_config.agents {
-            if BUILTIN_BACKEND_NAMES.contains(&agent.backend.as_str()) {
-                if let Some(flag) = builtin_backend_safety_flag(&agent.backend) {
+            if BUILTIN_BACKEND_NAMES.contains(&agent.backend()) {
+                if let Some(flag) = builtin_backend_safety_flag(agent.backend()) {
                     tracing::warn!(
                         agent = %agent.alias,
-                        backend = %agent.backend,
+                        backend = %agent.backend(),
                         "agent '{}' ({}): running with {} (safety_mode: auto_approve)",
-                        agent.alias, agent.backend, flag
+                        agent.alias, agent.backend(), flag
                     );
                 } else {
                     tracing::warn!(
                         agent = %agent.alias,
-                        backend = %agent.backend,
+                        backend = %agent.backend(),
                         "agent '{}' ({}): built-in backend, no permission-bypass flag (safety_mode: auto_approve)",
-                        agent.alias, agent.backend
+                        agent.alias, agent.backend()
                     );
                 }
             }
@@ -451,7 +451,7 @@ impl WorkerRunner {
                     let backend_name = agent_configs
                         .iter()
                         .find(|a| a.alias == execution.agent_alias)
-                        .map(|a| a.backend.clone())
+                        .map(|a| a.backend().to_string())
                         .unwrap_or_default();
 
                     // ── Circuit breaker check ──
@@ -1473,7 +1473,9 @@ async fn handle_trigger_output(
 
             // Enqueue retry execution with exponential backoff.
             let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
-            let backoff_secs = agent_config.map(|a| a.retry_backoff_secs).unwrap_or(30);
+            let backoff_secs = agent_config
+                .and_then(|a| a.retry_backoff_secs)
+                .unwrap_or(30);
             let next_attempt = output.attempt_number + 1;
             // Exponential backoff: base * 2^attempt (capped at 1 hour).
             // Cap exponent at 31 to prevent saturating_pow from overflowing u64.
@@ -1593,7 +1595,7 @@ fn should_retry_execution(output: &TriggerOutput, agent_configs: &[AgentConfig])
 
     // Check agent config for retry limit
     let agent_config = agent_configs.iter().find(|a| a.alias == output.agent_alias);
-    let max_retries = agent_config.map(|a| a.max_retries).unwrap_or(0);
+    let max_retries = agent_config.and_then(|a| a.max_retries).unwrap_or(0);
 
     if max_retries == 0 {
         return false;
@@ -2162,7 +2164,7 @@ mod tests {
     fn test_agent_config(alias: &str, max_retries: u32) -> AgentConfig {
         AgentConfig {
             alias: alias.to_string(),
-            backend: "stub".to_string(),
+            backend: Some("stub".to_string()),
             role: AgentRole::Worker,
             model: None,
             prompt: None,
@@ -2172,8 +2174,8 @@ mod tests {
             env: None,
             workdir: None,
             workspace: None,
-            max_retries,
-            retry_backoff_secs: 10,
+            max_retries: Some(max_retries),
+            retry_backoff_secs: Some(10),
             handoff: None,
             safety_mode: None,
         }
@@ -2620,9 +2622,10 @@ mod tests {
             state_dir: std::path::PathBuf::from("/tmp/compas-test-sched"),
             poll_interval_secs: 5,
             models: None,
+            agent_defaults: None,
             agents: vec![crate::config::types::AgentConfig {
                 alias: "coder".into(),
-                backend: "stub".into(),
+                backend: Some("stub".into()),
                 role: AgentRole::Worker,
                 model: None,
                 prompt: None,
@@ -2632,8 +2635,8 @@ mod tests {
                 env: None,
                 workdir: None,
                 workspace: None,
-                max_retries: 0,
-                retry_backoff_secs: 30,
+                max_retries: None,
+                retry_backoff_secs: None,
                 handoff: None,
                 safety_mode: None,
             }],

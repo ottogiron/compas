@@ -287,7 +287,7 @@ pub async fn execute_trigger(
 
     let agent = Agent {
         alias: agent_config.alias.clone(),
-        backend: agent_config.backend.clone(),
+        backend: agent_config.backend().to_string(),
         model: agent_config.model.clone(),
         prompt: agent_config.prompt.clone(),
         prompt_file: agent_config.prompt_file.clone(),

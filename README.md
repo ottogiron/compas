@@ -174,7 +174,7 @@ agents:
 > declare `safety_mode: auto_approve` to acknowledge this.
 > See the [Security Model](docs/guides/configuration.md#security-model) in the configuration guide.
 
-Key configuration areas: **agents** (backend, model, prompt, workspace isolation, retry, auto-handoff chains) and **schedules** (cron-based recurring dispatches). The worker hot-reloads configuration without restart.
+Key configuration areas: **agents** (backend, model, prompt, workspace isolation, retry, auto-handoff chains), **agent_defaults** (shared defaults inherited by all agents), and **schedules** (cron-based recurring dispatches). The worker hot-reloads configuration without restart.
 
 Handoff chains support fan-out to multiple reviewers — see the [Cookbook](docs/guides/cookbook.md).
 
