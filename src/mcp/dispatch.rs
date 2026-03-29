@@ -15,6 +15,7 @@ use serde::Serialize;
 
 use super::params::DispatchParams;
 use super::server::{err_text, json_text, OrchestratorMcpServer};
+use crate::config::types::HandoffTarget;
 use crate::store::ThreadStatus;
 
 #[derive(Serialize)]
@@ -186,10 +187,33 @@ impl OrchestratorMcpServer {
             None
         };
 
-        let next_step = format!(
-            "Use orch_wait with thread_id=\"{}\", since_reference=\"db:{}\", and await_chain=true to wait for the response. Omit await_chain only if you need the first intermediate reply.",
-            thread_id, message_id
-        );
+        // Build target-agent-aware wait hint based on handoff config.
+        let target_agent = config.agents.iter().find(|a| a.alias == params.to);
+        let has_downstream = target_agent
+            .and_then(|a| a.handoff.as_ref())
+            .and_then(|h| h.on_response.as_ref())
+            .is_some_and(|target| !matches!(target, HandoffTarget::Single(s) if s == "operator"));
+
+        let next_step = if has_downstream {
+            let handoff = target_agent.unwrap().handoff.as_ref().unwrap();
+            let depth = handoff.max_chain_depth.unwrap_or(3);
+            let target_desc = match handoff.on_response.as_ref().unwrap() {
+                HandoffTarget::Single(t) => format!("\"{}\"", t),
+                HandoffTarget::FanOut(ts) => {
+                    let names: Vec<String> = ts.iter().map(|t| format!("\"{}\"", t)).collect();
+                    names.join(", ")
+                }
+            };
+            format!(
+                "Use orch_wait with thread_id=\"{}\", since_reference=\"db:{}\", and await_chain=true to wait for the full chain to settle. \"{}\" auto-handoffs to {} (chain depth limit: {}).",
+                thread_id, message_id, params.to, target_desc, depth
+            )
+        } else {
+            format!(
+                "Use orch_wait with thread_id=\"{}\", since_reference=\"db:{}\" to wait for the response.",
+                thread_id, message_id
+            )
+        };
         Ok(json_text(&DispatchResult {
             thread_id,
             message_id,

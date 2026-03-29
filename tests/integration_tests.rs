@@ -1046,9 +1046,10 @@ mod dispatch_tests {
             next_step.contains(&format!("db:{}", message_id)),
             "next_step should contain since_reference with message_id, got: {next_step}"
         );
+        // "focused" has no handoff config → next_step should NOT mention await_chain.
         assert!(
-            next_step.contains("await_chain"),
-            "next_step should mention await_chain, got: {next_step}"
+            !next_step.contains("await_chain"),
+            "next_step should NOT mention await_chain for agents without handoff, got: {next_step}"
         );
     }
 
@@ -3299,6 +3300,244 @@ mod session_health_tests {
         assert_eq!(
             json["global_available"].as_i64().unwrap(),
             json["global_max_concurrent"].as_i64().unwrap() - 1
+        );
+    }
+
+    // ── orch_list_agents handoff metadata tests (GAP-11) ──────────────────
+
+    #[tokio::test]
+    async fn test_list_agents_no_handoff() {
+        // Default test config has no handoff on any agent.
+        let server = test_server().await;
+        let result = server.list_agents_impl().await.unwrap();
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+        for agent in agents {
+            assert!(
+                agent.get("handoff_to").is_none(),
+                "handoff_to should be absent when no handoff configured"
+            );
+            assert!(
+                !agent["await_chain_recommended"].as_bool().unwrap(),
+                "await_chain_recommended should be false when no handoff"
+            );
+            assert!(
+                agent.get("max_chain_depth").is_none(),
+                "max_chain_depth should be absent when no handoff configured"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_single_handoff() {
+        let mut config = test_config();
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::Single("spark".to_string())),
+            handoff_prompt: None,
+            max_chain_depth: None, // should default to 3
+        });
+        let store = test_store().await;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server.list_agents_impl().await.unwrap();
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+        let focused = agents.iter().find(|a| a["alias"] == "focused").unwrap();
+
+        // handoff_to should be a string (not array) for single target.
+        assert_eq!(focused["handoff_to"].as_str().unwrap(), "spark");
+        assert!(focused["await_chain_recommended"].as_bool().unwrap());
+        assert_eq!(focused["max_chain_depth"].as_u64().unwrap(), 3);
+
+        // spark has no handoff — should have no metadata.
+        let spark = agents.iter().find(|a| a["alias"] == "spark").unwrap();
+        assert!(spark.get("handoff_to").is_none());
+        assert!(!spark["await_chain_recommended"].as_bool().unwrap());
+        assert!(spark.get("max_chain_depth").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_fanout_handoff() {
+        let mut config = test_config();
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::FanOut(vec![
+                "spark".to_string(),
+                "focused".to_string(),
+            ])),
+            handoff_prompt: None,
+            max_chain_depth: Some(5),
+        });
+        let store = test_store().await;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server.list_agents_impl().await.unwrap();
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+        let focused = agents.iter().find(|a| a["alias"] == "focused").unwrap();
+
+        // handoff_to should be an array for fan-out.
+        let handoff_to = focused["handoff_to"].as_array().unwrap();
+        assert_eq!(handoff_to.len(), 2);
+        assert_eq!(handoff_to[0].as_str().unwrap(), "spark");
+        assert_eq!(handoff_to[1].as_str().unwrap(), "focused");
+        assert!(focused["await_chain_recommended"].as_bool().unwrap());
+        assert_eq!(focused["max_chain_depth"].as_u64().unwrap(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_list_agents_operator_handoff() {
+        let mut config = test_config();
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::Single("operator".to_string())),
+            handoff_prompt: None,
+            max_chain_depth: None,
+        });
+        let store = test_store().await;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server.list_agents_impl().await.unwrap();
+        let json = extract_json(&result);
+        let agents = json["agents"].as_array().unwrap();
+        let focused = agents.iter().find(|a| a["alias"] == "focused").unwrap();
+
+        // operator target is treated as no downstream handoff.
+        assert!(
+            focused.get("handoff_to").is_none(),
+            "handoff_to should be absent for operator target"
+        );
+        assert!(!focused["await_chain_recommended"].as_bool().unwrap());
+        assert!(
+            focused.get("max_chain_depth").is_none(),
+            "max_chain_depth should be absent for operator target"
+        );
+    }
+
+    // ── orch_dispatch next_step handoff-aware tests (GAP-11) ────────────
+
+    #[tokio::test]
+    async fn test_dispatch_next_step_with_handoff() {
+        // Agent with on_response: "spark" → next_step should include await_chain.
+        let mut config = test_config();
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::Single("spark".to_string())),
+            handoff_prompt: None,
+            max_chain_depth: Some(5),
+        });
+        let store = test_store().await;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "test work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-handoff-1".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        let next_step = json["next_step"].as_str().unwrap();
+
+        assert!(
+            next_step.contains("await_chain=true"),
+            "next_step should recommend await_chain for agent with handoff, got: {next_step}"
+        );
+        assert!(
+            next_step.contains("\"spark\""),
+            "next_step should mention downstream target by name, got: {next_step}"
+        );
+        assert!(
+            next_step.contains("chain depth limit: 5"),
+            "next_step should mention chain depth limit, got: {next_step}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_next_step_no_handoff() {
+        // Default config — no handoff → next_step should NOT mention await_chain.
+        let server = test_server().await;
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "test work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-no-handoff-1".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        let next_step = json["next_step"].as_str().unwrap();
+
+        assert!(
+            next_step.contains("orch_wait"),
+            "next_step should mention orch_wait, got: {next_step}"
+        );
+        assert!(
+            !next_step.contains("await_chain"),
+            "next_step should NOT mention await_chain for no-handoff agent, got: {next_step}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_next_step_operator_handoff() {
+        // on_response: "operator" → treated as no downstream, no await_chain.
+        let mut config = test_config();
+        config.agents[0].handoff = Some(HandoffConfig {
+            on_response: Some(HandoffTarget::Single("operator".to_string())),
+            handoff_prompt: None,
+            max_chain_depth: None,
+        });
+        let store = test_store().await;
+        let mut registry = BackendRegistry::new();
+        registry.register("stub", Arc::new(StubBackend { ping_alive: true }));
+        let server = OrchestratorMcpServer::new(ConfigHandle::new(config), store, registry);
+
+        let result = server
+            .dispatch_impl(DispatchParams {
+                from: "operator".to_string(),
+                to: "focused".to_string(),
+                body: "test work".to_string(),
+                batch: None,
+                intent: "dispatch".to_string(),
+                thread_id: Some("t-operator-1".to_string()),
+                summary: None,
+                scheduled_for: None,
+                skip_handoff: None,
+            })
+            .await
+            .unwrap();
+        assert!(!is_error(&result));
+        let json = extract_json(&result);
+        let next_step = json["next_step"].as_str().unwrap();
+
+        assert!(
+            next_step.contains("orch_wait"),
+            "next_step should still mention orch_wait for operator handoff, got: {next_step}"
+        );
+        assert!(
+            !next_step.contains("await_chain"),
+            "next_step should NOT mention await_chain for operator handoff, got: {next_step}"
         );
     }
 

@@ -224,6 +224,14 @@ Two settings control how many agent executions run simultaneously:
 - `global_active` — total executions currently running
 - `global_available` — remaining global slots (`global_max_concurrent - global_active`)
 
+#### Handoff routing metadata
+
+When agents have auto-handoff configuration, `orch_list_agents` includes additional fields per agent:
+
+- `handoff_to` — present when the agent has a non-operator auto-handoff target. A string for a single target, an array for fan-out routing. Omitted when the agent has no downstream handoff or routes to `operator`.
+- `await_chain_recommended` — `true` when the agent auto-handoffs to one or more non-operator agents, indicating that `await_chain=true` should be used with `orch_wait`. Always present (defaults to `false`).
+- `max_chain_depth` — effective depth limit for the handoff chain. Present only when `handoff_to` is present. Uses the configured `max_chain_depth` value, or defaults to 3 if not configured.
+
 ### Example: parallel workers with worktree isolation
 
 ```yaml

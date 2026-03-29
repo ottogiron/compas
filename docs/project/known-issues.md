@@ -126,11 +126,11 @@ Resolved by the `orch_commit` MCP tool. MCP-only agents can now call `orch_commi
 
 The `orch_dispatch` → `orch_wait` flow has friction for MCP-connected agents:
 
-1. **`next_step` hint is ambiguous** — the natural language hint tells agents to use `orch_wait` with `await_chain=true`, but agents interpret conditional phrasing ("if the agent uses auto-handoff") as "doesn't apply" and skip the wait entirely.
+1. **`next_step` hint is ambiguous** — ~~the natural language hint tells agents to use `orch_wait` with `await_chain=true`, but agents interpret conditional phrasing ("if the agent uses auto-handoff") as "doesn't apply" and skip the wait entirely.~~ **Partially addressed by GAP-11:** `next_step` hints are now target-agent-aware — agents with downstream handoffs get explicit `await_chain=true` recommendations naming the downstream target(s), while agents without handoffs get plain wait hints without `await_chain`.
 
 2. **Dispatch and wait are separate calls** — agents must remember to call `orch_wait` after every `orch_dispatch`. The orch-dispatch skill says "always wait after dispatch" but agents without the skill loaded don't know this. A combined `dispatch_and_wait` tool or an auto-wait option on dispatch would eliminate the gap.
 
-3. **`await_chain` requires knowledge the caller doesn't have** — the caller doesn't know if the target agent has handoff config. Making `await_chain=true` the safe default helps but is still a parameter the caller must remember.
+3. **`await_chain` requires knowledge the caller doesn't have** — ~~the caller doesn't know if the target agent has handoff config. Making `await_chain=true` the safe default helps but is still a parameter the caller must remember.~~ **Partially addressed by GAP-11:** `orch_list_agents` now includes `await_chain_recommended` per agent, so callers can look up whether `await_chain=true` is needed before dispatching. The remaining gap is that callers must still remember to check this field or follow the `next_step` hint.
 
 4. ~~**Timeout ceiling mismatch**~~ — **Resolved.** The wait ceiling is now derived from `execution_timeout_secs` (non-chain: `exec + 30`, chain: `exec * 3 + 30`). Clamped requests include `clamped`, `effective_timeout_secs`, `requested_timeout_secs`, and a `hint` in the response so agents know their wait was shortened.
 
